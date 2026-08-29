@@ -181,6 +181,39 @@ export default function MapView() {
       };
     }
 
+    // Encoge un anillo unos cm hacia el sólido del edificio. Los edificios
+    // pegados comparten la pared en el MISMO plano y, de cerca, la GPU no sabe
+    // cuál va delante (z-fighting: cuadraditos que bailan); con 12 cm por lado
+    // dejan de ser coplanares y a la distancia mínima de cámara no se aprecia.
+    // Un agujero (patio) se mueve al revés: también hacia el sólido.
+    const EPS_PARED = 0.12;
+    function encoge(ring, esAgujero) {
+      let a2 = 0;
+      for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+        a2 += ring[j].e * ring[i].n - ring[i].e * ring[j].n;
+      }
+      const s = (a2 >= 0 ? 1 : -1) * (esAgujero ? -1 : 1);
+      const out = new Array(ring.length);
+      for (let i = 0; i < ring.length; i++) {
+        const p = ring[i];
+        const a = ring[(i - 1 + ring.length) % ring.length];
+        const c = ring[(i + 1) % ring.length];
+        // bisectriz de las normales interiores de las dos aristas del vértice
+        const l1 = Math.hypot(p.e - a.e, p.n - a.n) || 1;
+        const l2 = Math.hypot(c.e - p.e, c.n - p.n) || 1;
+        let de = (-(p.n - a.n) / l1 - (c.n - p.n) / l2) * s;
+        let dn = ((p.e - a.e) / l1 + (c.e - p.e) / l2) * s;
+        const l = Math.hypot(de, dn);
+        if (l < 0.001) {
+          out[i] = p;
+          continue;
+        }
+        const eps = Math.min(EPS_PARED, 0.2 * Math.min(l1, l2));
+        out[i] = { e: p.e + (de / l) * eps, n: p.n + (dn / l) * eps };
+      }
+      return out;
+    }
+
     // --- preparación de una tesela descodificada ---
     function prepara(x, y, data) {
       const base = tileToMerc(Z_TILE, x, y);
@@ -198,7 +231,7 @@ export default function MapView() {
           const anillos = [];
           for (const ring of rings) {
             const r = quitaCierre(ring).map(aEscena);
-            if (r.length >= 3) anillos.push(r);
+            if (r.length >= 3) anillos.push(encoge(r, anillos.length > 0));
           }
           if (!anillos.length) continue;
           const outer = anillos[0];
@@ -214,6 +247,13 @@ export default function MapView() {
           cn /= outer.length;
           area = Math.abs(area / 2);
           const m = sceneToMerc(ce, cn);
+          // Las teselas MVT traen en su margen (buffer) COPIAS de los edificios
+          // del borde de la vecina: dibujadas las dos, cada cara existe dos
+          // veces en el mismo sitio y parpadea (z-fighting). Cada edificio lo
+          // dibuja SOLO la tesela dueña de su centroide.
+          const tx = Math.floor((m.mx / WORLD + 0.5) * N_TILE);
+          const ty = Math.floor((0.5 - m.my / WORLD) * N_TILE);
+          if (tx !== x || ty !== y) continue;
           const hash = (Math.abs((Math.round(m.mx) * 73856093) ^ (Math.round(m.my) * 19349663)) >>> 0) || 1;
           const cx = Math.floor((m.mx / WORLD + 0.5) * N_CELL);
           const cy = Math.floor((0.5 - m.my / WORLD) * N_CELL);
