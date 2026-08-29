@@ -7,8 +7,18 @@ export const metadata = {
   title: 'crisrr maps — mapa 3D colaborativo',
   description:
     'Un mapa 3D del mundo estilo cartoon que se colorea con los escaneos de la gente. Renderizado en tu GPU con datos de OpenStreetMap.',
+  manifest: '/manifest.webmanifest',
   icons: {
-    icon: 'data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🗺️</text></svg>',
+    icon: [
+      { url: '/icon-192.png', sizes: '192x192', type: 'image/png' },
+      { url: '/icon-512.png', sizes: '512x512', type: 'image/png' },
+    ],
+    apple: '/apple-touch-icon.png',
+  },
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: 'default',
+    title: 'crisrr maps',
   },
 };
 

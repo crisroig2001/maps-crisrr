@@ -52,11 +52,66 @@ export default function MapView() {
   const [toast, setToast] = useState('');
   const [infoOpen, setInfoOpen] = useState(false);
   const [sinGL, setSinGL] = useState(false);
+  // instalación PWA: 'prompt' (Android/desktop con beforeinstallprompt),
+  // 'ios' (Safari iOS: no hay prompt, se enseñan instrucciones), '' (nada que ofrecer)
+  const [instala, setInstala] = useState('');
+  const [iosOpen, setIosOpen] = useState(false);
+  const instalaEvRef = useRef(null);
 
   function avisa(msg) {
     setToast(msg);
     clearTimeout(toastT.current);
     toastT.current = setTimeout(() => setToast(''), 3200);
+  }
+
+  useEffect(() => {
+    // ya instalada (abierta desde el icono) → no ofrecer nada
+    const standalone =
+      window.matchMedia?.('(display-mode: standalone)')?.matches || window.navigator.standalone === true;
+
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js').catch(() => {});
+    }
+    if (standalone) return undefined;
+
+    const onPrompt = (e) => {
+      e.preventDefault();
+      instalaEvRef.current = e;
+      setInstala('prompt');
+    };
+    window.addEventListener('beforeinstallprompt', onPrompt);
+    const onDone = () => {
+      instalaEvRef.current = null;
+      setInstala('');
+      avisa('¡Instalada! Ya la tienes en tu pantalla de inicio 🎉');
+    };
+    window.addEventListener('appinstalled', onDone);
+
+    // Safari de iOS no dispara beforeinstallprompt: se detecta y se guía a mano
+    const ua = window.navigator.userAgent;
+    const esIos = /iPhone|iPad|iPod/.test(ua) || (ua.includes('Mac') && navigator.maxTouchPoints > 1);
+    if (esIos) setInstala('ios');
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', onPrompt);
+      window.removeEventListener('appinstalled', onDone);
+    };
+  }, []);
+
+  async function onInstalar() {
+    if (instala === 'ios') {
+      setInfoOpen(false); // las dos hojas comparten sitio
+      setIosOpen((v) => !v);
+      return;
+    }
+    const ev = instalaEvRef.current;
+    if (!ev) return;
+    instalaEvRef.current = null; // un prompt solo se puede usar una vez
+    setInstala('');
+    try {
+      ev.prompt();
+      await ev.userChoice;
+    } catch {}
   }
 
   useEffect(() => {
@@ -605,7 +660,14 @@ export default function MapView() {
         </button>
       </form>
 
-      <button className="ui btn-cuad b-info" aria-label="Cómo funciona" onClick={() => setInfoOpen((v) => !v)}>
+      <button
+        className="ui btn-cuad b-info"
+        aria-label="Cómo funciona"
+        onClick={() => {
+          setIosOpen(false); // las dos hojas comparten sitio
+          setInfoOpen((v) => !v);
+        }}
+      >
         i
       </button>
       <button className="ui btn-cuad b-gps" aria-label="Ir a mi ubicación" onClick={onGps}>
@@ -614,6 +676,29 @@ export default function MapView() {
           <path d="M12 2v3M12 19v3M2 12h3M19 12h3" />
         </svg>
       </button>
+      {instala && (
+        <button className="ui btn-cuad b-inst" aria-label="Instalar la app" title="Instalar la app" onClick={onInstalar}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 3v11" />
+            <path d="M7.5 9.5 12 14l4.5-4.5" />
+            <path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" />
+          </svg>
+        </button>
+      )}
+
+      {iosOpen && (
+        <div className="ui hoja glass">
+          <h2>Instalar en tu iPhone</h2>
+          <p>Safari no tiene botón de instalar, pero se hace en dos toques:</p>
+          <p>
+            <b>1.</b> Toca el botón <b>Compartir</b> de abajo (el cuadrado con la flecha ↑).
+          </p>
+          <p>
+            <b>2.</b> Elige <b>«Añadir a pantalla de inicio»</b> y confirma.
+          </p>
+          <p>Te quedará el icono de crisrr maps como una app más.</p>
+        </div>
+      )}
 
       {infoOpen && (
         <div className="ui hoja glass">

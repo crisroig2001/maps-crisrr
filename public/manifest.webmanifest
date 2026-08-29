@@ -1,0 +1,17 @@
+{
+  "name": "crisrr maps — mapa 3D colaborativo",
+  "short_name": "crisrr maps",
+  "description": "El mapa 3D cartoon del mundo que se colorea a medida que la gente lo escanea.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#cfe8f4",
+  "theme_color": "#cfe8f4",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
