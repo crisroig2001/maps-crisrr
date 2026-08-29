@@ -9,6 +9,7 @@ import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { MapControls } from 'three/examples/jsm/controls/MapControls.js';
 import { loadTileData } from '../lib/mvt';
+import { colorFachada } from '../lib/colorCam';
 import { WORLD, Z_TILE, Z_CELL, lonLatToMerc, tileToMerc, cellKey } from '../lib/geo';
 
 const N_TILE = 2 ** Z_TILE;
@@ -57,6 +58,11 @@ export default function MapView() {
   const [instala, setInstala] = useState('');
   const [iosOpen, setIosOpen] = useState(false);
   const instalaEvRef = useRef(null);
+  // cámara del escaneo: null | 'listo' | 'capturando'
+  const [cam, setCam] = useState(null);
+  const [prog, setProg] = useState(0);
+  const camVideoRef = useRef(null);
+  const camStreamRef = useRef(null);
 
   function avisa(msg) {
     setToast(msg);
@@ -153,7 +159,7 @@ export default function MapView() {
 
     // --- estado del mundo ---
     const tiles = new Map(); // "x/y" → entrada
-    let scans = new Set();
+    const scans = new Map(); // celda → color de fachada '#rrggbb' o null
     let vivo = true;
     let enCarga = 0;
 
@@ -181,13 +187,15 @@ export default function MapView() {
       };
     }
 
-    // Encoge un anillo unos cm hacia el sólido del edificio. Los edificios
-    // pegados comparten la pared en el MISMO plano y, de cerca, la GPU no sabe
-    // cuál va delante (z-fighting: cuadraditos que bailan); con 12 cm por lado
-    // dejan de ser coplanares y a la distancia mínima de cámara no se aprecia.
+    // Encoge un anillo hacia el sólido del edificio. Los edificios pegados
+    // comparten la pared en el MISMO plano y, de cerca, la GPU no sabe cuál va
+    // delante (z-fighting: cuadraditos/triángulos que bailan); separados unos
+    // cm dejan de ser coplanares y a la distancia mínima de cámara no se ve.
     // Un agujero (patio) se mueve al revés: también hacia el sólido.
-    const EPS_PARED = 0.12;
-    function encoge(ring, esAgujero) {
+    // ⚠ epsMax varía POR POLÍGONO (hash): OSM trae miles de polígonos
+    // SUPERPUESTOS (partes de edificio sobre su contorno) que se mueven en la
+    // MISMA dirección — con un eps fijo seguirían coplanares tras encoger.
+    function encoge(ring, esAgujero, epsMax) {
       let a2 = 0;
       for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
         a2 += ring[j].e * ring[i].n - ring[i].e * ring[j].n;
@@ -208,7 +216,7 @@ export default function MapView() {
           out[i] = p;
           continue;
         }
-        const eps = Math.min(EPS_PARED, 0.2 * Math.min(l1, l2));
+        const eps = Math.min(epsMax, 0.2 * Math.min(l1, l2));
         out[i] = { e: p.e + (de / l) * eps, n: p.n + (dn / l) * eps };
       }
       return out;
@@ -228,13 +236,13 @@ export default function MapView() {
       // la celda, el color y la altura van POR POLÍGONO, no por feature.
       for (const b of data.buildings) {
         for (const rings of b.polys) {
-          const anillos = [];
+          const crudos = [];
           for (const ring of rings) {
             const r = quitaCierre(ring).map(aEscena);
-            if (r.length >= 3) anillos.push(encoge(r, anillos.length > 0));
+            if (r.length >= 3) crudos.push(r);
           }
-          if (!anillos.length) continue;
-          const outer = anillos[0];
+          if (!crudos.length) continue;
+          const outer = crudos[0];
           let ce = 0;
           let cn = 0;
           let area = 0;
@@ -257,8 +265,14 @@ export default function MapView() {
           const hash = (Math.abs((Math.round(m.mx) * 73856093) ^ (Math.round(m.my) * 19349663)) >>> 0) || 1;
           const cx = Math.floor((m.mx / WORLD + 0.5) * N_CELL);
           const cy = Math.floor((0.5 - m.my / WORLD) * N_CELL);
+          const eps = 0.05 + (hash % 40) * 0.005; // 5–25 cm, distinto por polígono
+          const anillos = crudos.map((r, i) => encoge(r, i > 0, eps));
           let h = b.h;
           if (!(h > 0)) h = Math.min(24, 5 + Math.sqrt(area) * 0.3) + (hash % 7);
+          // dos polígonos superpuestos con la MISMA altura real (medido: 6.312
+          // pares en una tesela de BCN) → tejados coplanares: se les da unos cm
+          // de diferencia, invisibles en un mapa cartoon
+          h += (hash % 89) * 0.007;
           bldgs.push({ polys: [anillos], minH: b.minH || 0, h, hash, cell: cellKey(cx, cy) });
         }
       }
@@ -341,7 +355,15 @@ export default function MapView() {
       for (let i = 0; i < CELLS_POR_TESELA; i++) {
         for (let j = 0; j < CELLS_POR_TESELA; j++) {
           const key = cellKey(x * CELLS_POR_TESELA + i, y * CELLS_POR_TESELA + j);
-          ctx.fillStyle = scans.has(key) ? 'rgba(243, 195, 110, 0.10)' : 'rgba(108, 115, 124, 0.24)';
+          if (scans.has(key)) {
+            const cc = scans.get(key);
+            // con color de cámara, el velo del suelo lleva ese mismo tono
+            ctx.fillStyle = cc
+              ? 'rgba(' + parseInt(cc.slice(1, 3), 16) + ',' + parseInt(cc.slice(3, 5), 16) + ',' + parseInt(cc.slice(5, 7), 16) + ',0.12)'
+              : 'rgba(243, 195, 110, 0.10)';
+          } else {
+            ctx.fillStyle = 'rgba(108, 115, 124, 0.24)';
+          }
           ctx.fillRect(i * cs, j * cs, cs, cs);
         }
       }
@@ -364,8 +386,27 @@ export default function MapView() {
     // --- edificios: una geometría fusionada por tesela ---
     const tick = () => new Promise((r) => setTimeout(r, 0));
 
+    // colores derivados de un color de cámara, cacheados por celda+variante
+    const cacheCamCol = new Map();
     function coloresDe(b) {
       if (!scans.has(b.cell)) return { pared: GRIS_PARED, tejado: GRIS_TEJADO };
+      const cam = scans.get(b.cell);
+      if (cam) {
+        // el color REAL capturado en esa celda, con una pizca de variedad por
+        // edificio para que la manzana no salga plana
+        const v = b.hash % 5;
+        const ck = cam + v;
+        let par = cacheCamCol.get(ck);
+        if (!par) {
+          const base = new THREE.Color(cam);
+          par = {
+            pared: base.clone().lerp(BLANCO, v * 0.05),
+            tejado: base.clone().lerp(BLANCO, 0.28 + v * 0.04),
+          };
+          cacheCamCol.set(ck, par);
+        }
+        return par;
+      }
       if (b.hash % 1000 < 180) {
         const i = b.hash % ACENTOS.length;
         return { pared: ACENTOS[i], tejado: TEJADOS_AC[i] };
@@ -552,9 +593,12 @@ export default function MapView() {
         const r = await fetch('/api/scans');
         const j = await r.json();
         const nuevas = [];
-        for (const c of j.cells || []) {
-          if (!scans.has(c)) {
-            scans.add(c);
+        for (const it of j.cells || []) {
+          // compat: la respuesta vieja era un array de strings
+          const c = typeof it === 'string' ? it : it.k;
+          const col = typeof it === 'string' ? null : it.c || null;
+          if (!scans.has(c) || (col && scans.get(c) !== col)) {
+            scans.set(c, col);
             nuevas.push(c);
           }
         }
@@ -571,17 +615,21 @@ export default function MapView() {
     }
 
     engineRef.current = {
-      scanHere() {
+      centroEscaneado() {
+        const { cx, cy } = celdaDelTarget();
+        return scans.has(cellKey(cx, cy));
+      },
+      scanHere(color) {
         const { cx, cy } = celdaDelTarget();
         const key = cellKey(cx, cy);
         if (scans.has(key)) return { already: true };
-        scans.add(key);
+        scans.set(key, color || null);
         reconstruyeCelda(cx, cy);
         actualizaEstado();
         fetch('/api/scans', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ cell: key }),
+          body: JSON.stringify(color ? { cell: key, color } : { cell: key }),
         }).catch(() => {});
         return { already: false };
       },
@@ -668,14 +716,74 @@ export default function MapView() {
     );
   }
 
-  function onScan() {
-    const r = engineRef.current?.scanHere();
+  useEffect(() => {
+    // el <video> solo existe con el visor abierto: se le engancha el stream aquí
+    if (cam && camVideoRef.current && camStreamRef.current) {
+      camVideoRef.current.srcObject = camStreamRef.current;
+    }
+  }, [cam]);
+
+  useEffect(() => () => camStreamRef.current?.getTracks().forEach((t) => t.stop()), []);
+
+  function cierraCamara() {
+    camStreamRef.current?.getTracks().forEach((t) => t.stop());
+    camStreamRef.current = null; // el bucle de captura lo lee para abortar
+    setCam(null);
+    setProg(0);
+  }
+
+  async function onScan() {
+    const eng = engineRef.current;
+    if (!eng) return;
+    if (eng.centroEscaneado()) {
+      avisa('El centro de la vista ya está escaneado — muévete a una zona gris');
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment' },
+        audio: false,
+      });
+      camStreamRef.current = stream;
+      setCam('listo');
+    } catch {
+      // sin cámara o permiso denegado: se escanea igual, con la paleta estándar
+      const r = eng.scanHere(null);
+      if (r && !r.already) avisa('Sin cámara: zona escaneada con los colores estándar 🎨');
+    }
+  }
+
+  async function capturaCam() {
+    const video = camVideoRef.current;
+    if (!video || cam !== 'listo') return;
+    setCam('capturando');
+    const cv = document.createElement('canvas');
+    cv.width = 64;
+    cv.height = 48;
+    const ctx = cv.getContext('2d', { willReadFrequently: true });
+    const px = [];
+    const t0 = Date.now();
+    const DURA = 3200;
+    while (Date.now() - t0 < DURA) {
+      if (!camStreamRef.current) return; // cancelado con la ✕
+      try {
+        ctx.drawImage(video, 0, 0, 64, 48);
+        // banda central: fachadas, sin el cielo de arriba ni el suelo de abajo
+        const d = ctx.getImageData(4, 12, 56, 26).data;
+        for (let i = 0; i < d.length; i += 16) px.push(d[i], d[i + 1], d[i + 2]);
+      } catch {
+        /* fotograma aún no listo */
+      }
+      setProg(Math.min(1, (Date.now() - t0) / DURA));
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    cierraCamara();
+    const color = colorFachada(px);
+    const r = engineRef.current?.scanHere(color);
     if (!r) return;
-    avisa(
-      r.already
-        ? 'El centro de la vista ya está escaneado — muévete a una zona gris'
-        : '¡Zona escaneada! La captura con cámara llegará más adelante 📷'
-    );
+    if (r.already) avisa('El centro de la vista ya está escaneado');
+    else if (color) avisa('¡Zona escaneada con el color real de la fachada! 🎨');
+    else avisa('Poca luz para captar el color — zona escaneada con la paleta estándar');
   }
 
   if (sinGL) {
@@ -753,8 +861,9 @@ export default function MapView() {
             «Escanear esta zona» sobre una zona gris y se coloreará para todo el mundo.
           </p>
           <p>
-            <b>Siguiente fase:</b> el escaneo real con la cámara, que aportará alturas,
-            colores y detalles de verdad a cada zona.
+            <b>La cámara pinta el mapa.</b> Al escanear, la cámara captura el color
+            dominante de las fachadas y esa zona se colorea con su color REAL para
+            todo el mundo. Más adelante: formas y detalles.
           </p>
         </div>
       )}
@@ -787,6 +896,32 @@ export default function MapView() {
       {cargando > 0 && (
         <div className="ui carga glass">
           <span className="punto" /> cargando el mapa…
+        </div>
+      )}
+
+      {cam && (
+        <div className="ui camara">
+          <video ref={camVideoRef} autoPlay playsInline muted />
+          <button className="cam-x" aria-label="Cancelar" onClick={cierraCamara}>
+            ✕
+          </button>
+          <div className="cam-pie">
+            {cam === 'listo' ? (
+              <>
+                <p>Apunta a las fachadas de la zona: capturaremos su color real para el mapa.</p>
+                <button className="cam-btn" onClick={capturaCam}>
+                  📷 Capturar el color
+                </button>
+              </>
+            ) : (
+              <>
+                <p>Recorre despacio las fachadas…</p>
+                <div className="cam-barra">
+                  <i style={{ width: prog * 100 + '%' }} />
+                </div>
+              </>
+            )}
+          </div>
         </div>
       )}
 

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getCells, addCell } from '../../../lib/store';
 import { CELL_RE } from '../../../lib/geo';
+import { RE_COLOR } from '../../../lib/colorCam';
 
 export const dynamic = 'force-dynamic';
 
@@ -36,6 +37,12 @@ export async function POST(req) {
   if (typeof cell !== 'string' || !CELL_RE.test(cell)) {
     return NextResponse.json({ error: 'bad_cell' }, { status: 400 });
   }
-  const added = addCell(cell);
+  // color de fachada opcional, capturado con la cámara (validado: el cuerpo
+  // viene del navegador)
+  const color =
+    typeof body?.color === 'string' && RE_COLOR.test(body.color.toLowerCase())
+      ? body.color.toLowerCase()
+      : null;
+  const added = addCell(cell, color);
   return NextResponse.json({ ok: true, added });
 }

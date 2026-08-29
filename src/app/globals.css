@@ -213,3 +213,76 @@ body {
   .escanear { padding: 13px 16px; font-size: 14px; }
   .attr { display: none; }
 }
+
+/* visor de cámara del escaneo */
+.camara {
+  inset: 0;
+  z-index: 20;
+  background: #10151c;
+}
+.camara video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.cam-x {
+  position: absolute;
+  top: calc(14px + env(safe-area-inset-top));
+  right: 14px;
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+  border: none;
+  background: rgba(16, 21, 28, 0.55);
+  color: #fff;
+  font-size: 18px;
+  font-weight: 800;
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+}
+.cam-pie {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 18px 18px calc(22px + env(safe-area-inset-bottom));
+  display: grid;
+  gap: 12px;
+  justify-items: center;
+  text-align: center;
+  background: linear-gradient(to top, rgba(16, 21, 28, 0.72), transparent);
+}
+.cam-pie p {
+  margin: 0;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.5);
+  max-width: 340px;
+}
+.cam-btn {
+  border: none;
+  border-radius: 999px;
+  padding: 14px 22px;
+  font: 800 15px/1 inherit;
+  color: #fff;
+  background: var(--accent);
+  cursor: pointer;
+  box-shadow: 0 10px 30px rgba(47, 111, 237, 0.45);
+}
+.cam-barra {
+  width: min(70vw, 280px);
+  height: 8px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.25);
+  overflow: hidden;
+}
+.cam-barra i {
+  display: block;
+  height: 100%;
+  border-radius: 99px;
+  background: #fff;
+  transition: width 0.25s linear;
+}

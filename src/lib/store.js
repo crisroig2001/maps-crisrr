@@ -49,13 +49,26 @@ function save() {
 }
 
 export function getCells() {
-  return Object.keys(load().cells);
+  const c = load().cells;
+  // {k, c}: c es el color de fachada capturado con la cámara (o null)
+  return Object.keys(c).map((k) => ({ k, c: c[k].c || null }));
 }
 
-export function addCell(key) {
+export function addCell(key, color) {
   const c = load();
-  if (c.cells[key]) return false;
-  c.cells[key] = { t: Date.now() };
+  const ya = c.cells[key];
+  if (ya) {
+    // el primero que escanea manda; un color posterior solo rellena si no había
+    if (color && !ya.c) {
+      ya.c = color;
+      save();
+      return true;
+    }
+    return false;
+  }
+  const e = { t: Date.now() };
+  if (color) e.c = color;
+  c.cells[key] = e;
   save();
   return true;
 }
