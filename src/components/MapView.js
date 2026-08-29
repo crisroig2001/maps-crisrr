@@ -26,6 +26,33 @@ const TEJADOS = PALETA.map((c) => c.clone().lerp(BLANCO, 0.28));
 const TEJADOS_AC = ACENTOS.map((c) => c.clone().lerp(BLANCO, 0.3));
 const GRIS_PARED = new THREE.Color(0xb7bdc5);
 const GRIS_TEJADO = new THREE.Color(0xcbcfd4);
+const VERDES_ARBOL = [0x5f9e63, 0x6faa6b, 0x7db473, 0x679c58].map((h) => new THREE.Color(h));
+const TRONCO = new THREE.Color(0x8a6b4f);
+const PLANTA_M = 3; // metros por planta/ventana (escala de la textura de fachada)
+
+// PRNG determinista (mulberry32): los árboles de una tesela salen siempre igual
+function prng(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function dentroDe(rings, e, n) {
+  let dentro = false;
+  for (const ring of rings) {
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const a = ring[i];
+      const b = ring[j];
+      if (a.n > n !== b.n > n && e < a.e + ((n - a.n) / (b.n - a.n)) * (b.e - a.e)) dentro = !dentro;
+    }
+  }
+  return dentro;
+}
 
 // anchos de calle en metros por clase de OpenMapTiles
 const ANCHO_VIA = {
@@ -151,11 +178,37 @@ export default function MapView() {
     controls.enableDamping = true;
     controls.dampingFactor = 0.09;
     controls.screenSpacePanning = false;
-    controls.minDistance = 120;
+    controls.minDistance = 90;
     controls.maxDistance = 4800;
     controls.maxPolarAngle = 1.34;
 
     const matEdificios = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide });
+
+    // textura de VENTANAS de las fachadas: una celda = una ventana de una
+    // planta (PLANTA_M × PLANTA_M). Multiplica al color de vértice, así cada
+    // edificio conserva su color y gana el detalle — todo procedural, cero
+    // descarga extra.
+    const texVent = (() => {
+      const cv = document.createElement('canvas');
+      cv.width = cv.height = 64;
+      const c = cv.getContext('2d');
+      c.fillStyle = '#ffffff';
+      c.fillRect(0, 0, 64, 64);
+      c.fillStyle = 'rgba(64, 80, 102, 0.22)'; // el cristal, suave (cartoon)
+      c.fillRect(17, 16, 30, 32);
+      c.fillStyle = 'rgba(255, 255, 255, 0.55)'; // reflejo superior
+      c.fillRect(17, 16, 30, 7);
+      const tex = new THREE.CanvasTexture(cv);
+      tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+      return tex;
+    })();
+    const matParedes = new THREE.MeshBasicMaterial({
+      vertexColors: true,
+      side: THREE.DoubleSide,
+      map: texVent,
+    });
 
     // --- estado del mundo ---
     const tiles = new Map(); // "x/y" → entrada
@@ -276,9 +329,19 @@ export default function MapView() {
           bldgs.push({ polys: [anillos], minH: b.minH || 0, h, hash, cell: cellKey(cx, cy) });
         }
       }
+      // zonas verdes en coordenadas de escena (para plantar árboles)
+      const verdes = [];
+      for (const rings of data.green) {
+        const rs = [];
+        for (const ring of rings) {
+          const r = quitaCierre(ring).map(aEscena);
+          if (r.length >= 3) rs.push(r);
+        }
+        if (rs.length) verdes.push(rs);
+      }
       // celdas con edificio (para el % de la vista)
       const celdas = new Set(bldgs.map((b) => b.cell));
-      return { bldgs, celdas };
+      return { bldgs, celdas, verdes };
     }
 
     // --- suelo: canvas por tesela ---
@@ -336,6 +399,14 @@ export default function MapView() {
       const orden = [...data.roads].sort(
         (a, b) => (ANCHO_VIA[b.cls] || 5) - (ANCHO_VIA[a.cls] || 5)
       );
+      // bordillos: TODAS las carcasas antes que los rellenos — si no, el
+      // bordillo de una calle cruzaría el asfalto de la anterior
+      ctx.strokeStyle = '#a7aeb7';
+      for (const r of orden) {
+        if (VIA_RAIL.has(r.cls) || VIA_SENDA.has(r.cls)) continue;
+        ctx.lineWidth = Math.max(2, (ANCHO_VIA[r.cls] || 6) * pxPorM) + Math.max(1.6, 2.4 * pxPorM);
+        r.lines.forEach(linea);
+      }
       for (const r of orden) {
         if (VIA_RAIL.has(r.cls)) {
           ctx.strokeStyle = '#a9afb8';
@@ -432,7 +503,9 @@ export default function MapView() {
       return { pared: PALETA[i], tejado: TEJADOS[i] };
     }
 
-    function meteEdificio(pos, col, b) {
+    // g = {posT, colT} tejados (material liso) + {posP, colP, uvP} paredes
+    // (material con ventanas; la UV va en PLANTAS: u = metros/PLANTA_M)
+    function meteEdificio(g, b) {
       const { pared, tejado } = coloresDe(b);
       for (const anillos of b.polys) {
         const outer = anillos[0];
@@ -450,11 +523,14 @@ export default function MapView() {
         for (const f of faces) {
           for (const idx of f) {
             const p = all[idx];
-            pos.push(p.e, b.h, -p.n);
-            col.push(tejado.r, tejado.g, tejado.b);
+            g.posT.push(p.e, b.h, -p.n);
+            g.colT.push(tejado.r, tejado.g, tejado.b);
           }
         }
-        // paredes (exterior + agujeros), sombreado por orientación horneado
+        // paredes (exterior + agujeros), sombreado por orientación horneado y
+        // pie de fachada más oscuro (oclusión falsa: asienta el edificio)
+        const v0 = b.minH / PLANTA_M;
+        const v1 = b.h / PLANTA_M;
         for (const ring of anillos) {
           for (let i = 0; i < ring.length; i++) {
             const a = ring[i];
@@ -467,38 +543,122 @@ export default function MapView() {
             const ny = -dx / len;
             const sombra = 0.72 + 0.28 * Math.abs(nx * 0.6 + ny * 0.8);
             const r = pared.r * sombra;
-            const g = pared.g * sombra;
+            const g2 = pared.g * sombra;
             const bl = pared.b * sombra;
-            pos.push(a.e, b.minH, -a.n, c.e, b.minH, -c.n, c.e, b.h, -c.n);
-            pos.push(a.e, b.minH, -a.n, c.e, b.h, -c.n, a.e, b.h, -a.n);
-            for (let q = 0; q < 6; q++) col.push(r, g, bl);
+            const pie = 0.86;
+            const u1 = len / PLANTA_M;
+            g.posP.push(a.e, b.minH, -a.n, c.e, b.minH, -c.n, c.e, b.h, -c.n);
+            g.posP.push(a.e, b.minH, -a.n, c.e, b.h, -c.n, a.e, b.h, -a.n);
+            g.uvP.push(0, v0, u1, v0, u1, v1, 0, v0, u1, v1, 0, v1);
+            // triángulo 1: pie, pie, alto · triángulo 2: pie, alto, alto
+            g.colP.push(r * pie, g2 * pie, bl * pie, r * pie, g2 * pie, bl * pie, r, g2, bl);
+            g.colP.push(r * pie, g2 * pie, bl * pie, r, g2, bl, r, g2, bl);
           }
         }
       }
     }
 
+    // árbol low-poly (~36 vértices): cruz de tronco + copa octaédrica
+    function meteArbol(pos, col, e, n, rnd) {
+      const hT = 2 + rnd() * 1.4;
+      const r = 1.5 + rnd() * 1.2;
+      const hC = hT + r * 1.1;
+      const verde = VERDES_ARBOL[(rnd() * VERDES_ARBOL.length) | 0];
+      const w = 0.3;
+      const hTope = hT + r * 0.5;
+      const quad = (ax, az, bx, bz) => {
+        pos.push(e + ax, 0, -(n + az), e + bx, 0, -(n + bz), e + bx, hTope, -(n + bz));
+        pos.push(e + ax, 0, -(n + az), e + bx, hTope, -(n + bz), e + ax, hTope, -(n + az));
+        for (let q = 0; q < 6; q++) col.push(TRONCO.r, TRONCO.g, TRONCO.b);
+      };
+      quad(-w, 0, w, 0);
+      quad(0, -w, 0, w);
+      const eq = [
+        [e + r, n],
+        [e, n + r],
+        [e - r, n],
+        [e, n - r],
+      ];
+      const cara = (p1, p2, p3, s) => {
+        pos.push(p1[0], p1[1], p1[2], p2[0], p2[1], p2[2], p3[0], p3[1], p3[2]);
+        for (let q = 0; q < 3; q++) col.push(verde.r * s, verde.g * s, verde.b * s);
+      };
+      const top = [e, hC + r * 1.15, -n];
+      const bot = [e, hC - r * 0.85, -n];
+      for (let i = 0; i < 4; i++) {
+        const a = eq[i];
+        const b = eq[(i + 1) % 4];
+        const pa = [a[0], hC, -a[1]];
+        const pb = [b[0], hC, -b[1]];
+        cara(top, pa, pb, i % 2 ? 0.97 : 1.1);
+        cara(bot, pb, pa, i % 2 ? 0.72 : 0.8);
+      }
+    }
+
     async function construyeEdificios(entry) {
       const token = ++entry.token;
-      const pos = [];
-      const col = [];
+      const g = { posT: [], colT: [], posP: [], colP: [], uvP: [] };
       let n = 0;
       for (const b of entry.bldgs) {
-        meteEdificio(pos, col, b);
+        meteEdificio(g, b);
         if (++n % 500 === 0) {
           await tick();
           if (!vivo || token !== entry.token) return;
         }
       }
+      // árboles en las zonas verdes, deterministas por tesela (comparten la
+      // geometría de tejados: material liso). Muestreo por rechazo con tope.
+      const rnd = prng((entry.x * 73856093) ^ (entry.y * 19349663));
+      let nArb = 0;
+      for (const rings of entry.verdes || []) {
+        if (nArb >= 320) break;
+        const outer = rings[0];
+        let x0 = Infinity;
+        let y0 = Infinity;
+        let x1 = -Infinity;
+        let y1 = -Infinity;
+        let area = 0;
+        for (let i = 0, j = outer.length - 1; i < outer.length; j = i++) {
+          const p = outer[i];
+          x0 = Math.min(x0, p.e);
+          y0 = Math.min(y0, p.n);
+          x1 = Math.max(x1, p.e);
+          y1 = Math.max(y1, p.n);
+          area += (outer[j].e - p.e) * (outer[j].n + p.n);
+        }
+        area = Math.abs(area / 2);
+        if (area < 300) continue;
+        let quiere = Math.min(80, Math.round(area / 900));
+        let intentos = quiere * 6;
+        while (quiere > 0 && intentos-- > 0 && nArb < 320) {
+          const e = x0 + rnd() * (x1 - x0);
+          const nn = y0 + rnd() * (y1 - y0);
+          if (!dentroDe(rings, e, nn)) continue;
+          meteArbol(g.posT, g.colT, e, nn, rnd);
+          quiere--;
+          nArb++;
+        }
+      }
       if (!vivo || token !== entry.token) return;
-      const geo = new THREE.BufferGeometry();
-      geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-      geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+      const geoT = new THREE.BufferGeometry();
+      geoT.setAttribute('position', new THREE.Float32BufferAttribute(g.posT, 3));
+      geoT.setAttribute('color', new THREE.Float32BufferAttribute(g.colT, 3));
+      const geoP = new THREE.BufferGeometry();
+      geoP.setAttribute('position', new THREE.Float32BufferAttribute(g.posP, 3));
+      geoP.setAttribute('color', new THREE.Float32BufferAttribute(g.colP, 3));
+      geoP.setAttribute('uv', new THREE.Float32BufferAttribute(g.uvP, 2));
       if (entry.mesh) {
         entry.group.remove(entry.mesh);
         entry.mesh.geometry.dispose();
       }
-      entry.mesh = new THREE.Mesh(geo, matEdificios);
+      if (entry.meshP) {
+        entry.group.remove(entry.meshP);
+        entry.meshP.geometry.dispose();
+      }
+      entry.mesh = new THREE.Mesh(geoT, matEdificios);
+      entry.meshP = new THREE.Mesh(geoP, matParedes);
       entry.group.add(entry.mesh);
+      entry.group.add(entry.meshP);
     }
 
     function reconstruyeSuelo(entry) {
@@ -521,6 +681,7 @@ export default function MapView() {
         const prep = prepara(x, y, data);
         entry.bldgs = prep.bldgs;
         entry.celdas = prep.celdas;
+        entry.verdes = prep.verdes;
 
         const c = centroTesela(x, y);
         const plano = new THREE.Mesh(
@@ -549,6 +710,7 @@ export default function MapView() {
       entry.token++;
       scene.remove(entry.group);
       if (entry.mesh) entry.mesh.geometry.dispose();
+      if (entry.meshP) entry.meshP.geometry.dispose();
       if (entry.suelo) {
         entry.suelo.geometry.dispose();
         entry.suelo.material.map?.dispose();
@@ -692,6 +854,8 @@ export default function MapView() {
       for (const key of [...tiles.keys()]) liberaTesela(key);
       controls.dispose();
       matEdificios.dispose();
+      matParedes.dispose();
+      texVent.dispose();
       renderer.dispose();
       engineRef.current = null;
     };
