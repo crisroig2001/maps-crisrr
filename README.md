@@ -10,9 +10,21 @@ ocurre **en la GPU del dispositivo**: el servidor no renderiza nada.
 
 - **Base del mundo**: teselas vectoriales de [OpenFreeMap](https://openfreemap.org)
   (datos © OpenStreetMap contributors), z14. El navegador las descodifica
-  (`pbf` + `@mapbox/vector-tile`), dibuja el suelo (calles, parques, agua) en un
-  canvas por tesela y **extruye los edificios** con Three.js — colores planos
-  con el sombreado por cara horneado en los vértices (sin luces: rapidísimo en móvil).
+  (`pbf` + `@mapbox/vector-tile`), dibuja el suelo (calles, parques, agua, usos
+  del suelo) en un canvas por tesela y **extruye los edificios** con Three.js —
+  colores planos con el sombreado por cara horneado en los vértices (sin luces:
+  rapidísimo en móvil).
+- **Rótulos**: topónimos (ciudad, distrito, barrio) y nombres de calle salen de
+  las capas `place` y `transportation_name`, que ya venían dentro del `.pbf` y
+  antes se descartaban — así que **no cuestan ni un byte de red**. No se pintan
+  en la textura del suelo (borrosos de cerca, del revés al girar): son `<div>`
+  proyectados desde el 3D en cada frame, nítidos a cualquier zoom y con cero
+  draw calls. Los de calle se deslizan por la vía para quedarse cerca de lo que
+  miras, y se descartan por colisión para que el mapa no se sature.
+- **Horizonte**: solo se cargan 3×3 teselas, así que el mundo con edificios
+  acaba a 1,5 teselas del centro. Un plano de horizonte más la niebla —
+  recalculada por frame según lo lejos que esté la cámara — funden ese borde
+  con el cielo: antes se veía cortado en recto.
 - **Zonas escaneadas**: celdas z16 compartidas entre todos los usuarios
   (`/api/scans`, almacén JSON en `DATA_DIR`, volumen persistente en Coolify).
   Una celda escaneada pinta sus edificios a color pastel; el resto queda en gris

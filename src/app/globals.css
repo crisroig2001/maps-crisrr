@@ -23,6 +23,45 @@ body {
 
 #lienzo { position: fixed; inset: 0; display: block; touch-action: none; }
 
+/* rótulos del mapa: <div> proyectados desde el 3D en cada frame.
+   El contenedor no captura el puntero — arrastrar sobre un nombre tiene que
+   mover el mapa, no seleccionar texto. */
+#rotulos {
+  position: fixed;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  overflow: hidden;
+  contain: strict;
+}
+.rotulo {
+  position: absolute;
+  top: 0;
+  left: 0;
+  white-space: nowrap;
+  font-weight: 800;
+  color: #3d4753;
+  /* halo en vez de caja: sobre el mapa el texto tiene que leerse sin tapar
+     lo que hay debajo */
+  text-shadow:
+    0 0 3px #fff, 0 0 3px #fff, 0 0 6px rgba(255, 255, 255, 0.9),
+    0 1px 0 rgba(255, 255, 255, 0.9);
+  will-change: transform, opacity;
+}
+.r-city {
+  letter-spacing: 1.6px;
+  text-transform: uppercase;
+  color: #2b3440;
+}
+.r-town, .r-village { letter-spacing: 0.9px; color: #2b3440; }
+.r-suburb { letter-spacing: 0.7px; }
+.r-quarter { color: #59636f; font-weight: 700; }
+.r-calle {
+  color: #6a727c;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+}
+
 .ui { position: fixed; z-index: 5; }
 .glass {
   background: var(--card);

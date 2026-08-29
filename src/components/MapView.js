@@ -30,6 +30,56 @@ const VERDES_ARBOL = [0x5f9e63, 0x6faa6b, 0x7db473, 0x679c58].map((h) => new THR
 const TRONCO = new THREE.Color(0x8a6b4f);
 const PLANTA_M = 3; // metros por planta/ventana (escala de la textura de fachada)
 
+// La capa `building` trae un campo `colour` con el color REAL etiquetado en
+// OSM y hasta ahora se ignoraba. Viene crudo ('#a52a2a', 'tan'…), así que se
+// pasteliza al rango del mapa: un edificio rojo sangre rompería el cartoon.
+const cacheOsmCol = new Map();
+function colorOsm(v) {
+  if (!v) return null;
+  const t = v.trim().toLowerCase();
+  if (cacheOsmCol.has(t)) return cacheOsmCol.get(t);
+  let par = null;
+  // solo hex o nombre CSS conocido: cualquier otra cosa haría que THREE.Color
+  // llenase la consola de avisos y devolviera negro
+  if (/^#([0-9a-f]{3}|[0-9a-f]{6})$/.test(t) || Object.hasOwn(THREE.Color.NAMES, t)) {
+    const c = new THREE.Color(t);
+    const hsl = { h: 0, s: 0, l: 0 };
+    c.getHSL(hsl);
+    c.setHSL(hsl.h, Math.min(0.5, hsl.s), Math.min(0.8, Math.max(0.58, hsl.l)));
+    par = { pared: c, tejado: c.clone().lerp(BLANCO, 0.28) };
+  }
+  cacheOsmCol.set(t, par); // el null también se cachea: no se revalida
+  return par;
+}
+const CIELO = 0xcfe8f4;
+const SUELO_BASE = 0xd8dcd2; // el mismo gris con que arranca el canvas de cada tesela
+// Niebla. NIEBLA_BORDE es el que TAPA el corte: la niebla satura a esa
+// fracción de radioMundo pasado el target (0,88 deja margen para las vistas
+// oblicuas, las peores). NIEBLA_ENTRADA solo decide dónde EMPIEZA a empañar:
+// no afecta a la garantía del borde, así que se sube todo lo posible para que
+// el mapa se vea nítido y solo se funda la última franja.
+const NIEBLA_BORDE = 0.88;
+const NIEBLA_ENTRADA = 0.62;
+
+// usos del suelo: tonos MUY suaves, solo para que el fondo deje de ser un gris
+// plano. Si tiñen demasiado le comen el protagonismo a los edificios.
+// un tramo más corto que esto no da para escribir el nombre encima
+const LARGO_MIN_CALLE = 110; // metros
+const MAX_ROTULOS = 26; // más que esto y el mapa deja de leerse
+const DIST_CALLE = 1700; // los nombres de calle solo con la cámara cerca
+const TAM_SITIO = { city: 17, town: 15, village: 13, suburb: 13, quarter: 11.5 };
+
+const COLOR_USO = {
+  residential: '#e2ded6', suburb: '#e2ded6', neighbourhood: '#e2ded6',
+  commercial: '#ecdcd4', retail: '#eedbd2',
+  industrial: '#dcd9de', railway: '#dcd9de', quarry: '#ded9d2',
+  school: '#e7e1cd', college: '#e7e1cd', university: '#e7e1cd',
+  kindergarten: '#e7e1cd', library: '#e7e1cd',
+  hospital: '#eedad6',
+  pitch: '#cfe3c2', playground: '#d5e5c8', stadium: '#cfe3c2', track: '#cfe3c2',
+  cemetery: '#d2dcc8', military: '#dfe0d0',
+};
+
 // PRNG determinista (mulberry32): los árboles de una tesela salen siempre igual
 function prng(seed) {
   let a = seed >>> 0;
@@ -74,6 +124,7 @@ export default function MapView() {
   const canvasRef = useRef(null);
   const buscaRef = useRef(null);
   const engineRef = useRef(null);
+  const rotulosRef = useRef(null);
   const toastT = useRef(null);
   const [status, setStatus] = useState({ pct: null, total: 0, global: 0 });
   const [cargando, setCargando] = useState(0);
@@ -166,9 +217,29 @@ export default function MapView() {
     const k = Math.cos((lat * Math.PI) / 180); // Mercator → metros reales
     const teselaM = (WORLD / N_TILE) * k;
 
+    // Se cargan 3x3 teselas, así que el mundo con edificios ACABA a 1,5
+    // teselas del centro (1.835 m/tesela a lat 41° → 2.753 m). La niebla fija
+    // de antes empezaba a 3.600 m, o sea 850 m MÁS ALLÁ del borde: no lo
+    // tapaba y el mundo se veía cortado con un tajo recto.
+    const radioMundo = teselaM * 1.5;
+
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0xcfe8f4);
-    scene.fog = new THREE.Fog(0xcfe8f4, 3600, 13000);
+    scene.background = new THREE.Color(CIELO);
+    // near/far de verdad los pone ajustaNiebla() en cada frame: dependen de lo
+    // lejos que esté la cámara, no son constantes.
+    scene.fog = new THREE.Fog(CIELO, 1, 2);
+
+    // Suelo del horizonte: un plano enorme del color base de las teselas para
+    // que más allá del bloque cargado no haya VACÍO. La niebla lo funde con el
+    // cielo, así que el borde del bloque deja de leerse como un corte: pasa de
+    // "aquí se acaba el mundo" a "aquí ya no hay detalle".
+    const horizonte = new THREE.Mesh(
+      new THREE.PlaneGeometry(teselaM * 24, teselaM * 24),
+      new THREE.MeshBasicMaterial({ color: SUELO_BASE })
+    );
+    horizonte.rotation.x = -Math.PI / 2;
+    horizonte.position.y = -1; // por debajo del suelo de las teselas (y=0)
+    scene.add(horizonte);
 
     const camera = new THREE.PerspectiveCamera(50, 1, 2, 20000);
     camera.position.set(280, 430, 360);
@@ -179,8 +250,24 @@ export default function MapView() {
     controls.dampingFactor = 0.09;
     controls.screenSpacePanning = false;
     controls.minDistance = 90;
-    controls.maxDistance = 4800;
+    // alejarse más que esto es mirar sobre todo lo que NO está cargado
+    controls.maxDistance = radioMundo * 1.4;
     controls.maxPolarAngle = 1.34;
+
+    // La niebla tiene que saturar justo ANTES del borde del bloque, que está a
+    // ~(distancia de cámara + radioMundo). Como esa distancia cambia al hacer
+    // zoom, la niebla no puede ser fija: se recalcula por frame.
+    const tmpV = new THREE.Vector3();
+    function ajustaNiebla() {
+      const d = camera.position.distanceTo(controls.target);
+      const far = d + radioMundo * NIEBLA_BORDE;
+      scene.fog.far = far;
+      scene.fog.near = far * NIEBLA_ENTRADA;
+      // el horizonte sigue al target: así nunca se le ve el canto al panear
+      horizonte.position.x = controls.target.x;
+      horizonte.position.z = controls.target.z;
+      return { d, near: scene.fog.near, far };
+    }
 
     const matEdificios = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide });
 
@@ -326,7 +413,14 @@ export default function MapView() {
           // pares en una tesela de BCN) → tejados coplanares: se les da unos cm
           // de diferencia, invisibles en un mapa cartoon
           h += (hash % 89) * 0.007;
-          bldgs.push({ polys: [anillos], minH: b.minH || 0, h, hash, cell: cellKey(cx, cy) });
+          bldgs.push({
+            polys: [anillos],
+            minH: b.minH || 0,
+            h,
+            hash,
+            cell: cellKey(cx, cy),
+            colour: b.colour,
+          });
         }
       }
       // zonas verdes en coordenadas de escena (para plantar árboles)
@@ -339,9 +433,52 @@ export default function MapView() {
         }
         if (rs.length) verdes.push(rs);
       }
+      // --- rótulos ---
+      // Mismo truco que con los edificios: el margen de la tesela trae COPIAS
+      // de lo que hay al otro lado del borde, así que cada rótulo lo pone solo
+      // la tesela dueña de su punto. Si no, «Gràcia» sale por duplicado.
+      const suya = (e, n) => {
+        const m = sceneToMerc(e, n);
+        return (
+          Math.floor((m.mx / WORLD + 0.5) * N_TILE) === x &&
+          Math.floor((0.5 - m.my / WORLD) * N_TILE) === y
+        );
+      };
+
+      const places = [];
+      for (const pl of data.places) {
+        const q = aEscena({ x: pl.x, y: pl.y });
+        if (!suya(q.e, q.n)) continue;
+        places.push({ tipo: 'sitio', name: pl.name, cls: pl.cls, peso: pl.peso, rank: pl.rank, e: q.e, n: q.n });
+      }
+
+      // Un nombre de calle llega troceado en muchos tramos. Se rotula UNO: el
+      // tramo recto más largo, que es el que mejor aguanta el texto encima.
+      const porNombre = new Map();
+      for (const rn of data.roadNames) {
+        for (const line of rn.lines) {
+          for (let i = 1; i < line.length; i++) {
+            const a = aEscena(line[i - 1]);
+            const b = aEscena(line[i]);
+            const largo = Math.hypot(b.e - a.e, b.n - a.n);
+            const prev = porNombre.get(rn.name);
+            if (prev && prev.largo >= largo) continue;
+            porNombre.set(rn.name, { a, b, largo });
+          }
+        }
+      }
+      const calles = [];
+      for (const [name, t] of porNombre) {
+        if (t.largo < LARGO_MIN_CALLE) continue; // tramo corto: no cabe el rótulo
+        const e = (t.a.e + t.b.e) / 2;
+        const n = (t.a.n + t.b.n) / 2;
+        if (!suya(e, n)) continue;
+        calles.push({ tipo: 'calle', name, e, n, a: t.a, b: t.b, largo: t.largo });
+      }
+
       // celdas con edificio (para el % de la vista)
       const celdas = new Set(bldgs.map((b) => b.cell));
-      return { bldgs, celdas, verdes };
+      return { bldgs, celdas, verdes, rotulos: places.concat(calles) };
     }
 
     // --- suelo: canvas por tesela ---
@@ -354,7 +491,7 @@ export default function MapView() {
       const px = (v) => (v / ext) * S;
       const pxPorM = S / teselaM;
 
-      ctx.fillStyle = '#d8dcd2';
+      ctx.fillStyle = '#' + SUELO_BASE.toString(16).padStart(6, '0');
       ctx.fillRect(0, 0, S, S);
 
       const poligono = (rings) => {
@@ -378,6 +515,14 @@ export default function MapView() {
         }
         ctx.stroke();
       };
+
+      // usos del suelo primero: el verde, la arena y el agua mandan por encima
+      for (const lu of data.landuse) {
+        const col = COLOR_USO[lu.cls];
+        if (!col) continue;
+        ctx.fillStyle = col;
+        poligono(lu.rings);
+      }
 
       ctx.fillStyle = '#bcd8a5';
       data.green.forEach(poligono);
@@ -495,6 +640,9 @@ export default function MapView() {
         }
         return par;
       }
+      // sin color de cámara, el de OSM es dato real y gana a la paleta inventada
+      const osm = colorOsm(b.colour);
+      if (osm) return osm;
       if (b.hash % 1000 < 180) {
         const i = b.hash % ACENTOS.length;
         return { pared: ACENTOS[i], tejado: TEJADOS_AC[i] };
@@ -668,6 +816,147 @@ export default function MapView() {
       entry.suelo.material.needsUpdate = true;
     }
 
+    // --- rótulos: superposición HTML proyectada ---
+    // No se pintan en la textura del suelo por dos razones: a 1024 px para
+    // 1.835 m de tesela saldrían borrosos en cuanto te acercas, y al girar la
+    // cámara quedarían boca abajo. Un <div> proyectado cada frame sale nítido
+    // a cualquier zoom, siempre legible, y no cuesta ni un draw call.
+    let candidatos = [];
+    function recogeRotulos() {
+      const vistos = new Map();
+      for (const entry of tiles.values()) {
+        for (const r of entry.rotulos || []) {
+          const prev = vistos.get(r.name);
+          if (prev) {
+            if (prev.tipo !== r.tipo) continue; // un sitio le gana a una calle homónima
+            if (r.tipo === 'sitio' ? r.rank >= prev.rank : r.largo <= prev.largo) continue;
+          }
+          vistos.set(r.name, r);
+        }
+      }
+      // el orden ES la prioridad: al chocar dos rótulos, sobrevive el primero
+      candidatos = [...vistos.values()].sort((a, b) => {
+        if (a.tipo !== b.tipo) return a.tipo === 'sitio' ? -1 : 1;
+        return a.tipo === 'sitio' ? a.rank - b.rank : b.largo - a.largo;
+      });
+    }
+
+    const pv = new THREE.Vector3();
+    const pa = new THREE.Vector3();
+    const pb = new THREE.Vector3();
+    const puestas = [];
+    const nodos = [];
+
+    function pintaEtiquetas(niebla) {
+      const cont = rotulosRef.current;
+      if (!cont) return;
+      puestas.length = 0;
+
+      for (const r of candidatos) {
+        if (puestas.length >= MAX_ROTULOS) break;
+        // regla de zoom: la ciudad se ve siempre, el barrio solo de cerca
+        if (niebla.d > (r.tipo === 'sitio' ? r.peso : DIST_CALLE)) continue;
+
+        // Un rótulo de calle NO se clava en el punto medio del tramo: al
+        // acercarte, ese punto se va de pantalla y la calle que tienes debajo
+        // se queda sin nombre. Se desliza al punto del tramo más cercano a lo
+        // que estás mirando, sin llegar a los extremos (ahí el texto se
+        // saldría de la calle).
+        let ex = r.e;
+        let nx = r.n;
+        if (r.tipo === 'calle') {
+          const dx = r.b.e - r.a.e;
+          const dn = r.b.n - r.a.n;
+          const l2 = dx * dx + dn * dn;
+          if (l2 > 0) {
+            const t = ((controls.target.x - r.a.e) * dx + (-controls.target.z - r.a.n) * dn) / l2;
+            const tc = Math.max(0.15, Math.min(0.85, t));
+            ex = r.a.e + dx * tc;
+            nx = r.a.n + dn * tc;
+          }
+        }
+
+        pv.set(ex, 0, -nx);
+        const dist = pv.distanceTo(camera.position);
+        // se desvanece con la MISMA niebla que el mundo: si el suelo de debajo
+        // ya está fundido con el cielo, su nombre no puede seguir ahí flotando
+        const op = 1 - Math.max(0, Math.min(1, (dist - niebla.near) / (niebla.far - niebla.near)));
+        if (op < 0.18) continue;
+
+        pv.project(camera);
+        if (pv.z > 1) continue; // detrás de la cámara
+        const sx = (pv.x * 0.5 + 0.5) * vpW;
+        const sy = (-pv.y * 0.5 + 0.5) * vpH;
+        // el ancla tiene que caber ENTERA: medio rótulo cortado por el borde
+        // parece un fallo, no un mapa
+        if (sx < 40 || sx > vpW - 40 || sy < 14 || sy > vpH - 14) continue;
+
+        let ang = 0;
+        if (r.tipo === 'calle') {
+          // el ángulo se mide en PANTALLA (perspectiva y giro de cámara ya
+          // aplicados), no en el mundo, o el texto no seguiría a la calle
+          pa.set(r.a.e, 0, -r.a.n).project(camera);
+          pb.set(r.b.e, 0, -r.b.n).project(camera);
+          ang = Math.atan2(-(pb.y - pa.y) * vpH, (pb.x - pa.x) * vpW);
+          if (ang > Math.PI / 2 || ang < -Math.PI / 2) ang += Math.PI; // jamás del revés
+        }
+
+        const fuente = r.tipo === 'sitio' ? TAM_SITIO[r.cls] || 12 : 11;
+        // caja aproximada del texto, girada: sin esto los nombres se pisan
+        const bw = r.name.length * fuente * 0.56 + 12;
+        const bh = fuente * 1.6;
+        const co = Math.abs(Math.cos(ang));
+        const si = Math.abs(Math.sin(ang));
+        const aw = bw * co + bh * si;
+        const ah = bw * si + bh * co;
+        let choca = false;
+        for (const q of puestas) {
+          if (Math.abs(sx - q.sx) < (aw + q.aw) / 2 && Math.abs(sy - q.sy) < (ah + q.ah) / 2) {
+            choca = true;
+            break;
+          }
+        }
+        if (choca) continue;
+        puestas.push({ sx, sy, aw, ah, ang, op, fuente, r });
+      }
+
+      // los <div> se reciclan: crear y destruir nodos cada frame sería un
+      // machaque del GC con el mapa en movimiento
+      for (let i = 0; i < puestas.length; i++) {
+        const q = puestas[i];
+        let el = nodos[i];
+        if (!el) {
+          el = document.createElement('div');
+          cont.appendChild(el);
+          nodos[i] = el;
+        }
+        if (el._txt !== q.r.name) {
+          el.textContent = q.r.name;
+          el._txt = q.r.name;
+        }
+        const cls = 'rotulo r-' + (q.r.tipo === 'sitio' ? q.r.cls : 'calle');
+        if (el._cls !== cls) {
+          el.className = cls;
+          el._cls = cls;
+        }
+        el.style.fontSize = q.fuente + 'px';
+        el.style.opacity = q.op.toFixed(2);
+        el.style.transform =
+          'translate3d(' + Math.round(q.sx) + 'px,' + Math.round(q.sy) + 'px,0)' +
+          ' translate(-50%,-50%) rotate(' + q.ang.toFixed(3) + 'rad)';
+        if (el._on !== true) {
+          el.style.display = '';
+          el._on = true;
+        }
+      }
+      for (let i = puestas.length; i < nodos.length; i++) {
+        if (nodos[i]._on !== false) {
+          nodos[i].style.display = 'none';
+          nodos[i]._on = false;
+        }
+      }
+    }
+
     // --- ciclo de teselas ---
     async function cargaTesela(x, y) {
       const key = x + '/' + y;
@@ -682,6 +971,8 @@ export default function MapView() {
         entry.bldgs = prep.bldgs;
         entry.celdas = prep.celdas;
         entry.verdes = prep.verdes;
+        entry.rotulos = prep.rotulos;
+        recogeRotulos();
 
         const c = centroTesela(x, y);
         const plano = new THREE.Mesh(
@@ -708,6 +999,7 @@ export default function MapView() {
       if (!entry) return;
       tiles.delete(key);
       entry.token++;
+      recogeRotulos();
       scene.remove(entry.group);
       if (entry.mesh) entry.mesh.geometry.dispose();
       if (entry.meshP) entry.meshP.geometry.dispose();
@@ -815,9 +1107,13 @@ export default function MapView() {
     };
 
     // --- arranque + bucle ---
+    let vpW = 1;
+    let vpH = 1;
     function medir() {
       const w = window.innerWidth;
       const h = window.innerHeight;
+      vpW = w;
+      vpH = h;
       renderer.setSize(w, h, false);
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
@@ -830,11 +1126,13 @@ export default function MapView() {
     function bucle(t) {
       raf = requestAnimationFrame(bucle);
       controls.update();
+      const niebla = ajustaNiebla();
       if (t - ultimoCheck > 700) {
         ultimoCheck = t;
         asegura(false);
       }
       renderer.render(scene, camera);
+      pintaEtiquetas(niebla);
     }
 
     (async () => {
@@ -852,7 +1150,11 @@ export default function MapView() {
       cancelAnimationFrame(raf);
       window.removeEventListener('resize', medir);
       for (const key of [...tiles.keys()]) liberaTesela(key);
+      for (const el of nodos) el.remove();
+      nodos.length = 0;
       controls.dispose();
+      horizonte.geometry.dispose();
+      horizonte.material.dispose();
       matEdificios.dispose();
       matParedes.dispose();
       texVent.dispose();
@@ -985,6 +1287,7 @@ export default function MapView() {
   return (
     <>
       <canvas id="lienzo" ref={canvasRef} />
+      <div id="rotulos" ref={rotulosRef} aria-hidden="true" />
 
       <form className="ui busca glass" onSubmit={onBuscar} role="search">
         <input ref={buscaRef} type="search" placeholder="Busca un lugar del mundo…" aria-label="Buscar un lugar" />
