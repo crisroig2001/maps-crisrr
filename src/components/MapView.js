@@ -357,14 +357,31 @@ export default function MapView() {
           const key = cellKey(x * CELLS_POR_TESELA + i, y * CELLS_POR_TESELA + j);
           if (scans.has(key)) {
             const cc = scans.get(key);
-            // con color de cámara, el velo del suelo lleva ese mismo tono
-            ctx.fillStyle = cc
-              ? 'rgba(' + parseInt(cc.slice(1, 3), 16) + ',' + parseInt(cc.slice(3, 5), 16) + ',' + parseInt(cc.slice(5, 7), 16) + ',0.12)'
-              : 'rgba(243, 195, 110, 0.10)';
+            let borde;
+            if (cc) {
+              // con color de cámara, el velo y el marco llevan ese mismo tono;
+              // el marco más OSCURO, o sobre campo claro no contrasta
+              const r = parseInt(cc.slice(1, 3), 16);
+              const g = parseInt(cc.slice(3, 5), 16);
+              const bl = parseInt(cc.slice(5, 7), 16);
+              ctx.fillStyle = 'rgba(' + r + ',' + g + ',' + bl + ',0.16)';
+              borde =
+                'rgba(' + Math.round(r * 0.66) + ',' + Math.round(g * 0.66) + ',' + Math.round(bl * 0.66) + ',0.75)';
+            } else {
+              ctx.fillStyle = 'rgba(243, 195, 110, 0.10)';
+              borde = 'rgba(216, 169, 92, 0.45)';
+            }
+            ctx.fillRect(i * cs, j * cs, cs, cs);
+            // MARCO de celda escaneada: en el campo no hay edificios que
+            // pintar, así que sin esto un escaneo rural no se ve por ningún
+            // lado (pasó: una masía en Girona, escaneada y "no veo nada")
+            ctx.strokeStyle = borde;
+            ctx.lineWidth = 4;
+            ctx.strokeRect(i * cs + 2, j * cs + 2, cs - 4, cs - 4);
           } else {
             ctx.fillStyle = 'rgba(108, 115, 124, 0.24)';
+            ctx.fillRect(i * cs, j * cs, cs, cs);
           }
-          ctx.fillRect(i * cs, j * cs, cs, cs);
         }
       }
 
@@ -782,7 +799,14 @@ export default function MapView() {
     const r = engineRef.current?.scanHere(color);
     if (!r) return;
     if (r.already) avisa('El centro de la vista ya está escaneado');
-    else if (color) avisa('¡Zona escaneada con el color real de la fachada! 🎨');
+    else if (color)
+      avisa(
+        <>
+          ¡Zona escaneada! Color capturado
+          <span className="muestra" style={{ background: color }} /> — queda marcada en el
+          mapa para todo el mundo
+        </>
+      );
     else avisa('Poca luz para captar el color — zona escaneada con la paleta estándar');
   }
 

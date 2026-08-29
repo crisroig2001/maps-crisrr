@@ -286,3 +286,14 @@ body {
   background: #fff;
   transition: width 0.25s linear;
 }
+
+/* muestra de color dentro del toast */
+.toast .muestra {
+  display: inline-block;
+  width: 13px;
+  height: 13px;
+  border-radius: 4px;
+  margin: 0 5px;
+  vertical-align: -2px;
+  border: 1px solid rgba(43, 52, 64, 0.25);
+}
