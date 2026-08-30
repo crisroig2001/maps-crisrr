@@ -59,6 +59,21 @@ export const VISTAS = [
     az: 120,
   },
   {
+    id: 'pie-de-fachada',
+    desc:
+      'A pie de calle, mirando el arranque de las fachadas. Aquí se vio que el ' +
+      'oscurecido del pie no era una sombra a ras de acera sino un degradado ' +
+      'estirado por toda la fachada, porque iba en el color de vértice de una ' +
+      'pared de un solo tramo. Debe verse una banda baja, no una rampa.\n' +
+      'La cámara va casi tan abajo como deja la app (minDistance 90 m, tope de ' +
+      'inclinación 76°): 27 m de altura, metida en un cañón de calle para que ' +
+      'se vea dónde la fachada se encuentra con la acera.',
+    ...BCN,
+    d: 110,
+    pol: 76,
+    az: 300,
+  },
+  {
     id: 'rural-girona',
     desc:
       'Campo, casi sin edificios. Un escaneo aquí no tiene fachadas que pintar: ' +
