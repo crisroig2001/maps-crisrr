@@ -65,6 +65,14 @@ const NIEBLA_ENTRADA = 0.62;
 // plano. Si tiñen demasiado le comen el protagonismo a los edificios.
 // un tramo más corto que esto no da para escribir el nombre encima
 const LARGO_MIN_CALLE = 110; // metros
+// Los rótulos son un overlay HTML: NO pasan por el buffer de profundidad, así
+// que se pintan encima de los edificios. Con la cámara tumbada, el nombre de
+// una calle tapada por un bloque de pisos flota sobre los tejados. Mitigación
+// hasta que los de calle vivan dentro de la escena 3D (issue #2): se
+// desvanecen conforme se tumba la cámara, que es justo cuando estorban.
+// La vista inicial está a 47°, así que el desvanecido empieza por encima.
+const CALLE_FADE_INI = 0.96; // 55° — aquí empiezan a apagarse
+const CALLE_FADE_FIN = 1.19; // 68° — aquí ya no se ven (el tope es 77°)
 const MAX_ROTULOS = 26; // más que esto y el mapa deja de leerse
 const DIST_CALLE = 1700; // los nombres de calle solo con la cámara cerca
 const TAM_SITIO = { city: 17, town: 15, village: 13, suburb: 13, quarter: 11.5 };
@@ -852,10 +860,19 @@ export default function MapView() {
       if (!cont) return;
       puestas.length = 0;
 
+      // cuánto se ven los nombres de calle según lo tumbada que esté la cámara
+      const pol = controls.getPolarAngle();
+      const visCalle =
+        1 - Math.max(0, Math.min(1, (pol - CALLE_FADE_INI) / (CALLE_FADE_FIN - CALLE_FADE_INI)));
+
       for (const r of candidatos) {
         if (puestas.length >= MAX_ROTULOS) break;
+        const esCalle = r.tipo === 'calle';
+        // los topónimos SÍ deben flotar por encima de todo (así lo hacen todos
+        // los mapas); esto es solo para los de calle
+        if (esCalle && visCalle <= 0.02) continue;
         // regla de zoom: la ciudad se ve siempre, el barrio solo de cerca
-        if (niebla.d > (r.tipo === 'sitio' ? r.peso : DIST_CALLE)) continue;
+        if (niebla.d > (esCalle ? DIST_CALLE : r.peso)) continue;
 
         // Un rótulo de calle NO se clava en el punto medio del tramo: al
         // acercarte, ese punto se va de pantalla y la calle que tienes debajo
@@ -864,7 +881,7 @@ export default function MapView() {
         // saldría de la calle).
         let ex = r.e;
         let nx = r.n;
-        if (r.tipo === 'calle') {
+        if (esCalle) {
           const dx = r.b.e - r.a.e;
           const dn = r.b.n - r.a.n;
           const l2 = dx * dx + dn * dn;
@@ -880,7 +897,8 @@ export default function MapView() {
         const dist = pv.distanceTo(camera.position);
         // se desvanece con la MISMA niebla que el mundo: si el suelo de debajo
         // ya está fundido con el cielo, su nombre no puede seguir ahí flotando
-        const op = 1 - Math.max(0, Math.min(1, (dist - niebla.near) / (niebla.far - niebla.near)));
+        let op = 1 - Math.max(0, Math.min(1, (dist - niebla.near) / (niebla.far - niebla.near)));
+        if (esCalle) op *= visCalle;
         if (op < 0.18) continue;
 
         pv.project(camera);
@@ -892,7 +910,7 @@ export default function MapView() {
         if (sx < 40 || sx > vpW - 40 || sy < 14 || sy > vpH - 14) continue;
 
         let ang = 0;
-        if (r.tipo === 'calle') {
+        if (esCalle) {
           // el ángulo se mide en PANTALLA (perspectiva y giro de cámara ya
           // aplicados), no en el mundo, o el texto no seguiría a la calle
           pa.set(r.a.e, 0, -r.a.n).project(camera);
@@ -901,7 +919,7 @@ export default function MapView() {
           if (ang > Math.PI / 2 || ang < -Math.PI / 2) ang += Math.PI; // jamás del revés
         }
 
-        const fuente = r.tipo === 'sitio' ? TAM_SITIO[r.cls] || 12 : 11;
+        const fuente = esCalle ? 11 : TAM_SITIO[r.cls] || 12;
         // caja aproximada del texto, girada: sin esto los nombres se pisan
         const bw = r.name.length * fuente * 0.56 + 12;
         const bh = fuente * 1.6;
