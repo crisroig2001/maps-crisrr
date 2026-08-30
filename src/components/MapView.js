@@ -30,6 +30,24 @@ const VERDES_ARBOL = [0x5f9e63, 0x6faa6b, 0x7db473, 0x679c58].map((h) => new THR
 const TRONCO = new THREE.Color(0x8a6b4f);
 const PLANTA_M = 3; // metros por planta/ventana (escala de la textura de fachada)
 
+// --- el sol ---
+// Dirección HACIA el sol en el plano (este, norte). La comparten el sombreado
+// de las fachadas y las sombras del suelo, así que moverla gira las dos cosas a
+// la vez y siguen cuadrando. 55° cae a la derecha en la vista de partida
+// (az=38): deja una cara clara y otra oscura de las dos que se ven, y tira las
+// sombras hacia el espectador en vez de esconderlas detrás de los edificios.
+const SOL_AZ = (55 * Math.PI) / 180;
+const SOL_E = Math.sin(SOL_AZ);
+const SOL_N = Math.cos(SOL_AZ);
+// cuánto se oscurece la fachada que da la espalda al sol (1 = nada)
+const LUZ_SOMBRA = 0.66;
+// Sombras de contacto proyectadas en el suelo: metros de sombra por metro de
+// altura (sol a ~63° sobre el horizonte), tope de altura para que la sombra no
+// se salga de la manzana, y opacidad.
+const SOMBRA_LARGO = 0.5;
+const SOMBRA_ALTO_MAX = 40;
+const SOMBRA_ALFA = 0.2;
+
 // La capa `building` trae un campo `colour` con el color REAL etiquetado en
 // OSM y hasta ahora se ignoraba. Viene crudo ('#a52a2a', 'tan'…), así que se
 // pasteliza al rango del mapa: un edificio rojo sangre rompería el cartoon.
@@ -312,10 +330,36 @@ export default function MapView() {
       tex.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
       return tex;
     })();
+    // Oclusión del arranque de la fachada. Comparte la UV de las ventanas
+    // (v = altura en plantas) pero NO repite: al recortarse en v=1 el oscurecido
+    // termina a los PLANTA_M metros en vez de estirarse hasta el remate. Antes
+    // esto era un color de vértice y, como el color interpola lineal de un
+    // extremo al otro de la pared, en una torre de 60 m se veía como un
+    // degradado vertical raro en vez de como una sombra a ras de acera. De
+    // regalo: un cuerpo que arranca en alto (minH>0) nace ya con v>1, así que no
+    // se le pinta pie — que es justo lo correcto, no toca el suelo.
+    const texAo = (() => {
+      const cv = document.createElement('canvas');
+      cv.width = 1;
+      cv.height = 64;
+      const c = cv.getContext('2d');
+      // v=0 (el suelo) es la fila de ABAJO del canvas: flipY viene de serie
+      const grad = c.createLinearGradient(0, 64, 0, 0);
+      grad.addColorStop(0, '#8c8c8c');
+      grad.addColorStop(0.6, '#e6e6e6');
+      grad.addColorStop(1, '#ffffff');
+      c.fillStyle = grad;
+      c.fillRect(0, 0, 1, 64);
+      // sin colorSpace: three lee el canal R como dato, no como color
+      const tex = new THREE.CanvasTexture(cv);
+      tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+      return tex;
+    })();
     const matParedes = new THREE.MeshBasicMaterial({
       vertexColors: true,
       side: THREE.DoubleSide,
       map: texVent,
+      aoMap: texAo, // channel 0: reaprovecha la `uv` que ya está ahí
     });
 
     // --- estado del mundo ---
@@ -593,6 +637,60 @@ export default function MapView() {
         r.lines.forEach(linea);
       }
 
+      // Sombras de contacto: la huella de cada edificio, corrida en sentido
+      // contrario al sol y alargada según su altura. Van aquí, en el canvas del
+      // suelo, y no en geometría: no cuestan ni un vértice ni un draw call. Es
+      // lo que asienta los edificios en el mundo — sin ellas se leen como
+      // pegatinas pegadas sobre el plano.
+      //
+      // Se pintan en una capa aparte y se componen de UNA pasada por dos
+      // razones: donde dos huellas se solapan no se oscurece el doble (y el
+      // margen de la tesela trae copias de los edificios de las vecinas, que
+      // son justo las que hacen falta para que la sombra no se corte en la
+      // costura), y el desenfoque sale de un solo filtro en vez de uno por
+      // edificio.
+      // La capa va a MEDIA resolución: sale difuminada y al 20%, así que el
+      // detalle fino no llega a verse y se ahorra un cuarto del tiempo (34 →
+      // 26 ms por tesela). Agruparlas en un Path2D por altura, que parecía lo
+      // obvio, resultó 10× MÁS lento (34 → 372 ms): un camino con 158.000
+      // aristas obliga al rasterizador a considerarlas todas en cada línea de
+      // barrido, mientras que un relleno pequeño solo toca su caja.
+      // Para situarse: construyeEdificios cuesta ~8 s por tesela, o sea que
+      // todo esto es el 0,3% — no merece más optimización.
+      const SS = S / 2;
+      const pxs = (v) => (v / ext) * SS;
+      const pxsPorM = SS / teselaM;
+      const sombraCv = document.createElement('canvas');
+      sombraCv.width = sombraCv.height = SS;
+      const sctx = sombraCv.getContext('2d');
+      sctx.fillStyle = '#000';
+      for (const b of data.buildings) {
+        const alto = Math.min(b.h > 0 ? b.h : 10, SOMBRA_ALTO_MAX);
+        const d = alto * SOMBRA_LARGO * pxsPorM;
+        const ox = -SOL_E * d;
+        const oy = SOL_N * d; // el canvas crece hacia el sur: la n va al revés
+        for (const rings of b.polys) {
+          sctx.beginPath();
+          for (const ring of rings) {
+            for (let i = 0; i < ring.length; i++) {
+              const p = ring[i];
+              if (i === 0) sctx.moveTo(pxs(p.x) + ox, pxs(p.y) + oy);
+              else sctx.lineTo(pxs(p.x) + ox, pxs(p.y) + oy);
+            }
+            sctx.closePath();
+          }
+          sctx.fill('evenodd');
+        }
+      }
+      ctx.save();
+      ctx.globalAlpha = SOMBRA_ALFA;
+      // el desenfoque se mide en METROS para que no dependa de S; si el
+      // navegador no soporta ctx.filter la sombra sale de canto en vez de
+      // difuminada, que es una degradación aceptable
+      ctx.filter = 'blur(' + Math.max(1, 2.5 * pxPorM).toFixed(1) + 'px)';
+      ctx.drawImage(sombraCv, 0, 0, S, S);
+      ctx.restore();
+
       // celdas: velo gris en las PENDIENTES, tinte cálido en las escaneadas
       const cs = S / CELLS_POR_TESELA;
       for (let i = 0; i < CELLS_POR_TESELA; i++) {
@@ -702,8 +800,8 @@ export default function MapView() {
             g.colT.push(tejado.r, tejado.g, tejado.b);
           }
         }
-        // paredes (exterior + agujeros), sombreado por orientación horneado y
-        // pie de fachada más oscuro (oclusión falsa: asienta el edificio)
+        // paredes (exterior + agujeros), con el sombreado del sol horneado en
+        // el color de vértice. El pie oscuro ya no va aquí: lo pone texAo.
         const v0 = b.minH / PLANTA_M;
         const v1 = b.h / PLANTA_M;
         for (const ring of anillos) {
@@ -714,20 +812,25 @@ export default function MapView() {
             const dy = c.n - a.n;
             const len = Math.hypot(dx, dy);
             if (len < 0.05) continue;
+            // Normal exterior de la cara (los anillos vienen con el exterior a
+            // izquierdas y los patios a derechas, así que esto apunta bien en
+            // los dos). El producto con el sol va CON SIGNO: antes llevaba un
+            // Math.abs, o sea que la cara norte y la sur salían igual de claras
+            // — había contraste entre orientaciones, pero no sol, y por eso la
+            // ciudad se leía plana.
             const nx = dy / len;
             const ny = -dx / len;
-            const sombra = 0.72 + 0.28 * Math.abs(nx * 0.6 + ny * 0.8);
+            const luz = 0.5 + 0.5 * (nx * SOL_E + ny * SOL_N);
+            const sombra = LUZ_SOMBRA + (1 - LUZ_SOMBRA) * luz;
             const r = pared.r * sombra;
             const g2 = pared.g * sombra;
             const bl = pared.b * sombra;
-            const pie = 0.86;
             const u1 = len / PLANTA_M;
             g.posP.push(a.e, b.minH, -a.n, c.e, b.minH, -c.n, c.e, b.h, -c.n);
             g.posP.push(a.e, b.minH, -a.n, c.e, b.h, -c.n, a.e, b.h, -a.n);
             g.uvP.push(0, v0, u1, v0, u1, v1, 0, v0, u1, v1, 0, v1);
-            // triángulo 1: pie, pie, alto · triángulo 2: pie, alto, alto
-            g.colP.push(r * pie, g2 * pie, bl * pie, r * pie, g2 * pie, bl * pie, r, g2, bl);
-            g.colP.push(r * pie, g2 * pie, bl * pie, r, g2, bl, r, g2, bl);
+            g.colP.push(r, g2, bl, r, g2, bl, r, g2, bl);
+            g.colP.push(r, g2, bl, r, g2, bl, r, g2, bl);
           }
         }
       }
@@ -1195,6 +1298,7 @@ export default function MapView() {
       matEdificios.dispose();
       matParedes.dispose();
       texVent.dispose();
+      texAo.dispose();
       renderer.dispose();
       engineRef.current = null;
     };

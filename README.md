@@ -14,6 +14,21 @@ ocurre **en la GPU del dispositivo**: el servidor no renderiza nada.
   del suelo) en un canvas por tesela y **extruye los edificios** con Three.js —
   colores planos con el sombreado por cara horneado en los vértices (sin luces:
   rapidísimo en móvil).
+- **La luz**: hay un sol, con una dirección (`SOL_AZ`), y la comparten las dos
+  cosas que dependen de él. Las fachadas hornean en el color de vértice el
+  producto **con signo** de su normal por esa dirección, así que la cara que da
+  al sol y la que le da la espalda salen distintas — antes ese producto llevaba
+  un `Math.abs` y las dos salían igual de claras: había contraste entre
+  orientaciones, pero no sol, y la ciudad se leía plana. El arranque de la
+  fachada lo oscurece un `aoMap` de un píxel de ancho que **reaprovecha la UV de
+  las ventanas** (v = altura en plantas) sin repetir: se recorta a los 3 m, así
+  que es una sombra a ras de acera y no un degradado estirado hasta el remate.
+  Cero vértices y cero draw calls de más.
+- **Sombras de contacto**: la huella de cada edificio, corrida en sentido
+  contrario al sol y alargada según su altura, va pintada en el canvas del
+  suelo. Es lo que asienta los edificios en el mundo en vez de dejarlos como
+  pegatinas. Tampoco cuesta geometría: ~23 ms por tesela, frente a los ~8 s que
+  cuesta construir sus edificios.
 - **Rótulos**: topónimos (ciudad, distrito, barrio) y nombres de calle salen de
   las capas `place` y `transportation_name`, que ya venían dentro del `.pbf` y
   antes se descartaban — así que **no cuestan ni un byte de red**. No se pintan
@@ -67,7 +82,8 @@ npm run vistas -- --solo ras-de-tejados   # una sola vista (la hoja no se vacía
 
 Las vistas están en `scripts/vistas.config.mjs`. **Cada una existe porque un
 fallo real se vio ahí** — `ras-de-tejados` es donde los nombres de calle
-flotaban sobre los tejados, `lejos-oblicuo` donde el mundo se cortaba en recto.
+flotaban sobre los tejados, `lejos-oblicuo` donde el mundo se cortaba en recto,
+`pie-de-fachada` donde el oscurecido del pie se estiraba por toda la pared.
 Si aparece un fallo nuevo, añade la vista que lo enseña antes de arreglarlo.
 
 Dos detalles del entorno: el banco necesita `npm run dev`, porque `next start`
