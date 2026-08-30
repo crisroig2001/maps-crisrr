@@ -3,3 +3,7 @@ node_modules/
 .data/
 *.log
 .DS_Store
+
+# banco visual: teselas cacheadas y capturas (pesan, no van al repo)
+.teselas/
+capturas/

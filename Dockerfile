@@ -2,6 +2,9 @@
 FROM node:20-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
+# Playwright es dependencia de desarrollo (banco visual): la imagen no necesita
+# sus navegadores, que son ~500 MB de descarga en cada build.
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 RUN npm ci --no-audit --no-fund
 
 FROM node:20-alpine AS builder

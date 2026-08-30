@@ -39,10 +39,47 @@ npm install
 npm run dev
 ```
 
-Parámetros de URL: `/?lat=41.3874&lng=2.1686`
+Parámetros de URL: `/?lat=41.3874&lng=2.1686`, y opcionalmente la cámara:
+`&d=630&pol=47&az=38` (distancia en metros, inclinación y rumbo en grados;
+0° de inclinación = cenital). Sin esos tres no cambia nada. La distancia la
+recorta `maxDistance`, unos 3.850 m a latitud de Barcelona.
+
+## Banco visual
+
+Un cambio en el visor se juzga mirando capturas, no desplegando a producción.
+
+```bash
+npx playwright install chromium   # una vez
+npm run teselas                   # cachea en .teselas/ lo que hace falta (~13 MB)
+npm run dev                       # en otra terminal
+npm run vistas                    # captura y compara
+```
+
+Deja `capturas/index.html`: cada vista con su referencia al lado, el porcentaje
+de píxeles que han cambiado y, si han cambiado, una imagen que los señala en
+magenta. Las teselas salen de disco, así que dos ejecuciones seguidas dan
+exactamente lo mismo — un `igual` significa que de verdad no has tocado nada.
+
+```bash
+npm run vistas -- --base                  # acepta lo capturado como referencia
+npm run vistas -- --solo ras-de-tejados   # una sola vista (la hoja no se vacía)
+```
+
+Las vistas están en `scripts/vistas.config.mjs`. **Cada una existe porque un
+fallo real se vio ahí** — `ras-de-tejados` es donde los nombres de calle
+flotaban sobre los tejados, `lejos-oblicuo` donde el mundo se cortaba en recto.
+Si aparece un fallo nuevo, añade la vista que lo enseña antes de arreglarlo.
+
+Dos detalles del entorno: el banco necesita `npm run dev`, porque `next start`
+no sirve bien este proyecto (`next.config.js` usa `output: 'standalone'`); y si
+ya tienes un Chromium instalado, `CHROMIUM_BIN=/ruta/a/chrome npm run vistas`
+evita que Playwright se baje otro.
 
 ## Hoja de ruta
 
 1. ✅ Visor 3D cartoon con datos reales + escaneos compartidos (simulados)
 2. Captura real con la cámara (vídeo guiado → reconstrucción → detalles por celda)
 3. Cuentas de usuario, moderación, LOD/optimización de teselas
+
+El detalle y el orden real están en los issues; el índice es el
+[#10](https://github.com/crisroig2001/maps-crisrr/issues/10).
