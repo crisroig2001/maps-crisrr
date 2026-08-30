@@ -69,7 +69,12 @@ function colorOsm(v) {
   cacheOsmCol.set(t, par); // el null también se cachea: no se revalida
   return par;
 }
-const CIELO = 0xcfe8f4;
+// Cielo en degradado. El de abajo es el color con el que la niebla funde el
+// mundo, así que TIENE que ser el mismo que el del horizonte: si el cielo
+// aclara hacia abajo y la niebla no, aparece una costura justo donde el mapa
+// se acaba, que es lo que la niebla estaba tapando.
+const CIELO_CENIT = 0x9ecbe8;
+const CIELO_HORIZONTE = 0xe3f1f8;
 const SUELO_BASE = 0xd8dcd2; // el mismo gris con que arranca el canvas de cada tesela
 // Niebla. NIEBLA_BORDE es el que TAPA el corte: la niebla satura a esa
 // fracción de radioMundo pasado el target (0,88 deja margen para las vistas
@@ -116,6 +121,31 @@ function prng(seed) {
     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
+}
+
+// --- tejados a cuatro aguas ---
+// OpenMapTiles no trae la forma del tejado (la capa `building` solo da
+// render_height, render_min_height y colour), así que se deduce de la huella.
+// Solo para edificios PEQUEÑOS: en el Eixample los tejados planos son los de
+// verdad, y una manzana entera a cuatro aguas quedaría de casita de juguete.
+// Y tampoco a los cobertizos: por debajo de 40 m² (una caseta de 6×6) la huella
+// mide 3-4 px en la textura y el faldón no llega a verse, pero son el 58% de
+// los candidatos y la MITAD de las aristas de tejado. Medido en las 9 teselas
+// de la vista de partida: los faldones cuestan +27 MB sin este suelo y +9,8 MB
+// con él, y la vista `barrio-de-casas` solo pierde 0,3 puntos de diferencia.
+const TEJ_AREA_MIN = 40;
+const TEJ_AREA_MAX = 420; // m² de huella
+const TEJ_ALTO_MAX = 16; // m: por encima de esto es un bloque, no una casa
+const TEJ_LADOS_MAX = 14; // un contorno más enrevesado que esto no inseta bien
+const TEJ_AREA_MIN_REL = 0.35; // si el anillo insetado encoge más, se deja plano
+const LUZ_TEJADO = 0.84; // los faldones contrastan menos que las fachadas: miran arriba
+
+function areaAnillo(ring) {
+  let a2 = 0;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    a2 += ring[j].e * ring[i].n - ring[i].e * ring[j].n;
+  }
+  return a2 / 2;
 }
 
 function dentroDe(rings, e, n) {
@@ -250,10 +280,34 @@ export default function MapView() {
     const radioMundo = teselaM * 1.5;
 
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(CIELO);
+    // Cielo en degradado en vez de un color liso. Va como textura
+    // EQUIRECTANGULAR, no como imagen de fondo plana: así el degradado está
+    // anclado al mundo y el horizonte se queda donde debe al inclinar la
+    // cámara, en vez de resbalar con la pantalla. Son 4×256 píxeles y un solo
+    // draw call.
+    const texCielo = (() => {
+      const cv = document.createElement('canvas');
+      cv.width = 4;
+      cv.height = 256;
+      const c = cv.getContext('2d');
+      const grad = c.createLinearGradient(0, 0, 0, 256);
+      const hex = (v) => '#' + v.toString(16).padStart(6, '0');
+      grad.addColorStop(0, hex(CIELO_CENIT)); // arriba del canvas = cenit
+      grad.addColorStop(0.5, hex(CIELO_HORIZONTE));
+      grad.addColorStop(1, hex(CIELO_HORIZONTE)); // bajo el horizonte, liso
+      c.fillStyle = grad;
+      c.fillRect(0, 0, 4, 256);
+      const tex = new THREE.CanvasTexture(cv);
+      tex.mapping = THREE.EquirectangularReflectionMapping;
+      tex.colorSpace = THREE.SRGBColorSpace;
+      return tex;
+    })();
+    scene.background = texCielo;
+    // La niebla va del color del HORIZONTE, no del cenit: es contra el
+    // horizonte contra lo que se recorta el borde del mundo.
     // near/far de verdad los pone ajustaNiebla() en cada frame: dependen de lo
     // lejos que esté la cámara, no son constantes.
-    scene.fog = new THREE.Fog(CIELO, 1, 2);
+    scene.fog = new THREE.Fog(CIELO_HORIZONTE, 1, 2);
 
     // Suelo del horizonte: un plano enorme del color base de las teselas para
     // que más allá del bloque cargado no haya VACÍO. La niebla lo funde con el
@@ -489,6 +543,7 @@ export default function MapView() {
             minH: b.minH || 0,
             h,
             hash,
+            area, // la usa el tejado para decidir si es una casa o un bloque
             cell: cellKey(cx, cy),
             colour: b.colour,
           });
@@ -783,16 +838,49 @@ export default function MapView() {
       for (const anillos of b.polys) {
         const outer = anillos[0];
         const holes = anillos.slice(1);
-        // tejado
-        const contour = outer.map((p) => new THREE.Vector2(p.e, p.n));
+
+        // ¿Casa con tejado o bloque con azotea? Un edificio con patio queda
+        // fuera: insetar un anillo con agujeros es pedir problemas y además una
+        // finca con patio de luces no lleva cuatro aguas.
+        let cima = null;
+        let hAlero = b.h;
+        if (
+          holes.length === 0 &&
+          b.area > TEJ_AREA_MIN &&
+          b.area < TEJ_AREA_MAX &&
+          b.h - b.minH < TEJ_ALTO_MAX &&
+          outer.length <= TEJ_LADOS_MAX
+        ) {
+          const lado = Math.sqrt(b.area);
+          // el alero BAJA en vez de subir la cumbrera: así el edificio conserva
+          // la altura que dice el dato y no crece 3 m por la cara
+          const alzado = Math.min(3.4, lado * 0.3) * (0.8 + (b.hash % 5) * 0.1);
+          if (b.h - alzado > b.minH + 2.2) {
+            const candidato = encoge(outer, false, Math.min(2.6, lado * 0.24));
+            // Un contorno estrecho o en L puede autointersecarse al insetar y
+            // salir hecho un nudo. El área lo delata: si se desploma o cambia
+            // de signo, tejado plano y a otra cosa.
+            const a0 = areaAnillo(outer);
+            const a1 = areaAnillo(candidato);
+            if (a0 !== 0 && a1 / a0 > TEJ_AREA_MIN_REL) {
+              cima = candidato;
+              hAlero = b.h - alzado;
+            }
+          }
+        }
+
+        // tejado: la tapa va a b.h siempre — plana sobre el contorno, o pequeña
+        // y encaramada sobre el anillo insetado si lleva faldones
+        const tapa = cima || outer;
+        const contour = tapa.map((p) => new THREE.Vector2(p.e, p.n));
         const holesV = holes.map((hr) => hr.map((p) => new THREE.Vector2(p.e, p.n)));
         let faces = [];
         try {
-          faces = THREE.ShapeUtils.triangulateShape(contour, holesV);
+          faces = THREE.ShapeUtils.triangulateShape(contour, cima ? [] : holesV);
         } catch {
           /* polígono degenerado */
         }
-        const all = outer.concat(...holes);
+        const all = cima ? tapa : outer.concat(...holes);
         for (const f of faces) {
           for (const idx of f) {
             const p = all[idx];
@@ -800,10 +888,36 @@ export default function MapView() {
             g.colT.push(tejado.r, tejado.g, tejado.b);
           }
         }
-        // paredes (exterior + agujeros), con el sombreado del sol horneado en
+
+        // faldones: del alero (contorno, hAlero) a la cumbrera (inset, b.h).
+        // Llevan el mismo sol que las fachadas pero con menos rango: miran
+        // hacia arriba, así que ninguno llega a quedarse tan oscuro.
+        if (cima) {
+          for (let i = 0; i < outer.length; i++) {
+            const a = outer[i];
+            const c = outer[(i + 1) % outer.length];
+            const a2 = cima[i];
+            const c2 = cima[(i + 1) % cima.length];
+            const dx = c.e - a.e;
+            const dy = c.n - a.n;
+            const len = Math.hypot(dx, dy);
+            if (len < 0.05) continue;
+            const luz = 0.5 + 0.5 * ((dy / len) * SOL_E + (-dx / len) * SOL_N);
+            const s = LUZ_TEJADO + (1 - LUZ_TEJADO) * luz;
+            const r = tejado.r * s;
+            const g2 = tejado.g * s;
+            const bl = tejado.b * s;
+            g.posT.push(a.e, hAlero, -a.n, c.e, hAlero, -c.n, c2.e, b.h, -c2.n);
+            g.posT.push(a.e, hAlero, -a.n, c2.e, b.h, -c2.n, a2.e, b.h, -a2.n);
+            for (let q = 0; q < 6; q++) g.colT.push(r, g2, bl);
+          }
+        }
+        // Paredes (exterior + agujeros), con el sombreado del sol horneado en
         // el color de vértice. El pie oscuro ya no va aquí: lo pone texAo.
+        // Acaban en el ALERO: lo que va de ahí a b.h ya lo cubren los faldones,
+        // y sin faldones el alero ES b.h.
         const v0 = b.minH / PLANTA_M;
-        const v1 = b.h / PLANTA_M;
+        const v1 = hAlero / PLANTA_M;
         for (const ring of anillos) {
           for (let i = 0; i < ring.length; i++) {
             const a = ring[i];
@@ -826,8 +940,8 @@ export default function MapView() {
             const g2 = pared.g * sombra;
             const bl = pared.b * sombra;
             const u1 = len / PLANTA_M;
-            g.posP.push(a.e, b.minH, -a.n, c.e, b.minH, -c.n, c.e, b.h, -c.n);
-            g.posP.push(a.e, b.minH, -a.n, c.e, b.h, -c.n, a.e, b.h, -a.n);
+            g.posP.push(a.e, b.minH, -a.n, c.e, b.minH, -c.n, c.e, hAlero, -c.n);
+            g.posP.push(a.e, b.minH, -a.n, c.e, hAlero, -c.n, a.e, hAlero, -a.n);
             g.uvP.push(0, v0, u1, v0, u1, v1, 0, v0, u1, v1, 0, v1);
             g.colP.push(r, g2, bl, r, g2, bl, r, g2, bl);
             g.colP.push(r, g2, bl, r, g2, bl, r, g2, bl);
@@ -1299,6 +1413,7 @@ export default function MapView() {
       matParedes.dispose();
       texVent.dispose();
       texAo.dispose();
+      texCielo.dispose();
       renderer.dispose();
       engineRef.current = null;
     };

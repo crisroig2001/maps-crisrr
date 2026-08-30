@@ -10,6 +10,8 @@
 
 const BCN = { lat: 41.3874, lng: 2.1686 }; // plaça de Catalunya
 const RURAL = { lat: 42.0503, lng: 2.75 }; // Garrotxa: campo, casi sin edificios
+const CASAS = { lat: 41.4046, lng: 2.1602 }; // Gràcia: la mancha de casas bajas
+// más densa de las teselas cacheadas (264 en 230 m), buscada a propósito
 
 export const VISTAS = [
   {
@@ -72,6 +74,18 @@ export const VISTAS = [
     d: 110,
     pol: 76,
     az: 300,
+  },
+  {
+    id: 'barrio-de-casas',
+    desc:
+      'Gràcia: edificios pequeños y bajos, que son los únicos que llevan tejado ' +
+      'a cuatro aguas. En el Eixample no se aprecia porque allí las manzanas ' +
+      'son grandes y altas — y de azotea plana, que es lo correcto. Aquí es ' +
+      'donde se juzga si los faldones valen la geometría que cuestan.',
+    ...CASAS,
+    d: 260,
+    pol: 55,
+    az: 25,
   },
   {
     id: 'rural-girona',
