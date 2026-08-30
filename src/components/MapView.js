@@ -251,6 +251,19 @@ export default function MapView() {
 
     const camera = new THREE.PerspectiveCamera(50, 1, 2, 20000);
     camera.position.set(280, 430, 360);
+    // Cámara reproducible desde la URL: ?d=630&pol=47&az=38 (distancia en
+    // metros, inclinación y rumbo en grados; 0° de inclinación = cenital).
+    // Sin estos parámetros no cambia nada. Existe para que el banco visual
+    // (npm run vistas) pueda capturar siempre EL MISMO encuadre.
+    const dCam = parseFloat(params.get('d'));
+    const polCam = parseFloat(params.get('pol'));
+    const azCam = parseFloat(params.get('az'));
+    if (dCam > 0 && Number.isFinite(polCam) && Number.isFinite(azCam)) {
+      const pol = Math.max(0.01, Math.min(76, polCam)) * (Math.PI / 180);
+      const az = azCam * (Math.PI / 180);
+      const r = dCam * Math.sin(pol);
+      camera.position.set(r * Math.sin(az), dCam * Math.cos(pol), r * Math.cos(az));
+    }
 
     const controls = new MapControls(camera, canvas);
     controls.target.set(0, 0, 0);
@@ -311,8 +324,14 @@ export default function MapView() {
     let vivo = true;
     let enCarga = 0;
 
+    // window.__mapaListo: lo lee el banco visual para saber cuándo capturar.
+    // Sin esto habría que dormir a ojo y las capturas salen a medio construir.
+    // enCarga solo baja al terminar construyeEdificios(), así que en 0 la vista
+    // está completa: suelo, edificios y árboles.
+    window.__mapaListo = false;
     function carga(delta) {
       enCarga += delta;
+      window.__mapaListo = enCarga === 0;
       setCargando(enCarga);
     }
 
