@@ -805,9 +805,13 @@ export default function MapView() {
 
     // colores derivados de un color de cámara, cacheados por celda+variante
     const cacheCamCol = new Map();
-    function coloresDe(b) {
-      if (!scans.has(b.cell)) return { pared: GRIS_PARED, tejado: GRIS_TEJADO };
-      const cam = scans.get(b.cell);
+    // `estado` es lo que devuelve scans.get(celda): undefined = sin escanear,
+    // null = escaneada sin color de cámara, '#rrggbb' = con color. Se pasa a
+    // mano (en vez de leerlo aquí) para poder preguntar por el color ANTERIOR
+    // al repintar una celda.
+    function coloresDe(b, estado) {
+      if (estado === undefined) return { pared: GRIS_PARED, tejado: GRIS_TEJADO };
+      const cam = estado;
       if (cam) {
         // el color REAL capturado en esa celda, con una pizca de variedad por
         // edificio para que la manzana no salga plana
@@ -838,7 +842,7 @@ export default function MapView() {
     // g = {posT, colT} tejados (material liso) + {posP, colP, uvP} paredes
     // (material con ventanas; la UV va en PLANTAS: u = metros/PLANTA_M)
     function meteEdificio(g, b) {
-      const { pared, tejado } = coloresDe(b);
+      const { pared, tejado } = coloresDe(b, scans.get(b.cell));
       for (const anillos of b.polys) {
         const outer = anillos[0];
         const holes = anillos.slice(1);
@@ -994,14 +998,26 @@ export default function MapView() {
     async function construyeEdificios(entry) {
       const token = ++entry.token;
       const g = { posT: [], colT: [], posP: [], colP: [], uvP: [] };
+      // Dónde empieza el color de cada edificio dentro de los buffers. Con esto,
+      // un escaneo solo tiene que reescribir su tramo en vez de re-triangular la
+      // tesela entera. Son dos enteros por edificio (~190 KB por tesela).
+      const offT = new Int32Array(entry.bldgs.length + 1);
+      const offP = new Int32Array(entry.bldgs.length + 1);
       let n = 0;
       for (const b of entry.bldgs) {
+        offT[n] = g.colT.length;
+        offP[n] = g.colP.length;
         meteEdificio(g, b);
         if (++n % 500 === 0) {
           await tick();
           if (!vivo || token !== entry.token) return;
         }
       }
+      // los árboles van DESPUÉS en el mismo buffer de tejados; estas marcas de
+      // fin dejan claro dónde acaban los edificios, para no pintarlos a ellos
+      offT[entry.bldgs.length] = g.colT.length;
+      offP[entry.bldgs.length] = g.colP.length;
+
       // árboles en las zonas verdes, deterministas por tesela (comparten la
       // geometría de tejados: material liso). Muestreo por rechazo con tope.
       const rnd = prng((entry.x * 73856093) ^ (entry.y * 19349663));
@@ -1051,6 +1067,8 @@ export default function MapView() {
         entry.group.remove(entry.meshP);
         entry.meshP.geometry.dispose();
       }
+      entry.offT = offT;
+      entry.offP = offP;
       entry.mesh = new THREE.Mesh(geoT, matEdificios);
       entry.meshP = new THREE.Mesh(geoP, matParedes);
       entry.group.add(entry.mesh);
@@ -1315,12 +1333,62 @@ export default function MapView() {
       });
     }
 
-    function reconstruyeCelda(cx, cy) {
-      const key = Math.floor(cx / CELLS_POR_TESELA) + '/' + Math.floor(cy / CELLS_POR_TESELA);
-      const entry = tiles.get(key);
-      if (!entry?.data) return;
-      reconstruyeSuelo(entry);
-      construyeEdificios(entry);
+    // Al escanear NO cambia la geometría, solo el color. El sombreado del sol va
+    // horneado en el color de vértice, así que basta con escalar lo que ya hay
+    // por (color nuevo / color viejo): se conserva la cara clara y la oscura sin
+    // recalcular nada. Ninguno de los colores de la app tiene un canal a cero,
+    // pero se guarda por si acaso.
+    function escalaColor(arr, ini, fin, de, a) {
+      const fr = de.r > 0.001 ? a.r / de.r : 0;
+      const fg = de.g > 0.001 ? a.g / de.g : 0;
+      const fb = de.b > 0.001 ? a.b / de.b : 0;
+      for (let i = ini; i < fin; i += 3) {
+        arr[i] *= fr;
+        arr[i + 1] *= fg;
+        arr[i + 2] *= fb;
+      }
+    }
+
+    // cambios: Map celda -> estado ANTERIOR. Devuelve false si esta tesela aún
+    // no tiene geometría hecha (entonces no hay nada que repintar).
+    function repintaCeldas(entry, cambios) {
+      const colT = entry.mesh?.geometry.getAttribute('color');
+      const colP = entry.meshP?.geometry.getAttribute('color');
+      if (!colT || !colP || !entry.offT) return false;
+      let tocados = 0;
+      for (let i = 0; i < entry.bldgs.length; i++) {
+        const b = entry.bldgs[i];
+        if (!cambios.has(b.cell)) continue;
+        const antes = coloresDe(b, cambios.get(b.cell));
+        const ahora = coloresDe(b, scans.get(b.cell));
+        escalaColor(colT.array, entry.offT[i], entry.offT[i + 1], antes.tejado, ahora.tejado);
+        escalaColor(colP.array, entry.offP[i], entry.offP[i + 1], antes.pared, ahora.pared);
+        tocados++;
+      }
+      if (tocados) {
+        colT.needsUpdate = true;
+        colP.needsUpdate = true;
+      }
+      return true;
+    }
+
+    // Agrupa por tesela ANTES de tocar nada: cuatro celdas de la misma tesela
+    // eran cuatro reconstrucciones completas.
+    function aplicaCambios(cambios) {
+      const porTesela = new Map();
+      for (const [c, antes] of cambios) {
+        const p = c.split('/');
+        const key =
+          Math.floor(Number(p[1]) / CELLS_POR_TESELA) + '/' + Math.floor(Number(p[2]) / CELLS_POR_TESELA);
+        if (!porTesela.has(key)) porTesela.set(key, new Map());
+        porTesela.get(key).set(c, antes);
+      }
+      for (const [key, cs] of porTesela) {
+        const entry = tiles.get(key);
+        if (!entry?.data) continue;
+        reconstruyeSuelo(entry);
+        if (!repintaCeldas(entry, cs)) construyeEdificios(entry);
+      }
     }
 
     // --- escaneos compartidos ---
@@ -1328,21 +1396,18 @@ export default function MapView() {
       try {
         const r = await fetch('/api/scans');
         const j = await r.json();
-        const nuevas = [];
+        const cambios = new Map();
         for (const it of j.cells || []) {
           // compat: la respuesta vieja era un array de strings
           const c = typeof it === 'string' ? it : it.k;
           const col = typeof it === 'string' ? null : it.c || null;
           if (!scans.has(c) || (col && scans.get(c) !== col)) {
+            if (!cambios.has(c)) cambios.set(c, scans.get(c)); // el estado de ANTES
             scans.set(c, col);
-            nuevas.push(c);
           }
         }
-        if (nuevas.length) {
-          for (const c of nuevas) {
-            const [, cx, cy] = c.split('/');
-            reconstruyeCelda(Number(cx), Number(cy));
-          }
+        if (cambios.size) {
+          aplicaCambios(cambios);
           actualizaEstado();
         }
       } catch {
@@ -1359,8 +1424,9 @@ export default function MapView() {
         const { cx, cy } = celdaDelTarget();
         const key = cellKey(cx, cy);
         if (scans.has(key)) return { already: true };
+        const antes = scans.get(key);
         scans.set(key, color || null);
-        reconstruyeCelda(cx, cy);
+        aplicaCambios(new Map([[key, antes]]));
         actualizaEstado();
         fetch('/api/scans', {
           method: 'POST',
