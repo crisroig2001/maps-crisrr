@@ -427,6 +427,10 @@ export default function MapView() {
     // enCarga solo baja al terminar construyeEdificios(), así que en 0 la vista
     // está completa: suelo, edificios y árboles.
     window.__mapaListo = false;
+    // Diagnóstico: búferes de GPU por tesela VIVA. Sin esto, «han subido los
+    // búferes» se confunde con la retención normal (la app conserva un 5x5
+    // aunque solo cargue un 3x3) y se dan por buenas fugas que no existen.
+    window.__teselas = () => tiles.size;
     function carga(delta) {
       enCarga += delta;
       window.__mapaListo = enCarga === 0;
@@ -1219,7 +1223,14 @@ export default function MapView() {
       carga(1);
       try {
         const data = await loadTileData(Z_TILE, x, y);
-        if (!vivo || !tiles.has(key)) return;
+        // Identidad, no presencia de la clave. Si mientras esperábamos la red
+        // se paneó fuera (liberaTesela borró la clave) y se volvió (cargaTesela
+        // creó OTRA entrada con la misma clave), `tiles.has(key)` sería true y
+        // seguiríamos construyendo sobre una entrada ya huérfana: su grupo
+        // acabaría en la escena sin que nadie pueda liberarlo nunca.
+        // OJO: el agujero es real por construcción, pero NO está medido — no se
+        // ha conseguido disparar ni con 5 s de retardo por tesela (ver #3).
+        if (!vivo || tiles.get(key) !== entry) return;
         entry.data = data;
         const prep = prepara(x, y, data);
         entry.bldgs = prep.bldgs;
