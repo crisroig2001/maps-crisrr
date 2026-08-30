@@ -29,6 +29,17 @@ ocurre **en la GPU del dispositivo**: el servidor no renderiza nada.
   suelo. Es lo que asienta los edificios en el mundo en vez de dejarlos como
   pegatinas. Tampoco cuesta geometría: ~23 ms por tesela, frente a los ~8 s que
   cuesta construir sus edificios.
+- **Tejados a cuatro aguas**: OpenMapTiles no dice la forma del tejado (la capa
+  `building` solo trae `render_height`, `render_min_height` y `colour`), así que
+  se deduce de la huella: se mete el contorno hacia dentro con la misma función
+  que separa los edificios pegados y se levanta, lo que da faldones en cualquier
+  forma y no solo en rectángulos. El alero **baja** en vez de subir la cumbrera,
+  para que el edificio conserve la altura que dice el dato. Solo en edificios
+  pequeños y bajos: en el Eixample las azoteas planas son las de verdad. Y con
+  un suelo de 40 m², porque por debajo de eso la huella son 3-4 px y el faldón
+  no se ve — pero eran el 58% de los candidatos y la mitad de las aristas
+  (+9,8 MB de geometría en vez de +27, medido en las 9 teselas de la vista de
+  partida).
 - **Rótulos**: topónimos (ciudad, distrito, barrio) y nombres de calle salen de
   las capas `place` y `transportation_name`, que ya venían dentro del `.pbf` y
   antes se descartaban — así que **no cuestan ni un byte de red**. No se pintan
@@ -39,7 +50,12 @@ ocurre **en la GPU del dispositivo**: el servidor no renderiza nada.
 - **Horizonte**: solo se cargan 3×3 teselas, así que el mundo con edificios
   acaba a 1,5 teselas del centro. Un plano de horizonte más la niebla —
   recalculada por frame según lo lejos que esté la cámara — funden ese borde
-  con el cielo: antes se veía cortado en recto.
+  con el cielo: antes se veía cortado en recto. El cielo va en degradado, como
+  textura **equirectangular** y no como imagen de fondo plana, para que quede
+  anclado al mundo y el horizonte no resbale con la pantalla al inclinar la
+  cámara. Su color de abajo y el de la niebla son el mismo a propósito: si no,
+  aparece una costura justo donde el mapa se acaba, que es lo que la niebla
+  estaba tapando.
 - **Zonas escaneadas**: celdas z16 compartidas entre todos los usuarios
   (`/api/scans`, almacén JSON en `DATA_DIR`, volumen persistente en Coolify).
   Una celda escaneada pinta sus edificios a color pastel; el resto queda en gris
@@ -83,7 +99,9 @@ npm run vistas -- --solo ras-de-tejados   # una sola vista (la hoja no se vacía
 Las vistas están en `scripts/vistas.config.mjs`. **Cada una existe porque un
 fallo real se vio ahí** — `ras-de-tejados` es donde los nombres de calle
 flotaban sobre los tejados, `lejos-oblicuo` donde el mundo se cortaba en recto,
-`pie-de-fachada` donde el oscurecido del pie se estiraba por toda la pared.
+`pie-de-fachada` donde el oscurecido del pie se estiraba por toda la pared, y
+`barrio-de-casas` (Gràcia) porque los tejados a cuatro aguas solo salen en
+edificios pequeños y en el Eixample no se aprecian.
 Si aparece un fallo nuevo, añade la vista que lo enseña antes de arreglarlo.
 
 Dos detalles del entorno: el banco necesita `npm run dev`, porque `next start`

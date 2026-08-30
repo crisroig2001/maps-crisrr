@@ -1,6 +1,6 @@
 /* crisrr maps — un solo look (día, cartoon); todo pintado explícito */
 :root {
-  --sky: #cfe8f4;
+  --sky: #e3f1f8;   /* el pálido del horizonte del cielo 3D: es lo que se ve antes de que WebGL pinte */
   --ink: #2b3440;
   --ink-2: #5c6875;
   --card: rgba(255, 255, 255, 0.9);
