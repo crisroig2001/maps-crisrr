@@ -374,6 +374,146 @@ export default function MapView() {
     controls.maxDistance = 7000;
     controls.maxPolarAngle = 1.34;
 
+    // --- gestos de dos dedos, estilo Apple Maps ---
+    // MapControls con dos dedos solo hace zoom + desplazar, y su zoom va SIEMPRE
+    // hacia el target: pellizques donde pellizques, se acerca al centro de la
+    // pantalla. Aquí se hace a mano para que las cuatro cosas pasen a la vez y
+    // TODAS pivoten sobre el punto que tienes entre los dedos:
+    //   separar/juntar  -> zoom sobre ese punto
+    //   girar en círculo -> el mapa gira sobre ese punto
+    //   subir/bajar      -> inclinación 3D
+    //   mover en horizontal -> desplazar
+    // El vertical se lo queda la inclinación, así que desplazar arriba y abajo
+    // es cosa de UN dedo (igual que en Apple Maps). Con dos no se puede tener
+    // las dos cosas: el mismo movimiento no puede significar dos gestos.
+    const INCLINA_POR_PX = 0.0035; // rad por píxel de arrastre vertical
+    const dedos = new Map();
+    let gesto = null;
+    const ndc = new THREE.Vector2();
+    const rayo = new THREE.Raycaster();
+    const planoSuelo = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+    const pSuelo = new THREE.Vector3();
+    const pSuelo2 = new THREE.Vector3();
+    const offCam = new THREE.Vector3();
+    const esfCam = new THREE.Spherical();
+
+    // Punto del suelo (y=0) bajo un píxel de pantalla. Si el rayo se va al
+    // cielo no hay intersección: se cae al target, que es lo más razonable.
+    function sueloEn(sx, sy, out) {
+      // Dos cosas que solo hace el renderizador al pintar, y aquí la cámara se
+      // mueve varias veces dentro del mismo gesto:
+      //  - re-apuntarla al target. Sin esto conserva la orientación de antes de
+      //    girar, el rayo sale hacia otro lado y el mapa se iba ~580 m de
+      //    deriva por cada giro (justo el desplazamiento horizontal de cámara).
+      //  - recalcular su matriz de mundo. Sin esto el segundo raycast devuelve
+      //    el MISMO punto que el primero, el ancla no corrige nada y el zoom
+      //    sigue yendo al centro de la pantalla en vez de al punto pellizcado.
+      camera.lookAt(controls.target);
+      camera.updateMatrixWorld();
+      ndc.set((sx / vpW) * 2 - 1, -(sy / vpH) * 2 + 1);
+      rayo.setFromCamera(ndc, camera);
+      if (rayo.ray.intersectPlane(planoSuelo, out)) return out;
+      return out.copy(controls.target);
+    }
+
+    function giraSobre(px, pz, a) {
+      const co = Math.cos(a);
+      const si = Math.sin(a);
+      for (const v of [camera.position, controls.target]) {
+        const x = v.x - px;
+        const z = v.z - pz;
+        v.x = px + x * co - z * si;
+        v.z = pz + x * si + z * co;
+      }
+    }
+
+    function estadoDedos() {
+      const [a, b] = [...dedos.values()];
+      return {
+        mx: (a.x + b.x) / 2,
+        my: (a.y + b.y) / 2,
+        dist: Math.hypot(b.x - a.x, b.y - a.y),
+        ang: Math.atan2(b.y - a.y, b.x - a.x),
+      };
+    }
+
+    function onDedoBaja(e) {
+      if (e.pointerType !== 'touch') return;
+      dedos.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (dedos.size === 2) {
+        // MapControls se aparta: si no, los dos harían lo suyo a la vez
+        controls.enabled = false;
+        gesto = estadoDedos();
+      }
+    }
+
+    function onDedoMueve(e) {
+      if (e.pointerType !== 'touch' || !dedos.has(e.pointerId)) return;
+      dedos.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (dedos.size !== 2 || !gesto) return;
+      e.preventDefault();
+      const ahora = estadoDedos();
+
+      // el punto del mundo que hay bajo los dedos ANTES de tocar nada: es el
+      // que tiene que quedarse quieto pase lo que pase
+      sueloEn(gesto.mx, gesto.my, pSuelo);
+
+      // 1. inclinación, del movimiento vertical (dedos arriba = tumbar cámara)
+      const dInc = (gesto.my - ahora.my) * INCLINA_POR_PX;
+      if (dInc) {
+        offCam.copy(camera.position).sub(controls.target);
+        esfCam.setFromVector3(offCam);
+        esfCam.phi = Math.max(0.02, Math.min(controls.maxPolarAngle, esfCam.phi + dInc));
+        offCam.setFromSpherical(esfCam);
+        camera.position.copy(controls.target).add(offCam);
+      }
+
+      // 2. giro, sobre el punto de entre los dedos
+      let dAng = ahora.ang - gesto.ang;
+      if (dAng > Math.PI) dAng -= 2 * Math.PI;
+      if (dAng < -Math.PI) dAng += 2 * Math.PI;
+      if (dAng) giraSobre(pSuelo.x, pSuelo.z, -dAng);
+
+      // 3. zoom: separar los dedos acerca
+      if (gesto.dist > 8 && ahora.dist > 8) {
+        offCam.copy(camera.position).sub(controls.target);
+        const d = offCam.length();
+        const nd = Math.max(
+          controls.minDistance,
+          Math.min(controls.maxDistance, d / (ahora.dist / gesto.dist))
+        );
+        offCam.multiplyScalar(nd / d);
+        camera.position.copy(controls.target).add(offCam);
+      }
+
+      // 4. Y ahora el ancla: se mira dónde ha quedado ese punto del mundo y se
+      // mueve todo para devolverlo bajo los dedos. Esto hace tres cosas de una:
+      // el zoom va al punto pellizcado, el giro y la inclinación pivotan sobre
+      // él, y el movimiento horizontal arrastra el mapa. Se usa la Y ANTERIOR a
+      // propósito: el vertical ya se ha gastado en inclinar.
+      sueloEn(ahora.mx, gesto.my, pSuelo2);
+      camera.position.x += pSuelo.x - pSuelo2.x;
+      camera.position.z += pSuelo.z - pSuelo2.z;
+      controls.target.x += pSuelo.x - pSuelo2.x;
+      controls.target.z += pSuelo.z - pSuelo2.z;
+
+      gesto = ahora;
+    }
+
+    function onDedoSube(e) {
+      if (e.pointerType !== 'touch') return;
+      dedos.delete(e.pointerId);
+      if (dedos.size < 2) gesto = null;
+      // con un dedo suelto se queda MapControls fuera hasta levantar los dos:
+      // devolverle el control a media maniobra da un salto feo
+      if (dedos.size === 0) controls.enabled = true;
+    }
+
+    canvas.addEventListener('pointerdown', onDedoBaja);
+    canvas.addEventListener('pointermove', onDedoMueve, { passive: false });
+    canvas.addEventListener('pointerup', onDedoSube);
+    canvas.addEventListener('pointercancel', onDedoSube);
+
     // Las dos distancias cambian con el zoom, así que la niebla se recalcula
     // por frame: empieza donde acaba el detalle y satura donde acaba el contexto.
     function ajustaNiebla() {
@@ -1895,6 +2035,10 @@ export default function MapView() {
       geoRotulo.dispose();
       for (const t of texRotulo.values()) t.tex.dispose();
       texRotulo.clear();
+      canvas.removeEventListener('pointerdown', onDedoBaja);
+      canvas.removeEventListener('pointermove', onDedoMueve);
+      canvas.removeEventListener('pointerup', onDedoSube);
+      canvas.removeEventListener('pointercancel', onDedoSube);
       controls.dispose();
       horizonte.geometry.dispose();
       horizonte.material.dispose();
