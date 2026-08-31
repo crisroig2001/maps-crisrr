@@ -10,7 +10,7 @@ import * as THREE from 'three';
 import { MapControls } from 'three/examples/jsm/controls/MapControls.js';
 import { loadTileData } from '../lib/mvt';
 import { colorFachada } from '../lib/colorCam';
-import { WORLD, Z_TILE, Z_CELL, lonLatToMerc, tileToMerc, cellKey } from '../lib/geo';
+import { WORLD, Z_TILE, Z_CELL, lonLatToMerc, lonLatToTile, tileToMerc, cellKey } from '../lib/geo';
 
 const N_TILE = 2 ** Z_TILE;
 const N_CELL = 2 ** Z_CELL;
@@ -1646,6 +1646,10 @@ export default function MapView() {
     }
 
     engineRef.current = {
+      celdaCentro() {
+        const { cx, cy } = celdaDelTarget();
+        return cellKey(cx, cy);
+      },
       centroEscaneado() {
         const { cx, cy } = celdaDelTarget();
         return scans.has(cellKey(cx, cy));
@@ -1781,6 +1785,31 @@ export default function MapView() {
     setProg(0);
   }
 
+  // Toda la gracia del mapa es que lo de color lo pintó alguien que ESTUVO
+  // ahí. Sin comprobarlo, desde el sofá se puede colorear Tokio — y eso no se
+  // puede deshacer, porque el primer escaneo de una celda manda para siempre.
+  function posicionActual() {
+    return new Promise((res, rej) => {
+      if (!navigator.geolocation) return rej(new Error('sin_gps'));
+      // El `timeout` de la propia API NO es de fiar: medido en Chromium con el
+      // permiso sin conceder ni denegar, no llama a ninguna de las dos
+      // funciones — ni siquiera al cabo de 27 s. Sin este reloj propio el botón
+      // se queda en «Comprobando dónde estás…» para siempre y parece roto.
+      const reloj = setTimeout(() => rej(new Error('timeout')), 13000);
+      navigator.geolocation.getCurrentPosition(
+        (p) => {
+          clearTimeout(reloj);
+          res(p);
+        },
+        (e) => {
+          clearTimeout(reloj);
+          rej(e);
+        },
+        { enableHighAccuracy: true, timeout: 12000, maximumAge: 30000 }
+      );
+    });
+  }
+
   async function onScan() {
     const eng = engineRef.current;
     if (!eng) return;
@@ -1788,6 +1817,28 @@ export default function MapView() {
       avisa('El centro de la vista ya está escaneado — muévete a una zona gris');
       return;
     }
+
+    let pos;
+    try {
+      avisa('Comprobando dónde estás…');
+      pos = await posicionActual();
+    } catch {
+      avisa('Para escanear una zona hay que estar en ella: activa la ubicación');
+      return;
+    }
+    // Una celda son 459 m de lado. Un GPS urbano da 10-50 m, así que con este
+    // margen no molesta a nadie; por encima, el punto podría caer en la celda
+    // de al lado y se estaría marcando una zona en la que no estás.
+    if (pos.coords.accuracy > 250) {
+      avisa('La señal del GPS es poco precisa ahora mismo — inténtalo en un rato');
+      return;
+    }
+    const t = lonLatToTile(pos.coords.longitude, pos.coords.latitude, Z_CELL);
+    if (cellKey(t.x, t.y) !== eng.celdaCentro()) {
+      avisa('Esta zona no es donde estás. Pulsa el botón de ubicación y escanea lo que tienes delante');
+      return;
+    }
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: 'environment' },
@@ -1916,6 +1967,8 @@ export default function MapView() {
           <p>
             <b>Lo de color ya lo escaneó alguien.</b> Lo gris está pendiente: pulsa
             «Escanear esta zona» sobre una zona gris y se coloreará para todo el mundo.
+            Solo puedes escanear la zona <b>en la que estás</b>: el mapa se colorea
+            andando, no desde el sofá.
           </p>
           <p>
             <b>La cámara pinta el mapa.</b> Al escanear, la cámara captura el color
