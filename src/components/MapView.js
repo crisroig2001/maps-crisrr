@@ -1549,10 +1549,50 @@ export default function MapView() {
     }
 
     // --- escaneos compartidos ---
+    // Se pide SOLO la caja de celdas que hay cargada, y a partir del segundo
+    // sondeo solo lo cambiado desde el anterior. Antes se pedía el planeta
+    // entero cada 25 s.
+    let ultimoHasta = null;
+    let ultimaCaja = '';
+    function cajaDeCeldas() {
+      let x0 = Infinity;
+      let y0 = Infinity;
+      let x1 = -Infinity;
+      let y1 = -Infinity;
+      for (const key of tiles.keys()) {
+        const [x, y] = key.split('/').map(Number);
+        x0 = Math.min(x0, x);
+        y0 = Math.min(y0, y);
+        x1 = Math.max(x1, x);
+        y1 = Math.max(y1, y);
+      }
+      if (!Number.isFinite(x0)) return null;
+      return {
+        cx0: x0 * CELLS_POR_TESELA,
+        cy0: y0 * CELLS_POR_TESELA,
+        cx1: (x1 + 1) * CELLS_POR_TESELA - 1,
+        cy1: (y1 + 1) * CELLS_POR_TESELA - 1,
+      };
+    }
+
     async function traeScans() {
       try {
-        const r = await fetch('/api/scans');
+        const caja = cajaDeCeldas();
+        const q = new URLSearchParams();
+        let clave = 'todo';
+        if (caja) {
+          for (const k of ['cx0', 'cy0', 'cx1', 'cy1']) q.set(k, String(caja[k]));
+          clave = q.toString();
+        }
+        // el delta solo vale si la caja NO ha cambiado: si crece, lo de la
+        // zona nueva es viejo y un `desde` se lo saltaría
+        if (ultimoHasta != null && clave === ultimaCaja) q.set('desde', String(ultimoHasta));
+        ultimaCaja = clave;
+
+        const r = await fetch('/api/scans?' + q.toString());
+        if (r.status === 304) return;
         const j = await r.json();
+        if (typeof j.hasta === 'number') ultimoHasta = j.hasta;
         const cambios = new Map();
         for (const it of j.cells || []) {
           // compat: la respuesta vieja era un array de strings
@@ -1585,6 +1625,7 @@ export default function MapView() {
         scans.set(key, color || null);
         aplicaCambios(new Map([[key, antes]]));
         actualizaEstado();
+        ultimoHasta = null; // el POST cambia el servidor: el próximo sondeo, completo
         fetch('/api/scans', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
