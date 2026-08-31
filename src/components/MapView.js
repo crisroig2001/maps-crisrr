@@ -1390,9 +1390,9 @@ export default function MapView() {
     }
 
     // --- ciclo de teselas ---
-    async function cargaTesela(x, y) {
+    async function cargaTesela(x, y, intentos = 0) {
       const key = x + '/' + y;
-      const entry = { x, y, token: 0, group: new THREE.Group() };
+      const entry = { x, y, token: 0, intentos, group: new THREE.Group() };
       tiles.set(key, entry);
       carga(1);
       try {
@@ -1427,6 +1427,7 @@ export default function MapView() {
         await construyeEdificios(entry);
       } catch (e) {
         entry.error = Date.now();
+        entry.intentos = intentos + 1;
         console.warn('tesela', key, e?.message);
       } finally {
         carga(-1);
@@ -1459,8 +1460,6 @@ export default function MapView() {
           const x = t.x + dx;
           const y = t.y + dy;
           const key = x + '/' + y;
-          const prev = tiles.get(key);
-          if (prev?.error && Date.now() - prev.error > 30000) liberaTesela(key);
           if (!tiles.has(key)) cargaTesela(x, y);
         }
       }
@@ -1469,6 +1468,40 @@ export default function MapView() {
         if (Math.max(Math.abs(x - t.x), Math.abs(y - t.y)) > 2) liberaTesela(key);
       }
       aseguraContexto();
+    }
+
+    // Reintento de las teselas que fallaron. Va SEPARADO de asegura() porque
+    // aquel sale por la primera línea si el target no ha cambiado de tesela: si
+    // te quedabas quieto, una tesela caída no se reintentaba jamás. Y avisa,
+    // que antes el fallo solo salía por la consola: en pantalla, una tesela sin
+    // cargar y una zona vacía de verdad son idénticas.
+    let avisadoFallo = false;
+    function reintenta() {
+      const t = teselaActual;
+      if (!t) return;
+      let fallando = 0;
+      for (let dx = -1; dx <= 1; dx++) {
+        for (let dy = -1; dy <= 1; dy++) {
+          const x = t.x + dx;
+          const y = t.y + dy;
+          const e = tiles.get(x + '/' + y);
+          if (!e?.error) continue;
+          fallando++;
+          // 1 s, 2, 4, 8, 16, y a partir de ahí cada 30
+          const espera = Math.min(30000, 1000 * 2 ** Math.min(e.intentos, 5));
+          if (Date.now() - e.error > espera) {
+            const n = e.intentos;
+            liberaTesela(x + '/' + y);
+            cargaTesela(x, y, n);
+          }
+        }
+      }
+      if (fallando && !avisadoFallo) {
+        avisadoFallo = true;
+        avisa('Hay zonas del mapa que no han cargado. Reintentando…');
+      } else if (!fallando && avisadoFallo) {
+        avisadoFallo = false;
+      }
     }
 
     function actualizaEstado() {
@@ -1659,6 +1692,7 @@ export default function MapView() {
       if (t - ultimoCheck > 700) {
         ultimoCheck = t;
         asegura(false);
+        reintenta();
       }
       renderer.render(scene, camera);
       pintaEtiquetas(niebla);
