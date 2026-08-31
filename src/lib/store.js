@@ -48,10 +48,38 @@ function save() {
   }
 }
 
-export function getCells() {
+// Devuelve las celdas, opcionalmente acotadas a un rango de celdas z16
+// (la vista del cliente) y a las cambiadas desde `desde`.
+// Sin filtro devolvía el planeta entero a cada cliente cada 25 s.
+export function getCells(caja, desde) {
   const c = load().cells;
-  // {k, c}: c es el color de fachada capturado con la cámara (o null)
-  return Object.keys(c).map((k) => ({ k, c: c[k].c || null }));
+  const out = [];
+  for (const k of Object.keys(c)) {
+    const e = c[k];
+    if (desde && !(e.t > desde)) continue;
+    if (caja) {
+      const p = k.split('/');
+      const cx = Number(p[1]);
+      const cy = Number(p[2]);
+      if (cx < caja.cx0 || cx > caja.cx1 || cy < caja.cy0 || cy > caja.cy1) continue;
+    }
+    // {k, c, t}: c es el color de fachada capturado con la cámara (o null)
+    out.push({ k, c: e.c || null, t: e.t || 0 });
+  }
+  return out;
+}
+
+// El instante del último cambio, para que el cliente pueda pedir solo deltas
+// y para construir el ETag.
+export function ultimoCambio() {
+  const c = load().cells;
+  let max = 0;
+  for (const k of Object.keys(c)) if (c[k].t > max) max = c[k].t;
+  return max;
+}
+
+export function totalCeldas() {
+  return Object.keys(load().cells).length;
 }
 
 export function addCell(key, color) {
@@ -61,6 +89,7 @@ export function addCell(key, color) {
     // el primero que escanea manda; un color posterior solo rellena si no había
     if (color && !ya.c) {
       ya.c = color;
+      ya.t = Date.now(); // si no, un delta por `desde` se perdería este cambio
       save();
       return true;
     }
