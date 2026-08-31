@@ -47,10 +47,12 @@ ocurre **en la GPU del dispositivo**: el servidor no renderiza nada.
   proyectados desde el 3D en cada frame, nítidos a cualquier zoom y con cero
   draw calls. Los de calle se deslizan por la vía para quedarse cerca de lo que
   miras, y se descartan por colisión para que el mapa no se sature.
-- **Horizonte**: solo se cargan 3×3 teselas, así que el mundo con edificios
-  acaba a 1,5 teselas del centro. Un plano de horizonte más la niebla —
-  recalculada por frame según lo lejos que esté la cámara — funden ese borde
-  con el cielo: antes se veía cortado en recto. El cielo va en degradado, como
+- **Horizonte**: el bloque de detalle son 3×3 teselas z14, así que los edificios
+  acaban a 2,8 km del centro. Más allá va un **anillo de contexto** de teselas
+  z11 pintadas solo como suelo: una z11 cubre 8×8 teselas z14 y pesa 119 KB
+  contra los ~13 MB que costarían esas 64. Con eso el mundo con suelo pasa de
+  2,8 a 9 km por **+9% de descarga**, y la niebla —recalculada por frame— ya no
+  tapa un corte sino que funde el escalón de detalle con el cielo. El cielo va en degradado, como
   textura **equirectangular** y no como imagen de fondo plana, para que quede
   anclado al mundo y el horizonte no resbale con la pantalla al inclinar la
   cámara. Su color de abajo y el de la niebla son el mismo a propósito: si no,
@@ -81,7 +83,7 @@ Un cambio en el visor se juzga mirando capturas, no desplegando a producción.
 
 ```bash
 npx playwright install chromium   # una vez
-npm run teselas                   # cachea en .teselas/ lo que hace falta (~13 MB)
+npm run teselas                   # cachea en .teselas/ lo que hace falta (~17 MB)
 npm run dev                       # en otra terminal
 npm run vistas                    # captura y compara
 ```
