@@ -73,16 +73,32 @@ function colorOsm(v) {
 // mundo, así que TIENE que ser el mismo que el del horizonte: si el cielo
 // aclara hacia abajo y la niebla no, aparece una costura justo donde el mapa
 // se acaba, que es lo que la niebla estaba tapando.
+// Anillo de contexto: teselas z11 pintadas SOLO como suelo, sin edificios. Una
+// z11 cubre 8x8 teselas z14 — 14,7 km de lado — y pesa 119 KB, contra los ~13 MB
+// que costarían esas 64 teselas z14. Es lo que permite que haya horizonte de
+// verdad en vez de un plano de color liso, y que la cámara pueda alejarse.
+const Z_CTX = 11;
+const RADIO_CTX_M = 9000; // cubre de sobra hasta donde la niebla lo apaga
+const MAX_CTX = 9; // tope de descargas, por si el target cae en una esquina
+const S_CTX = 512; // la mitad de resolución que el suelo de detalle: está lejos
+
 const CIELO_CENIT = 0x9ecbe8;
 const CIELO_HORIZONTE = 0xe3f1f8;
 const SUELO_BASE = 0xd8dcd2; // el mismo gris con que arranca el canvas de cada tesela
-// Niebla. NIEBLA_BORDE es el que TAPA el corte: la niebla satura a esa
-// fracción de radioMundo pasado el target (0,88 deja margen para las vistas
-// oblicuas, las peores). NIEBLA_ENTRADA solo decide dónde EMPIEZA a empañar:
-// no afecta a la garantía del borde, así que se sube todo lo posible para que
-// el mapa se vea nítido y solo se funda la última franja.
-const NIEBLA_BORDE = 0.88;
-const NIEBLA_ENTRADA = 0.62;
+// Niebla. Con el anillo de contexto el mundo ya no se acaba en el bloque de
+// detalle, así que la niebla deja de tener que tapar un corte y pasa a hacer
+// dos cosas distintas:
+//   NIEBLA_ENTRADA — dónde EMPIEZA a empañar, atado al borde del DETALLE: así
+//     suaviza el escalón donde las calles finas dejan paso al suelo de contexto.
+//   NIEBLA_BORDE — dónde satura, atado al borde del CONTEXTO, que ahora es lo
+//     último que hay antes del plano liso del horizonte.
+// Ambas son distancias MÁS ALLÁ del target, en metros, no fracciones: es más
+// fácil razonar sobre "a partir de dónde se empaña" que sobre un porcentaje.
+// El contexto es suelo grueso (28 m por píxel): si se ve demasiado nítido no
+// parece mundo lejano, parece una mancha plana compitiendo con el detalle.
+// Empañarlo pronto es lo que lo convierte en horizonte.
+const NIEBLA_DESDE_M = 1900; // ~el borde del bloque de detalle (2.753 m)
+const NIEBLA_HASTA_M = 5000; // aquí ya es todo cielo
 
 // usos del suelo: tonos MUY suaves, solo para que el fondo deje de ser un gris
 // plano. Si tiñen demasiado le comen el protagonismo a los edificios.
@@ -309,19 +325,22 @@ export default function MapView() {
     // lejos que esté la cámara, no son constantes.
     scene.fog = new THREE.Fog(CIELO_HORIZONTE, 1, 2);
 
-    // Suelo del horizonte: un plano enorme del color base de las teselas para
-    // que más allá del bloque cargado no haya VACÍO. La niebla lo funde con el
-    // cielo, así que el borde del bloque deja de leerse como un corte: pasa de
-    // "aquí se acaba el mundo" a "aquí ya no hay detalle".
+    // Suelo del horizonte: el respaldo LISO que queda detrás del anillo de
+    // contexto, para que aún más allá no haya vacío. Va más abajo que el
+    // contexto (y = -8) porque a esa distancia el escalón no se ve, y separarlos
+    // así evita que se peleen por la profundidad al rasar la cámara.
     const horizonte = new THREE.Mesh(
       new THREE.PlaneGeometry(teselaM * 24, teselaM * 24),
       new THREE.MeshBasicMaterial({ color: SUELO_BASE })
     );
     horizonte.rotation.x = -Math.PI / 2;
-    horizonte.position.y = -1; // por debajo del suelo de las teselas (y=0)
+    horizonte.position.y = -8; // bajo el contexto (-1), que va bajo el detalle (0)
     scene.add(horizonte);
 
-    const camera = new THREE.PerspectiveCamera(50, 1, 2, 20000);
+    // El plano cercano sube de 2 a 5 m para recuperar precisión de profundidad:
+    // el lejano se va a 30 km y con near=2 los planos de suelo se peleaban.
+    // minDistance es 90 m, así que a 5 m no se recorta nada que se vea.
+    const camera = new THREE.PerspectiveCamera(50, 1, 5, 30000);
     camera.position.set(280, 430, 360);
     // Cámara reproducible desde la URL: ?d=630&pol=47&az=38 (distancia en
     // metros, inclinación y rumbo en grados; 0° de inclinación = cenital).
@@ -343,19 +362,18 @@ export default function MapView() {
     controls.dampingFactor = 0.09;
     controls.screenSpacePanning = false;
     controls.minDistance = 90;
-    // alejarse más que esto es mirar sobre todo lo que NO está cargado
-    controls.maxDistance = radioMundo * 1.4;
+    // Ya no la limita el bloque de detalle sino el contexto, que llega mucho
+    // más lejos. Antes eran ~3.850 m, un tope puesto para no mirar al vacío.
+    controls.maxDistance = 7000;
     controls.maxPolarAngle = 1.34;
 
-    // La niebla tiene que saturar justo ANTES del borde del bloque, que está a
-    // ~(distancia de cámara + radioMundo). Como esa distancia cambia al hacer
-    // zoom, la niebla no puede ser fija: se recalcula por frame.
-    const tmpV = new THREE.Vector3();
+    // Las dos distancias cambian con el zoom, así que la niebla se recalcula
+    // por frame: empieza donde acaba el detalle y satura donde acaba el contexto.
     function ajustaNiebla() {
       const d = camera.position.distanceTo(controls.target);
-      const far = d + radioMundo * NIEBLA_BORDE;
+      const far = d + NIEBLA_HASTA_M;
       scene.fog.far = far;
-      scene.fog.near = far * NIEBLA_ENTRADA;
+      scene.fog.near = d + NIEBLA_DESDE_M;
       // el horizonte sigue al target: así nunca se le ve el canto al panear
       horizonte.position.x = controls.target.x;
       horizonte.position.z = controls.target.z;
@@ -1233,6 +1251,144 @@ export default function MapView() {
       }
     }
 
+    // --- anillo de contexto (z11: suelo lejano, sin edificios) ---
+    const N_CTX = 2 ** Z_CTX;
+    const ladoCtx = (WORLD / N_CTX) * k; // metros de lado de una tesela z11
+    const contexto = new Map();
+
+    // Pintado simplificado a propósito: ni edificios, ni sombras, ni velos por
+    // celda. A 3 km o más eso no se distingue, y cada cosa que se quita es
+    // trabajo que no se hace 9 veces.
+    function pintaContexto(data) {
+      const cv = document.createElement('canvas');
+      cv.width = cv.height = S_CTX;
+      const ctx = cv.getContext('2d');
+      const ext = data.extent;
+      const px = (v) => (v / ext) * S_CTX;
+      const pxPorM = S_CTX / ladoCtx;
+
+      ctx.fillStyle = '#' + SUELO_BASE.toString(16).padStart(6, '0');
+      ctx.fillRect(0, 0, S_CTX, S_CTX);
+
+      const poligono = (rings) => {
+        ctx.beginPath();
+        for (const ring of rings) {
+          for (let i = 0; i < ring.length; i++) {
+            const p = ring[i];
+            if (i === 0) ctx.moveTo(px(p.x), px(p.y));
+            else ctx.lineTo(px(p.x), px(p.y));
+          }
+          ctx.closePath();
+        }
+        ctx.fill('evenodd');
+      };
+      const linea = (pts) => {
+        ctx.beginPath();
+        for (let i = 0; i < pts.length; i++) {
+          const p = pts[i];
+          if (i === 0) ctx.moveTo(px(p.x), px(p.y));
+          else ctx.lineTo(px(p.x), px(p.y));
+        }
+        ctx.stroke();
+      };
+
+      for (const lu of data.landuse) {
+        const col = COLOR_USO[lu.cls];
+        if (!col) continue;
+        ctx.fillStyle = col;
+        poligono(lu.rings);
+      }
+      ctx.fillStyle = '#bcd8a5';
+      data.green.forEach(poligono);
+      ctx.fillStyle = '#eee1b8';
+      data.sand.forEach(poligono);
+      ctx.fillStyle = '#8ec3e0';
+      data.water.forEach(poligono);
+
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.strokeStyle = '#8ec3e0';
+      ctx.lineWidth = Math.max(1, 7 * pxPorM);
+      data.waterways.forEach(linea);
+      // las vías se pintan con un mínimo de 1 px: a esta escala un ancho real
+      // de 13 m serían 0,45 px y la red desaparecería
+      ctx.strokeStyle = '#c2c8cf';
+      for (const r of data.roads) {
+        if (VIA_RAIL.has(r.cls) || VIA_SENDA.has(r.cls)) continue;
+        ctx.lineWidth = Math.max(1, (ANCHO_VIA[r.cls] || 6) * pxPorM);
+        r.lines.forEach(linea);
+      }
+
+      // Mismo velo gris que las celdas sin escanear del bloque de detalle. Sin
+      // esto el contexto sale MÁS claro que lo de cerca y el escalón entre los
+      // dos se marca justo donde se intenta disimular.
+      ctx.fillStyle = 'rgba(108, 115, 124, 0.24)';
+      ctx.fillRect(0, 0, S_CTX, S_CTX);
+
+      const tex = new THREE.CanvasTexture(cv);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+      return tex;
+    }
+
+    async function cargaContexto(x, y) {
+      const key = x + '/' + y;
+      const entry = { x, y };
+      contexto.set(key, entry);
+      try {
+        const data = await loadTileData(Z_CTX, x, y);
+        if (!vivo || contexto.get(key) !== entry) return;
+        const base = tileToMerc(Z_CTX, x, y);
+        const half = WORLD / N_CTX / 2;
+        const plano = new THREE.Mesh(
+          new THREE.PlaneGeometry(ladoCtx, ladoCtx),
+          new THREE.MeshBasicMaterial({ map: pintaContexto(data) })
+        );
+        plano.rotation.x = -Math.PI / 2;
+        plano.position.set(
+          (base.mx + half - origen.mx) * k,
+          -1, // bajo el suelo de detalle (y=0), sobre el horizonte liso (y=-8)
+          -(base.my - half - origen.my) * k
+        );
+        entry.plano = plano;
+        scene.add(plano);
+      } catch (e) {
+        contexto.delete(key); // que lo reintente el siguiente asegura()
+        console.warn('contexto', key, e?.message);
+      }
+    }
+
+    function liberaContexto(key) {
+      const entry = contexto.get(key);
+      if (!entry) return;
+      contexto.delete(key);
+      if (entry.plano) {
+        scene.remove(entry.plano);
+        entry.plano.geometry.dispose();
+        entry.plano.material.map?.dispose();
+        entry.plano.material.dispose();
+      }
+    }
+
+    function aseguraContexto() {
+      const m = sceneToMerc(controls.target.x, -controls.target.z);
+      const rMerc = RADIO_CTX_M / k; // el radio en metros Mercator, no reales
+      const aX = (mx) => Math.floor((mx / WORLD + 0.5) * N_CTX);
+      const aY = (my) => Math.floor((0.5 - my / WORLD) * N_CTX);
+      const x0 = aX(m.mx - rMerc);
+      const x1 = aX(m.mx + rMerc);
+      const y0 = aY(m.my + rMerc);
+      const y1 = aY(m.my - rMerc);
+      const quiero = new Set();
+      for (let x = x0; x <= x1 && quiero.size < MAX_CTX; x++) {
+        for (let y = y0; y <= y1 && quiero.size < MAX_CTX; y++) {
+          quiero.add(x + '/' + y);
+          if (!contexto.has(x + '/' + y)) cargaContexto(x, y);
+        }
+      }
+      for (const key of [...contexto.keys()]) if (!quiero.has(key)) liberaContexto(key);
+    }
+
     // --- ciclo de teselas ---
     async function cargaTesela(x, y) {
       const key = x + '/' + y;
@@ -1312,6 +1468,7 @@ export default function MapView() {
         const [x, y] = key.split('/').map(Number);
         if (Math.max(Math.abs(x - t.x), Math.abs(y - t.y)) > 2) liberaTesela(key);
       }
+      aseguraContexto();
     }
 
     function actualizaEstado() {
@@ -1481,6 +1638,7 @@ export default function MapView() {
       cancelAnimationFrame(raf);
       window.removeEventListener('resize', medir);
       for (const key of [...tiles.keys()]) liberaTesela(key);
+      for (const key of [...contexto.keys()]) liberaContexto(key);
       for (const el of nodos) el.remove();
       nodos.length = 0;
       controls.dispose();

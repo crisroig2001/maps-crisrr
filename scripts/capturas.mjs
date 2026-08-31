@@ -87,7 +87,7 @@ await page.route('**tiles.openfreemap.org/**', (route) => {
     });
   }
   const m = u.match(/\/(\d+)\/(\d+)\/(\d+)\.pbf$/);
-  const f = m && path.join(dirTeselas, `${m[2]}-${m[3]}.pbf`);
+  const f = m && path.join(dirTeselas, `${m[1]}-${m[2]}-${m[3]}.pbf`);
   if (f && fs.existsSync(f)) {
     return route.fulfill({
       contentType: 'application/vnd.mapbox-vector-tile',
@@ -95,7 +95,7 @@ await page.route('**tiles.openfreemap.org/**', (route) => {
     });
   }
   sinCache++;
-  problemas.push(`tesela sin cachear: ${m ? m[2] + '-' + m[3] : u.slice(-24)} (sube RADIO_TESELAS y relanza npm run teselas)`);
+  problemas.push(`tesela sin cachear: ${m ? 'z' + m[1] + ' ' + m[2] + '-' + m[3] : u.slice(-24)} (sube RADIO_TESELAS y relanza npm run teselas)`);
   return route.fulfill({ status: 404, body: '' });
 });
 

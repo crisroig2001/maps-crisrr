@@ -3,7 +3,7 @@
 // así que las capturas son reproducibles y no dependen del CDN.
 import fs from 'node:fs';
 import path from 'node:path';
-import { VISTAS, RADIO_TESELAS, Z, DIR_TESELAS } from './vistas.config.mjs';
+import { VISTAS, RADIO_TESELAS, Z, Z_CTX, RADIO_CTX_M, DIR_TESELAS } from './vistas.config.mjs';
 
 const TILEJSON = 'https://tiles.openfreemap.org/planet';
 
@@ -19,13 +19,23 @@ function lonLatToTile(lon, lat, z) {
 const dir = path.resolve(DIR_TESELAS);
 fs.mkdirSync(dir, { recursive: true });
 
-// qué teselas hacen falta, sin repetir
+// qué teselas hacen falta, sin repetir. El nombre lleva el ZOOM delante: el
+// anillo de contexto es z11 y sin eso chocaría con las de detalle.
 const quiero = new Set();
 for (const v of VISTAS) {
   const t = lonLatToTile(v.lng, v.lat, Z);
   for (let dx = -RADIO_TESELAS; dx <= RADIO_TESELAS; dx++) {
     for (let dy = -RADIO_TESELAS; dy <= RADIO_TESELAS; dy++) {
-      quiero.add(t.x + dx + '-' + (t.y + dy));
+      quiero.add(Z + '-' + (t.x + dx) + '-' + (t.y + dy));
+    }
+  }
+  // anillo de contexto: las z11 que cubren RADIO_CTX_M alrededor del sitio
+  const c = lonLatToTile(v.lng, v.lat, Z_CTX);
+  const porTesela = 40075016.686 / 2 ** Z_CTX; // metros Mercator de lado
+  const r = Math.ceil((RADIO_CTX_M / Math.cos((v.lat * Math.PI) / 180)) / porTesela);
+  for (let dx = -r; dx <= r; dx++) {
+    for (let dy = -r; dy <= r; dy++) {
+      quiero.add(Z_CTX + '-' + (c.x + dx) + '-' + (c.y + dy));
     }
   }
 }
@@ -48,8 +58,8 @@ let bytes = 0;
 for (let i = 0; i < faltan.length; i += 6) {
   await Promise.all(
     faltan.slice(i, i + 6).map(async (k) => {
-      const [x, y] = k.split('-');
-      const url = plantilla.replace('{z}', Z).replace('{x}', x).replace('{y}', y);
+      const [z, x, y] = k.split('-');
+      const url = plantilla.replace('{z}', z).replace('{x}', x).replace('{y}', y);
       const res = await fetch(url);
       if (!res.ok) {
         console.warn(`  ${k}: HTTP ${res.status}`);

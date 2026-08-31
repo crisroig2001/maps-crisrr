@@ -104,6 +104,10 @@ export const VISTAS = [
 export const RADIO_TESELAS = 2;
 
 export const Z = 14;
+// deben coincidir con Z_CTX y RADIO_CTX_M de MapView.js: el banco tiene que
+// cachear también el anillo de contexto o las capturas salen sin horizonte
+export const Z_CTX = 11;
+export const RADIO_CTX_M = 12000;
 export const DIR_TESELAS = '.teselas';
 export const DIR_CAPTURAS = 'capturas';
 export const ANCHO = 1000;
