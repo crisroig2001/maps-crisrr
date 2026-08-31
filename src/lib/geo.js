@@ -12,6 +12,14 @@ export function lonLatToMerc(lon, lat) {
   return { mx, my };
 }
 
+// inversa de lonLatToMerc: hace falta para que la URL siga a la vista
+export function mercToLonLat(mx, my) {
+  return {
+    lon: (mx / WORLD) * 360,
+    lat: (2 * Math.atan(Math.exp((my * 2 * Math.PI) / WORLD)) - Math.PI / 2) * (180 / Math.PI),
+  };
+}
+
 // índice de tesela (x, y) para un lon/lat en el zoom z
 export function lonLatToTile(lon, lat, z) {
   const n = 2 ** z;
