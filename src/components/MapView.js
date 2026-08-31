@@ -10,7 +10,7 @@ import * as THREE from 'three';
 import { MapControls } from 'three/examples/jsm/controls/MapControls.js';
 import { loadTileData } from '../lib/mvt';
 import { colorFachada } from '../lib/colorCam';
-import { WORLD, Z_TILE, Z_CELL, lonLatToMerc, lonLatToTile, tileToMerc, cellKey } from '../lib/geo';
+import { WORLD, Z_TILE, Z_CELL, lonLatToMerc, lonLatToTile, mercToLonLat, tileToMerc, cellKey } from '../lib/geo';
 
 const N_TILE = 2 ** Z_TILE;
 const N_CELL = 2 ** Z_CELL;
@@ -1646,6 +1646,41 @@ export default function MapView() {
     }
 
     engineRef.current = {
+      // Mueve la vista a un lon/lat sin recargar la página. Devuelve false si
+      // el salto es tan grande que hay que recargar de verdad: todas las
+      // coordenadas de escena son (mercator - origen) × cos(lat del origen),
+      // así que lejos se rompen dos cosas — la escala en metros deja de valer
+      // para esa latitud, y los float32 de la geometría pierden precisión.
+      iraA(latDest, lngDest) {
+        if (Math.abs(latDest - lat) > 0.5) return false;
+        const m = lonLatToMerc(lngDest, latDest);
+        const e = (m.mx - origen.mx) * k;
+        const n = (m.my - origen.my) * k;
+        if (Math.hypot(e, n) > 60000) return false;
+        // la cámara se mueve con el target: se conserva zoom, inclinación y rumbo
+        const dx = e - controls.target.x;
+        const dz = -n - controls.target.z;
+        controls.target.x += dx;
+        controls.target.z += dz;
+        camera.position.x += dx;
+        camera.position.z += dz;
+        controls.update();
+        asegura(true);
+        return true;
+      },
+      // lon/lat y cámara actuales, para que la URL siga a la vista
+      vistaActual() {
+        const m = sceneToMerc(controls.target.x, -controls.target.z);
+        const ll = mercToLonLat(m.mx, m.my);
+        const d = camera.position.distanceTo(controls.target);
+        return {
+          lat: ll.lat,
+          lng: ll.lon,
+          d: Math.round(d),
+          pol: Math.round(controls.getPolarAngle() * (180 / Math.PI)),
+          az: Math.round(((controls.getAzimuthalAngle() * (180 / Math.PI)) % 360 + 360) % 360),
+        };
+      },
       celdaCentro() {
         const { cx, cy } = celdaDelTarget();
         return cellKey(cx, cy);
@@ -1689,6 +1724,27 @@ export default function MapView() {
 
     let raf = 0;
     let ultimoCheck = 0;
+    // La URL sigue a la vista, así se puede compartir lo que estás mirando.
+    // Antes ?lat=&lng= solo servía al cargar: mires donde mires, el enlace que
+    // copiabas apuntaba al punto de partida.
+    let ultimaUrl = 0;
+    let urlPrevia = '';
+    function siguesLaUrl(t) {
+      if (t - ultimaUrl < 1500) return;
+      ultimaUrl = t;
+      const v = engineRef.current?.vistaActual();
+      if (!v) return;
+      const q =
+        '/?lat=' + v.lat.toFixed(5) + '&lng=' + v.lng.toFixed(5) +
+        '&d=' + v.d + '&pol=' + v.pol + '&az=' + v.az;
+      if (q === urlPrevia) return;
+      urlPrevia = q;
+      try {
+        window.history.replaceState(null, '', q);
+      } catch {
+        /* algunos navegadores limitan la frecuencia; no es crítico */
+      }
+    }
     function bucle(t) {
       raf = requestAnimationFrame(bucle);
       controls.update();
@@ -1698,6 +1754,7 @@ export default function MapView() {
         asegura(false);
         reintenta();
       }
+      siguesLaUrl(t);
       renderer.render(scene, camera);
       pintaEtiquetas(niebla);
     }
@@ -1733,6 +1790,17 @@ export default function MapView() {
     };
   }, []);
 
+  // Recargar la página para moverse destruía el contexto WebGL y volvía a
+  // bajar ~8 MB de teselas. Solo se recarga si el salto es tan grande que las
+  // coordenadas de escena dejan de valer (otra latitud, u otro continente).
+  function vaA(latDest, lngDest, mensaje) {
+    if (engineRef.current?.iraA(latDest, lngDest)) {
+      if (mensaje) avisa(mensaje);
+      return;
+    }
+    window.location.href = '/?lat=' + latDest.toFixed(5) + '&lng=' + lngDest.toFixed(5);
+  }
+
   async function onBuscar(e) {
     e.preventDefault();
     const q = buscaRef.current?.value?.trim();
@@ -1744,7 +1812,7 @@ export default function MapView() {
       );
       const j = await r.json();
       if (j?.[0]) {
-        window.location.href = '/?lat=' + j[0].lat + '&lng=' + j[0].lon;
+        vaA(Number(j[0].lat), Number(j[0].lon), 'Aquí está «' + q + '»');
       } else {
         avisa('No se ha encontrado ese lugar');
       }
@@ -1760,10 +1828,7 @@ export default function MapView() {
     }
     avisa('Obteniendo tu ubicación…');
     navigator.geolocation.getCurrentPosition(
-      (p) => {
-        window.location.href =
-          '/?lat=' + p.coords.latitude.toFixed(5) + '&lng=' + p.coords.longitude.toFixed(5);
-      },
+      (p) => vaA(p.coords.latitude, p.coords.longitude, 'Aquí estás'),
       () => avisa('No se pudo obtener tu ubicación'),
       { timeout: 8000 }
     );
