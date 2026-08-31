@@ -104,14 +104,21 @@ const NIEBLA_HASTA_M = 5000; // aquí ya es todo cielo
 // plano. Si tiñen demasiado le comen el protagonismo a los edificios.
 // un tramo más corto que esto no da para escribir el nombre encima
 const LARGO_MIN_CALLE = 110; // metros
-// Los rótulos son un overlay HTML: NO pasan por el buffer de profundidad, así
-// que se pintan encima de los edificios. Con la cámara tumbada, el nombre de
-// una calle tapada por un bloque de pisos flota sobre los tejados. Mitigación
-// hasta que los de calle vivan dentro de la escena 3D (issue #2): se
-// desvanecen conforme se tumba la cámara, que es justo cuando estorban.
-// La vista inicial está a 47°, así que el desvanecido empieza por encima.
-const CALLE_FADE_INI = 0.96; // 55° — aquí empiezan a apagarse
-const CALLE_FADE_FIN = 1.19; // 68° — aquí ya no se ven (el tope es 77°)
+// Los nombres de calle viven DENTRO de la escena 3D, tumbados sobre el asfalto
+// como pintura vial, con test de profundidad: los edificios los tapan solos, sin
+// heurística ninguna. Los topónimos siguen siendo overlay HTML, que es lo
+// correcto — un nombre de barrio debe flotar por encima de todo.
+// Tumbado, el texto se escorza: a la inclinación de partida (47°) pierde un
+// tercio de altura en pantalla. Por eso va más grande de lo que parecería —
+// 11 m se leían peor que el overlay de antes, que era el listón a igualar.
+const ALTO_TEXTO_M = 17;
+const ROTULO_Y = 0.6; // un pelo por encima del suelo, para no pelearse con él
+// Tumbado, el texto se va poniendo de canto y deja de leerse mucho antes de que
+// la oclusión importe. Por eso sigue habiendo desvanecido por inclinación —
+// pero ahora es por legibilidad, no para esconder un defecto, así que puede
+// llegar mucho más lejos que antes (que se apagaba del todo a 68°).
+const CALLE_FADE_INI = 1.15; // 66°
+const CALLE_FADE_FIN = 1.36; // 78°, por encima del tope de la cámara (77°)
 const MAX_ROTULOS = 26; // más que esto y el mapa deja de leerse
 const DIST_CALLE = 1700; // los nombres de calle solo con la cámara cerca
 const TAM_SITIO = { city: 17, town: 15, village: 13, suburb: 13, quarter: 11.5 };
@@ -1131,6 +1138,64 @@ export default function MapView() {
     const puestas = [];
     const nodos = [];
 
+    // Una textura por nombre de calle, cacheada: los mismos nombres vuelven
+    // frame tras frame y rehacer el canvas sería tirar trabajo.
+    const texRotulo = new Map();
+    function texturaDe(nombre) {
+      let t = texRotulo.get(nombre);
+      if (t) return t;
+      const cv = document.createElement('canvas');
+      const fuente = 44;
+      const medidor = cv.getContext('2d');
+      medidor.font = '800 ' + fuente + 'px Nunito, system-ui, sans-serif';
+      const ancho = Math.ceil(medidor.measureText(nombre).width) + 28;
+      cv.width = ancho;
+      cv.height = Math.ceil(fuente * 1.5);
+      const c = cv.getContext('2d');
+      c.font = '800 ' + fuente + 'px Nunito, system-ui, sans-serif';
+      c.textAlign = 'center';
+      c.textBaseline = 'middle';
+      // halo blanco: el texto tiene que leerse sobre asfalto, sobre parque y
+      // sobre la trama de un tejado
+      c.lineWidth = 9;
+      c.strokeStyle = 'rgba(255,255,255,0.98)';
+      c.lineJoin = 'round';
+      c.strokeText(nombre, cv.width / 2, cv.height / 2);
+      c.fillStyle = '#333b47';
+      c.fillText(nombre, cv.width / 2, cv.height / 2);
+      const tex = new THREE.CanvasTexture(cv);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+      t = { tex, prop: cv.width / cv.height };
+      texRotulo.set(nombre, t);
+      return t;
+    }
+
+    // Plano ya tumbado: así la malla solo necesita girar sobre el eje vertical.
+    const geoRotulo = new THREE.PlaneGeometry(1, 1);
+    geoRotulo.rotateX(-Math.PI / 2);
+    const mallasCalle = [];
+    const grupoRotulos = new THREE.Group();
+    scene.add(grupoRotulos);
+    function mallaRotulo(i) {
+      let m = mallasCalle[i];
+      if (!m) {
+        m = new THREE.Mesh(
+          geoRotulo,
+          new THREE.MeshBasicMaterial({
+            transparent: true,
+            // sin escribir profundidad: el rótulo no debe tapar a otro rótulo
+            depthWrite: false,
+            fog: true,
+          })
+        );
+        m.renderOrder = 2;
+        mallasCalle[i] = m;
+        grupoRotulos.add(m);
+      }
+      return m;
+    }
+
     function pintaEtiquetas(niebla) {
       const cont = rotulosRef.current;
       if (!cont) return;
@@ -1181,28 +1246,50 @@ export default function MapView() {
         if (pv.z > 1) continue; // detrás de la cámara
         const sx = (pv.x * 0.5 + 0.5) * vpW;
         const sy = (-pv.y * 0.5 + 0.5) * vpH;
-        // el ancla tiene que caber ENTERA: medio rótulo cortado por el borde
-        // parece un fallo, no un mapa
-        if (sx < 40 || sx > vpW - 40 || sy < 14 || sy > vpH - 14) continue;
 
         let ang = 0;
-        if (esCalle) {
-          // el ángulo se mide en PANTALLA (perspectiva y giro de cámara ya
-          // aplicados), no en el mundo, o el texto no seguiría a la calle
-          pa.set(r.a.e, 0, -r.a.n).project(camera);
-          pb.set(r.b.e, 0, -r.b.n).project(camera);
-          ang = Math.atan2(-(pb.y - pa.y) * vpH, (pb.x - pa.x) * vpW);
-          if (ang > Math.PI / 2 || ang < -Math.PI / 2) ang += Math.PI; // jamás del revés
-        }
-
+        let voltea = false;
+        let aw;
+        let ah;
         const fuente = esCalle ? 11 : TAM_SITIO[r.cls] || 12;
-        // caja aproximada del texto, girada: sin esto los nombres se pisan
-        const bw = r.name.length * fuente * 0.56 + 12;
-        const bh = fuente * 1.6;
-        const co = Math.abs(Math.cos(ang));
-        const si = Math.abs(Math.sin(ang));
-        const aw = bw * co + bh * si;
-        const ah = bw * si + bh * co;
+
+        if (esCalle) {
+          // La malla vive en el MUNDO, así que su tamaño en pantalla se mide
+          // proyectando sus dos extremos. Con el margen en píxeles de antes
+          // (pensado para un <div>) los nombres largos salían cortados por el
+          // borde: el ancla cabía, el texto no.
+          const t = texturaDe(r.name);
+          const dx = r.b.e - r.a.e;
+          const dn = r.b.n - r.a.n;
+          const l = Math.hypot(dx, dn) || 1;
+          const medio = (ALTO_TEXTO_M * t.prop) / 2;
+          pa.set(ex - (dx / l) * medio, ROTULO_Y, -(nx - (dn / l) * medio)).project(camera);
+          pb.set(ex + (dx / l) * medio, ROTULO_Y, -(nx + (dn / l) * medio)).project(camera);
+          const ax = (pa.x * 0.5 + 0.5) * vpW;
+          const ay = (-pa.y * 0.5 + 0.5) * vpH;
+          const bx = (pb.x * 0.5 + 0.5) * vpW;
+          const by = (-pb.y * 0.5 + 0.5) * vpH;
+          // los DOS extremos tienen que caber, no solo el ancla
+          const m = 8;
+          if (
+            Math.min(ax, bx) < m || Math.max(ax, bx) > vpW - m ||
+            Math.min(ay, by) < m || Math.max(ay, by) > vpH - m
+          ) continue;
+          ang = Math.atan2(by - ay, bx - ax);
+          if (ang > Math.PI / 2 || ang < -Math.PI / 2) {
+            ang += Math.PI;
+            voltea = true;
+          }
+          // caja de colisión medida, no estimada
+          aw = Math.abs(bx - ax) + 10;
+          ah = Math.abs(by - ay) + Math.hypot(bx - ax, by - ay) / t.prop + 6;
+        } else {
+          // el ancla tiene que caber ENTERA: medio rótulo cortado por el borde
+          // parece un fallo, no un mapa
+          if (sx < 40 || sx > vpW - 40 || sy < 14 || sy > vpH - 14) continue;
+          aw = r.name.length * fuente * 0.56 + 12;
+          ah = fuente * 1.6;
+        }
         let choca = false;
         for (const q of puestas) {
           if (Math.abs(sx - q.sx) < (aw + q.aw) / 2 && Math.abs(sy - q.sy) < (ah + q.ah) / 2) {
@@ -1211,13 +1298,39 @@ export default function MapView() {
           }
         }
         if (choca) continue;
-        puestas.push({ sx, sy, aw, ah, ang, op, fuente, r });
+        puestas.push({ sx, sy, aw, ah, ang, op, fuente, r, ex, nx, voltea });
       }
+
+      // Los de CALLE van a la escena 3D, tumbados sobre el asfalto. El test de
+      // profundidad hace el trabajo: si hay un edificio entre la cámara y el
+      // rótulo, el rótulo no se dibuja. Sin heurísticas ni rejillas.
+      let nMalla = 0;
+      for (const q of puestas) {
+        if (q.r.tipo !== 'calle') continue;
+        const m = mallaRotulo(nMalla++);
+        const t = texturaDe(q.r.name);
+        if (m.material.map !== t.tex) {
+          m.material.map = t.tex;
+          m.material.needsUpdate = true;
+        }
+        m.material.opacity = q.op;
+        // giro sobre el eje vertical para seguir a la calle EN EL MUNDO (no en
+        // pantalla: la malla vive en el mundo, la perspectiva ya la aplica la
+        // cámara sola)
+        let th = Math.atan2(q.r.b.n - q.r.a.n, q.r.b.e - q.r.a.e);
+        if (q.voltea) th += Math.PI;
+        m.rotation.y = th;
+        m.position.set(q.ex, ROTULO_Y, -q.nx);
+        m.scale.set(ALTO_TEXTO_M * t.prop, 1, ALTO_TEXTO_M);
+        m.visible = true;
+      }
+      for (let i = nMalla; i < mallasCalle.length; i++) mallasCalle[i].visible = false;
 
       // los <div> se reciclan: crear y destruir nodos cada frame sería un
       // machaque del GC con el mapa en movimiento
-      for (let i = 0; i < puestas.length; i++) {
-        const q = puestas[i];
+      const sitios = puestas.filter((q) => q.r.tipo === 'sitio');
+      for (let i = 0; i < sitios.length; i++) {
+        const q = sitios[i];
         let el = nodos[i];
         if (!el) {
           el = document.createElement('div');
@@ -1243,7 +1356,7 @@ export default function MapView() {
           el._on = true;
         }
       }
-      for (let i = puestas.length; i < nodos.length; i++) {
+      for (let i = sitios.length; i < nodos.length; i++) {
         if (nodos[i]._on !== false) {
           nodos[i].style.display = 'none';
           nodos[i]._on = false;
@@ -1777,6 +1890,11 @@ export default function MapView() {
       for (const key of [...contexto.keys()]) liberaContexto(key);
       for (const el of nodos) el.remove();
       nodos.length = 0;
+      for (const m of mallasCalle) m.material.dispose();
+      mallasCalle.length = 0;
+      geoRotulo.dispose();
+      for (const t of texRotulo.values()) t.tex.dispose();
+      texRotulo.clear();
       controls.dispose();
       horizonte.geometry.dispose();
       horizonte.material.dispose();
