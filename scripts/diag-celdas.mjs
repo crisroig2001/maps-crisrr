@@ -5,7 +5,7 @@ import { VectorTile } from '@mapbox/vector-tile';
 
 const WORLD = 40075016.686;
 const Z = 14, x = 8290, y = 6118;
-const NT = 2 ** Z, NC = 2 ** 16;
+const NT = 2 ** Z, NC = 2 ** 18;
 
 const lat = 41.3874, lng = 2.1686;
 const s = Math.sin((lat * Math.PI) / 180);
@@ -22,7 +22,7 @@ for (let dx = -1; dx <= 1; dx++)
     const cx = Math.floor(((lng + 180) / 360) * NC) + dx;
     const rad = (lat * Math.PI) / 180;
     const cy = Math.floor(((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2) * NC) + dy;
-    seed.add('16/' + cx + '/' + cy);
+    seed.add('18/' + cx + '/' + cy);
   }
 console.log('seed:', [...seed]);
 
@@ -49,7 +49,7 @@ for (let i = 0; i < L.length; i++) {
   const my = base.my - cn * escala;
   const cx = Math.floor((mx / WORLD + 0.5) * NC);
   const cy = Math.floor((0.5 - my / WORLD) * NC);
-  const key = '16/' + cx + '/' + cy;
+  const key = '18/' + cx + '/' + cy;
   porCelda[key] = (porCelda[key] || 0) + 1;
   if (seed.has(key)) { dentro++; if (muestras.length < 5) muestras.push({ i, key, h: f.properties.render_height }); }
   else fuera++;

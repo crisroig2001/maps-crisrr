@@ -23,6 +23,30 @@ function seed() {
   return cells;
 }
 
+// Las celdas pasaron de z16 (459 m) a z18 (115 m). Un fichero anterior trae
+// claves «16/cx/cy»: cada una se expande a sus 16 hijas z18 con el mismo
+// color y su misma marca de tiempo — nadie pierde lo que pintó. Una hija que
+// ya exista en z18 manda (es un escaneo más fino y posterior).
+function migra(cells) {
+  let cambio = false;
+  for (const k of Object.keys(cells)) {
+    const m = k.match(/^16\/(\d+)\/(\d+)$/);
+    if (!m) continue;
+    const e = cells[k];
+    delete cells[k];
+    cambio = true;
+    const bx = Number(m[1]) * 4;
+    const by = Number(m[2]) * 4;
+    for (let i = 0; i < 4; i++) {
+      for (let j = 0; j < 4; j++) {
+        const kk = '18/' + (bx + i) + '/' + (by + j);
+        if (!cells[kk]) cells[kk] = { ...e };
+      }
+    }
+  }
+  return cambio;
+}
+
 function load() {
   if (cache) return cache;
   try {
@@ -33,6 +57,8 @@ function load() {
   }
   if (!cache) {
     cache = { cells: seed() };
+    save();
+  } else if (migra(cache.cells)) {
     save();
   }
   return cache;
@@ -48,7 +74,7 @@ function save() {
   }
 }
 
-// Devuelve las celdas, opcionalmente acotadas a un rango de celdas z16
+// Devuelve las celdas, opcionalmente acotadas a un rango de celdas z18
 // (la vista del cliente) y a las cambiadas desde `desde`.
 // Sin filtro devolvía el planeta entero a cada cliente cada 25 s.
 export function getCells(caja, desde) {

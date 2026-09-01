@@ -3,7 +3,10 @@
 
 export const WORLD = 40075016.686; // circunferencia Mercator en metros
 export const Z_TILE = 14; // teselas de datos (OpenFreeMap llega hasta z14)
-export const Z_CELL = 16; // celdas de escaneo (4x4 por tesela)
+// Celdas de escaneo. A z16 eran 459 m de lado (21 ha): pasar la cámara por un
+// edificio coloreaba ~16 manzanas del Eixample de golpe. A z18 son 115 m —
+// prácticamente UNA manzana (la del Eixample mide 113 m): escaneas lo que ves.
+export const Z_CELL = 18; // 16x16 por tesela z14
 
 export function lonLatToMerc(lon, lat) {
   const mx = (lon / 360) * WORLD;
@@ -42,4 +45,4 @@ export function cellKey(cx, cy) {
   return Z_CELL + '/' + cx + '/' + cy;
 }
 
-export const CELL_RE = /^16\/\d{1,6}\/\d{1,6}$/;
+export const CELL_RE = /^18\/\d{1,6}\/\d{1,6}$/;

@@ -9,12 +9,12 @@ import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { MapControls } from 'three/examples/jsm/controls/MapControls.js';
 import { loadTileData } from '../lib/mvt';
-import { colorFachada } from '../lib/colorCam';
+import { colorFachada, cartoniza } from '../lib/colorCam';
 import { WORLD, Z_TILE, Z_CELL, lonLatToMerc, lonLatToTile, mercToLonLat, tileToMerc, cellKey } from '../lib/geo';
 
 const N_TILE = 2 ** Z_TILE;
 const N_CELL = 2 ** Z_CELL;
-const CELLS_POR_TESELA = N_CELL / N_TILE; // 4
+const CELLS_POR_TESELA = N_CELL / N_TILE; // 16
 
 // paleta pastel (escaneado) + acentos ocasionales; gris = pendiente
 const PALETA = [0xf3e2c7, 0xecd2ae, 0xe8c9a0, 0xf0d9b5, 0xcfdcea, 0xd6e6cf, 0xeed3cd, 0xf1e0bd].map(
@@ -218,8 +218,11 @@ export default function MapView() {
   // cámara del escaneo: null | 'listo' | 'capturando'
   const [cam, setCam] = useState(null);
   const [prog, setProg] = useState(0);
+  // color dominante que va emergiendo durante la captura (se enseña en vivo)
+  const [colorVivo, setColorVivo] = useState(null);
   const camVideoRef = useRef(null);
   const camStreamRef = useRef(null);
+  const camCartonRef = useRef(null);
 
   function avisa(msg) {
     setToast(msg);
@@ -956,8 +959,9 @@ export default function MapView() {
             // pintar, así que sin esto un escaneo rural no se ve por ningún
             // lado (pasó: una masía en Girona, escaneada y "no veo nada")
             ctx.strokeStyle = borde;
-            ctx.lineWidth = 4;
-            ctx.strokeRect(i * cs + 2, j * cs + 2, cs - 4, cs - 4);
+            // a 64 px por celda (z18) un marco de 4 px comería el 6% del lado
+            ctx.lineWidth = 2;
+            ctx.strokeRect(i * cs + 1, j * cs + 1, cs - 2, cs - 2);
           } else {
             ctx.fillStyle = 'rgba(108, 115, 124, 0.24)';
             ctx.fillRect(i * cs, j * cs, cs, cs);
@@ -2116,6 +2120,27 @@ export default function MapView() {
     if (cam && camVideoRef.current && camStreamRef.current) {
       camVideoRef.current.srcObject = camStreamRef.current;
     }
+    // «modo cartón» en directo: una ventanita donde el mundo real se ve ya
+    // pastelizado con la paleta del mapa, fotograma a fotograma. Es la
+    // respuesta honesta a "ver cómo se detecta el entorno en tiempo real":
+    // enseña EXACTAMENTE lo que el escáner está viendo y cómo lo traduce.
+    if (!cam) return;
+    const cv = camCartonRef.current;
+    const video = camVideoRef.current;
+    if (!cv || !video) return;
+    const ctx = cv.getContext('2d', { willReadFrequently: true });
+    const reloj = setInterval(() => {
+      if (video.readyState < 2) return;
+      try {
+        ctx.drawImage(video, 0, 0, cv.width, cv.height);
+        const img = ctx.getImageData(0, 0, cv.width, cv.height);
+        cartoniza(img.data);
+        ctx.putImageData(img, 0, 0);
+      } catch {
+        /* fotograma aún no listo */
+      }
+    }, 120);
+    return () => clearInterval(reloj);
   }, [cam]);
 
   useEffect(() => () => camStreamRef.current?.getTracks().forEach((t) => t.stop()), []);
@@ -2125,6 +2150,7 @@ export default function MapView() {
     camStreamRef.current = null; // el bucle de captura lo lee para abortar
     setCam(null);
     setProg(0);
+    setColorVivo(null);
   }
 
   // Toda la gracia del mapa es que lo de color lo pintó alguien que ESTUVO
@@ -2168,10 +2194,10 @@ export default function MapView() {
       avisa('Para escanear una zona hay que estar en ella: activa la ubicación');
       return;
     }
-    // Una celda son 459 m de lado. Un GPS urbano da 10-50 m, así que con este
-    // margen no molesta a nadie; por encima, el punto podría caer en la celda
-    // de al lado y se estaría marcando una zona en la que no estás.
-    if (pos.coords.accuracy > 250) {
+    // Una celda son 115 m de lado (una manzana). Un GPS urbano da 10-50 m; por
+    // encima del lado de la celda el punto podría caer en la manzana de al
+    // lado y se estaría marcando una zona en la que no estás.
+    if (pos.coords.accuracy > 120) {
       avisa('La señal del GPS es poco precisa ahora mismo — inténtalo en un rato');
       return;
     }
@@ -2213,6 +2239,8 @@ export default function MapView() {
         // banda central: fachadas, sin el cielo de arriba ni el suelo de abajo
         const d = ctx.getImageData(4, 12, 56, 26).data;
         for (let i = 0; i < d.length; i += 16) px.push(d[i], d[i + 1], d[i + 2]);
+        // el color dominante se recalcula en vivo: se VE emerger mientras barres
+        setColorVivo(colorFachada(px));
       } catch {
         /* fotograma aún no listo */
       }
@@ -2354,6 +2382,10 @@ export default function MapView() {
       {cam && (
         <div className="ui camara">
           <video ref={camVideoRef} autoPlay playsInline muted />
+          <div className="cam-pip">
+            <canvas ref={camCartonRef} width={96} height={72} />
+            <span>modo cartón</span>
+          </div>
           <button className="cam-x" aria-label="Cancelar" onClick={cierraCamara}>
             ✕
           </button>
@@ -2367,7 +2399,10 @@ export default function MapView() {
               </>
             ) : (
               <>
-                <p>Recorre despacio las fachadas…</p>
+                <p>
+                  Recorre despacio las fachadas…
+                  {colorVivo && <span className="cam-vivo" style={{ background: colorVivo }} />}
+                </p>
                 <div className="cam-barra">
                   <i style={{ width: prog * 100 + '%' }} />
                 </div>
