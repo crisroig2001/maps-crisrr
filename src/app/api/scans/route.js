@@ -38,7 +38,7 @@ const num = (v) => {
 export async function GET(req) {
   const q = req.nextUrl.searchParams;
 
-  // Caja de celdas z16 que le interesan al cliente (lo que tiene cargado).
+  // Caja de celdas z18 que le interesan al cliente (lo que tiene cargado).
   // Sin ella se devolvía el planeta entero a todo el mundo cada 25 s.
   const cx0 = num(q.get('cx0'));
   const cy0 = num(q.get('cy0'));

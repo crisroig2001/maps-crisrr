@@ -58,7 +58,7 @@ ocurre **en la GPU del dispositivo**: el servidor no renderiza nada.
   cámara. Su color de abajo y el de la niebla son el mismo a propósito: si no,
   aparece una costura justo donde el mapa se acaba, que es lo que la niebla
   estaba tapando.
-- **Zonas escaneadas**: celdas z16 compartidas entre todos los usuarios
+- **Zonas escaneadas**: celdas z18 (115 m, ~una manzana) compartidas entre todos los usuarios
   (`/api/scans`, almacén JSON en `DATA_DIR`, volumen persistente en Coolify).
   Una celda escaneada pinta sus edificios a color pastel; el resto queda en gris
   «pendiente». El botón de escanear de momento **simula** el escaneo (la captura

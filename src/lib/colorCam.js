@@ -68,3 +68,21 @@ export function colorFachada(px) {
 }
 
 export const RE_COLOR = /^#[0-9a-f]{6}$/;
+
+// «Modo cartón» en directo: pasteliza EN SITIO los píxeles de un fotograma
+// (ImageData.data, RGBA) con la misma receta que el mapa — tono posterizado a
+// 12 familias, saturación pastel, luz en 5 escalones. Sobre un lienzo pequeño
+// (96×72 = 7k píxeles) sale a <1 ms por fotograma: se puede hacer en vivo
+// mientras el usuario barre las fachadas, que es justo la gracia.
+export function cartoniza(d) {
+  for (let i = 0; i < d.length; i += 4) {
+    let [h, s, l] = aHsl(d[i], d[i + 1], d[i + 2]);
+    h = (Math.floor(h * 12) + 0.5) / 12;
+    s = s < 0.09 ? 0.1 : Math.min(0.55, Math.max(0.24, s * 1.4));
+    l = 0.3 + Math.round(l * 4) * 0.155; // 0.3, 0.455, 0.61, 0.765, 0.92
+    const [r, g, b] = deHsl(h, s, l);
+    d[i] = r;
+    d[i + 1] = g;
+    d[i + 2] = b;
+  }
+}
