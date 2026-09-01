@@ -576,7 +576,22 @@ export default function MapView() {
     })();
     const matParedes = new THREE.MeshBasicMaterial({
       vertexColors: true,
-      side: THREE.DoubleSide,
+      // Las paredes se ven SIEMPRE por fuera: un edificio es un volumen cerrado
+      // y la cámara no entra dentro. Descartando la mitad trasera, la GPU se
+      // ahorra sombrearla — medido, 30% más de frames en la vista tumbada, que
+      // es donde la fachada llena la pantalla.
+      //
+      // Va BackSide, no FrontSide, y el motivo es sutil: classifyRings entrega
+      // los anillos con el criterio de las teselas MVT, que tienen la Y hacia
+      // ABAJO, y aEscena la invierte al pasar a coordenadas de escena. Eso da la
+      // vuelta al sentido de giro, así que la cara geométricamente "frontal"
+      // acaba siendo la de DENTRO. Con FrontSide los edificios salían huecos: se
+      // veía el interior de la pared del fondo.
+      //
+      // Los TEJADOS no pueden llevar descarte: comparten material con los
+      // árboles, y las cruces de tronco son planos sueltos que deben verse por
+      // las dos caras.
+      side: THREE.BackSide,
       map: texVent,
       aoMap: texAo, // channel 0: reaprovecha la `uv` que ya está ahí
     });
