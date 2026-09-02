@@ -10,11 +10,21 @@ servidor solo guarda qué hay en cada parcela y quién anda cerca.
 
 ## Cómo funciona
 
-- **El mundo**: una rejilla infinita de parcelas de 48 m sobre un suelo plano
-  (`src/lib/parcela.js`). Coordenadas en metros, x al este e y al norte. La
-  parcela 0/0 es la **plaza de llegada**, pública, donde aparece quien entra;
-  la 1/0 es una **casa de muestra** para que se vea qué se puede hacer.
-  Las dos son del «mundo»: nadie las reclama ni las cambia.
+- **El mundo**: una rejilla infinita de parcelas de 48 m
+  (`src/lib/parcela.js`). Coordenadas en metros, x al este e y al norte.
+- **El paisaje de serie** (`src/lib/paisaje.js`, determinista y compartido
+  por servidor y cliente): la **plaza de llegada** en 0/0, un **paseo** de
+  este a oeste y otro hacia el sur con losas, farolas, árboles y bancos, dos
+  **ríos** que serpentean (uno al este, otro al sur) con un **puente** donde
+  los cruza el paseo, tres **parques** públicos sembrados con árboles, rocas
+  y flores, y una **casa de muestra** en 1/1. Todo eso es del «mundo»: nadie
+  lo reclama ni lo cambia, y el servidor lo resiembra si cambia el plano
+  (la semilla lleva versión). Solo se puede reclamar en la **zona
+  residencial**: hasta 9 parcelas de la plaza, fuera de paseos, ríos y
+  parques; más allá es campo. El terreno se hunde hasta el lecho junto a los
+  ríos (la misma función en JS y en GLSL) y el agua es un plano a su nivel
+  que solo existe en la banda del río; el avatar no entra en el agua, salvo
+  por el puente.
 - **El look, tarde de verano**, con la misma receta que las demos de
   referencia: un **sol** (luz direccional cálida, baja y del suroeste, con
   sombras proyectadas de 2048 px que siguen al avatar), un **cielo** (luz

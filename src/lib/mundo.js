@@ -11,6 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { PARCELA_M, claveParcela } from './parcela';
 import { validaPiezas, limpiaNombre, COLORES, MAX_NOMBRE } from './piezas';
+import { tipoParcela, esPublica, piezasPublicas, RADIO_RESIDENCIAL } from './paisaje';
 
 const DIR = process.env.DATA_DIR || path.join(process.cwd(), '.data');
 const FILE = path.join(DIR, 'mundo.json');
@@ -24,73 +25,23 @@ let cache = null;
 // Versión de la semilla. Al cambiar el número, las parcelas del «mundo» (la
 // plaza y la casa de muestra) se reescriben en el arranque: la semilla solo
 // se creaba la primera vez y producción se quedaba con la muestra vieja.
-const SEMILLA = 2;
+const SEMILLA = 3;
 
-// La plaza de llegada (0/0) y una casa de muestra al lado, para que quien
-// entra vea qué se puede hacer sin tener que construirlo. Dueño «mundo»: nadie
-// las puede reclamar ni cambiar.
+// Lo público de serie: la plaza, los paseos, los parques y la casa de
+// muestra, con dueño «mundo» (nadie las reclama ni las cambia). Sale del
+// plano de src/lib/paisaje.js, determinista, así que sembrar dos veces da lo
+// mismo.
 function seed() {
-  const L = PARCELA_M;
-  const plaza = [
-    { t: 'fuente', x: L / 2, y: L / 2, r: 0, c: 0 },
-    { t: 'bandera', x: L / 2, y: L / 2 + 10, r: 0, c: 1 },
-    { t: 'banco', x: L / 2 - 7, y: L / 2, r: 1, c: 0 },
-    { t: 'banco', x: L / 2 + 7, y: L / 2, r: 3, c: 0 },
-    { t: 'banco', x: L / 2, y: L / 2 - 7, r: 0, c: 0 },
-    { t: 'farola', x: 8, y: 8, r: 0, c: 0 },
-    { t: 'farola', x: L - 8, y: 8, r: 0, c: 0 },
-    { t: 'farola', x: 8, y: L - 8, r: 0, c: 0 },
-    { t: 'farola', x: L - 8, y: L - 8, r: 0, c: 0 },
-    { t: 'roble', x: 6, y: L / 2, r: 0, c: 0 },
-    { t: 'arbol', x: L - 6, y: L / 2, r: 0, c: 0 },
-    { t: 'palmera', x: L / 2, y: L - 6, r: 0, c: 0 },
-    { t: 'flores', x: L / 2 - 5, y: L / 2 + 6, r: 0, c: 1 },
-    { t: 'flores-amarillas', x: L / 2 + 5, y: L / 2 + 6, r: 0, c: 3 },
-    { t: 'maceta', x: L / 2 - 4, y: L / 2 - 4, r: 0, c: 0 },
-    { t: 'maceta', x: L / 2 + 4, y: L / 2 - 4, r: 0, c: 0 },
-  ];
-  // camino de la plaza hacia la casa de muestra (este)
-  for (let x = L / 2 + 6; x < L; x += 4) plaza.push({ t: 'camino', x, y: L / 2 - 8, r: 0, c: 0 });
-
-  const casa = [
-    { t: 'casa', x: L / 2, y: L / 2 + 6, r: 0, c: 2 },
-    { t: 'roble', x: 8, y: L - 8, r: 0, c: 0 },
-    { t: 'pino', x: L - 8, y: L - 8, r: 0, c: 0 },
-    { t: 'pino', x: L - 8, y: 8, r: 0, c: 0 },
-    { t: 'arbusto', x: L / 2 - 9, y: L / 2 - 1, r: 0, c: 0 },
-    { t: 'arbusto', x: L / 2 + 9, y: L / 2 - 1, r: 0, c: 0 },
-    { t: 'flores-moradas', x: L / 2 - 5, y: L / 2 - 2, r: 0, c: 3 },
-    { t: 'flores', x: L / 2 + 5, y: L / 2 - 2, r: 0, c: 1 },
-    { t: 'banco', x: L / 2 + 13, y: L / 2 + 2, r: 0, c: 0 },
-    { t: 'mesa', x: L / 2 + 13, y: L / 2 - 4, r: 0, c: 0 },
-    { t: 'silla', x: L / 2 + 11.5, y: L / 2 - 4, r: 1, c: 0 },
-    { t: 'silla', x: L / 2 + 14.5, y: L / 2 - 4, r: 3, c: 0 },
-    { t: 'farola', x: L / 2 - 12, y: L / 2 - 8, r: 0, c: 0 },
-    { t: 'roca', x: 6, y: 8, r: 0, c: 0 },
-    { t: 'rocas', x: 10, y: 6, r: 0, c: 0 },
-    { t: 'setas', x: 11, y: L - 9, r: 0, c: 0 },
-    { t: 'tronco', x: L - 10, y: L / 2 + 10, r: 1, c: 0 },
-    { t: 'hoguera', x: L - 14, y: L / 2 + 14, r: 0, c: 0 },
-    { t: 'tienda', x: L - 10, y: L / 2 + 18, r: 2, c: 0 },
-    { t: 'cartel', x: 4, y: L / 2 - 11, r: 0, c: 0 },
-    { t: 'calabaza', x: 8, y: L / 2 + 12, r: 0, c: 0 },
-    { t: 'calabaza', x: 10, y: L / 2 + 13.5, r: 1, c: 0 },
-  ];
-  for (let x = 2; x < L / 2; x += 4) casa.push({ t: 'camino', x, y: L / 2 - 8, r: 0, c: 0 });
-  casa.push({ t: 'camino', x: L / 2, y: L / 2 - 4, r: 0, c: 0 });
-  for (let i = 0; i < 12; i++) casa.push({ t: 'valla', x: 2 + i * 4, y: 2, r: 0, c: 0 });
-  for (let i = 0; i < 12; i++) casa.push({ t: 'valla', x: 2 + i * 4, y: L - 2, r: 0, c: 0 });
-  for (let i = 0; i < 11; i++) casa.push({ t: 'valla', x: L - 2, y: 4 + i * 4, r: 1, c: 0 });
-
   const t = Date.now();
-  return {
-    semilla: SEMILLA,
-    parcelas: {
-      [claveParcela(0, 0)]: { o: 'mundo', t, d: plaza },
-      [claveParcela(1, 0)]: { o: 'mundo', t, d: casa },
-    },
-    jugadores: {},
-  };
+  const parcelas = {};
+  for (let px = -RADIO_RESIDENCIAL; px <= RADIO_RESIDENCIAL; px++) {
+    for (let py = -RADIO_RESIDENCIAL; py <= RADIO_RESIDENCIAL; py++) {
+      const tipo = tipoParcela(px, py);
+      if (!esPublica(tipo)) continue;
+      parcelas[claveParcela(px, py)] = { o: 'mundo', t, d: piezasPublicas(px, py) };
+    }
+  }
+  return { semilla: SEMILLA, parcelas, jugadores: {} };
 }
 
 function load() {
@@ -105,8 +56,12 @@ function load() {
     cache = seed();
     save();
   } else if (cache.semilla !== SEMILLA) {
-    // solo las parcelas del «mundo»: lo de los jugadores no se toca
+    // solo las parcelas del «mundo»: lo de los jugadores no se toca. Las
+    // del mundo que ya no son públicas en el plano nuevo se borran.
     const nueva = seed();
+    for (const k of Object.keys(cache.parcelas)) {
+      if (cache.parcelas[k].o === 'mundo' && !nueva.parcelas[k]) delete cache.parcelas[k];
+    }
     for (const k of Object.keys(nueva.parcelas)) {
       if (!cache.parcelas[k] || cache.parcelas[k].o === 'mundo') cache.parcelas[k] = nueva.parcelas[k];
     }
@@ -160,6 +115,9 @@ export function totalParcelas() {
 // puede tener ya su cupo. Devuelve null si va bien o el motivo.
 export function reclama(clave, jugador) {
   const m = load();
+  const [px, py] = clave.split('/').map(Number);
+  // solo en la zona residencial: ni en el paseo, ni en el río, ni en el campo
+  if (tipoParcela(px, py) !== 'residencial') return 'no_residencial';
   if (m.parcelas[clave]) return 'ocupada';
   const j = m.jugadores[jugador] || (m.jugadores[jugador] = { t: Date.now() });
   const suyas = Object.keys(m.parcelas).filter((k) => m.parcelas[k].o === jugador).length;
