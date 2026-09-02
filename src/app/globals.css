@@ -1,6 +1,6 @@
 /* crisrr world — un solo look (día, cartoon); todo pintado explícito */
 :root {
-  --sky: #e3f1f8;   /* el pálido del horizonte del cielo 3D: es lo que se ve antes de que WebGL pinte */
+  --sky: #fbe7c8;   /* el cálido del horizonte del cielo 3D: es lo que se ve antes de que WebGL pinte */
   --ink: #2b3440;
   --ink-2: #5c6875;
   --card: rgba(255, 255, 255, 0.9);
@@ -20,6 +20,14 @@ body {
 }
 
 #lienzo { position: fixed; inset: 0; display: block; touch-action: none; }
+/* viñeta cálida: oscurece un pelín las esquinas, como una foto de tarde */
+#vineta {
+  position: fixed;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0) 52%, rgba(70, 45, 20, 0.22) 100%);
+}
 
 /* nombres sobre las cabezas: <div> proyectados desde el 3D en cada frame.
    El contenedor no captura el puntero: arrastrar sobre un nombre gira la

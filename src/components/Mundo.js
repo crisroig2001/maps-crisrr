@@ -1,11 +1,13 @@
 'use client';
 
-// El mundo: un suelo plano e infinito dividido en parcelas, avatares que
-// andan por él y parcelas que cada jugador construye con piezas. Todo el
-// renderizado ocurre en la GPU del dispositivo, sin luces: el sombreado por
-// cara va horneado en los colores de vértice (look cartoon plano y coste
-// mínimo en móvil). Las piezas van INSTANCIADAS: un draw call por tipo de
-// pieza sean 3 o 3.000.
+// El mundo: colinas suaves e infinitas divididas en parcelas, avatares que
+// andan por ellas y parcelas que cada jugador construye con piezas. Look de
+// tarde de verano: luz cálida, sombras frías, formas redondas, hierba que se
+// mece y nubes. Todo el renderizado ocurre en la GPU del dispositivo y SIN
+// luces: el sombreado va horneado en los colores de vértice (con un sol 3D
+// que da lados cálidos y lados fríos), y el relieve lo pone el vertex shader
+// con la misma función de altura que usa el JS para colocar cosas encima.
+// Las piezas van INSTANCIADAS: un draw call por tipo de pieza sean 3 o 3.000.
 import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { MapControls } from 'three/examples/jsm/controls/MapControls.js';
@@ -16,71 +18,146 @@ import { perfil, guardaPerfil } from '../lib/jugador';
 const L = PARCELA_M;
 
 // --- el sol y el look ---
-const SOL_AZ = (55 * Math.PI) / 180;
-const SOL_E = Math.sin(SOL_AZ);
-const SOL_N = Math.cos(SOL_AZ);
-const LUZ_SOMBRA = 0.66; // la cara que da la espalda al sol se queda a este %
-const CIELO_CENIT = 0x9ecbe8;
-const CIELO_HORIZONTE = 0xe3f1f8;
-const HIERBA = '#a9d68a';
-const HIERBA_OSCURA = '#95c47a';
-const PIEDRA = '#d9d4c7';
-const NIEBLA_DESDE = 170;
-const NIEBLA_HASTA = 430;
-const SUELO_M = 1600; // el plano del suelo que sigue al avatar
+// Sol de tarde: bajo (48°) y del suroeste. Lo que mira al sol sale cálido y
+// lo que le da la espalda, frío y azulado: es lo que hace que un mundo sin
+// luces parezca pintado a mano en vez de plano.
+const SOL_AZ = (215 * Math.PI) / 180;
+const SOL_EL = (48 * Math.PI) / 180;
+const SOL = new THREE.Vector3(Math.sin(SOL_AZ) * Math.cos(SOL_EL), Math.sin(SOL_EL), Math.cos(SOL_AZ) * Math.cos(SOL_EL)).normalize();
+const CALIDO = [1.06, 1.0, 0.88];
+const FRIO = [0.6, 0.66, 0.84];
+const CIELO_CENIT = 0x6fb4e4;
+const CIELO_HORIZONTE = 0xfbe7c8;
+const NIEBLA = 0xf1e2cc;
+const NIEBLA_DESDE = 150;
+const NIEBLA_HASTA = 420;
+const SUELO_M = 16 * L; // el plano del suelo que sigue al avatar: 768 m
 const RADIO_PARCELAS = 6; // se piden (2r+1)² parcelas alrededor: 13×13
 
 const BLANCO = new THREE.Color(0xffffff);
-const TRONCO = new THREE.Color(0x8a6b4f);
-const VERDE = new THREE.Color(0x6faa6b);
-const VERDE_PINO = new THREE.Color(0x4f8f5c);
-const VERDE_ARBUSTO = new THREE.Color(0x7db473);
-const TEJA = new THREE.Color(0xd9705a);
-const MADERA = new THREE.Color(0x9a6b45);
-const PIEDRA_C = new THREE.Color(0xc4beb0);
-const AGUA = new THREE.Color(0x8ec3e0);
-const POSTE = new THREE.Color(0x6b7480);
-const LUZ = new THREE.Color(0xffe08a);
-const MASTIL = new THREE.Color(0xe9e4d8);
-const ARENA = new THREE.Color(0xe6d9b8);
-const CRISTAL = new THREE.Color(0xbfe0f2);
-const PIEL = new THREE.Color(0xf1c9a5);
-const PELO = new THREE.Color(0x4a3728);
+const TRONCO = new THREE.Color(0x8d6a4a);
+const VERDE = new THREE.Color(0x7dbf6a);
+const VERDE_CLARO = new THREE.Color(0xa6d879);
+const VERDE_PINO = new THREE.Color(0x5a9c66);
+const VERDE_ARBUSTO = new THREE.Color(0x8bc973);
+const TEJA = new THREE.Color(0xe07a62);
+const MADERA = new THREE.Color(0xa87550);
+const PIEDRA_C = new THREE.Color(0xd0c8b6);
+const AGUA = new THREE.Color(0x8fcbe6);
+const POSTE = new THREE.Color(0x7a828c);
+const LUZ = new THREE.Color(0xffe38f);
+const MASTIL = new THREE.Color(0xefe9dc);
+const ARENA = new THREE.Color(0xeadcb9);
+const CRISTAL = new THREE.Color(0xc6e5f3);
+const PIEL = new THREE.Color(0xf3cba8);
+const PELO = new THREE.Color(0x553d2c);
 const OJO = new THREE.Color(0x2b3440);
+const PANTALON = new THREE.Color(0x56637a);
+const NUBE = new THREE.Color(0xffffff);
+const NUBE_SOMBRA = new THREE.Color(0xdfe3f5);
 
 const MAX_INST = 3000; // instancias por parte de pieza en el mundo cargado
+const MAX_HIERBA = 3000;
 const VELOCIDAD = 4.6; // m/s del avatar
 
-// --- geometría low-poly con el sol horneado ---
-// nx: componente este de la normal; nn: componente norte
-function luzDe(nx, nn) {
-  const luz = 0.5 + 0.5 * (nx * SOL_E + nn * SOL_N);
-  return LUZ_SOMBRA + (1 - LUZ_SOMBRA) * luz;
+// --- terreno: colinas suaves, la MISMA función en JS y en GLSL ---
+// Amplitud pequeña y ondas largas: una parcela de 48 m nunca tiene más de
+// medio metro de desnivel, que es lo que aguanta una casa sin flotar.
+const ONDAS = [
+  [1.0, 0.021, 0.013, 0.0],
+  [0.7, 0.009, -0.027, 1.3],
+  [0.35, 0.047, 0.041, 2.1],
+];
+function alturaEn(x, y) {
+  let h = 0;
+  for (const [a, kx, ky, f] of ONDAS) h += a * Math.sin(x * kx + y * ky + f);
+  return h;
+}
+// p = xz del mundo (z = -norte)
+const GLSL_ALTURA = `
+float altura(vec2 p) {
+  float y = -p.y;
+  return 1.0 * sin(p.x * 0.021 + y * 0.013) + 0.7 * sin(p.x * 0.009 - y * 0.027 + 1.3) + 0.35 * sin(p.x * 0.047 + y * 0.041 + 2.1);
+}`;
+const uTiempo = { value: 0 };
+
+// Parchea un MeshBasicMaterial para que el vertex shader suba cada vértice a
+// la altura del terreno bajo su posición de MUNDO (sirve con instancias).
+//   tinta: el suelo se aclara en lo alto y se oscurece en lo bajo
+//   viento: hierba: se mece con el tiempo, más cuanto más arriba del tallo
+function conAltura(mat, { tinta = false, viento = false } = {}) {
+  mat.onBeforeCompile = (sh) => {
+    sh.uniforms.tiempo = uTiempo;
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\n' + GLSL_ALTURA + '\nuniform float tiempo;\nvarying float vAltura;')
+      .replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>
+        #ifdef USE_INSTANCING
+          vec4 wpos = modelMatrix * instanceMatrix * vec4(transformed, 1.0);
+        #else
+          vec4 wpos = modelMatrix * vec4(transformed, 1.0);
+        #endif
+        float hh = altura(wpos.xz);
+        transformed.y += hh;
+        vAltura = hh;
+        ${viento ? 'transformed.x += sin(tiempo * 1.6 + wpos.x * 0.35 + wpos.z * 0.21) * 0.16 * position.y;\n transformed.z += cos(tiempo * 1.3 + wpos.x * 0.17 - wpos.z * 0.3) * 0.08 * position.y;' : ''}`
+      );
+    if (tinta) {
+      sh.fragmentShader = sh.fragmentShader
+        .replace('#include <common>', '#include <common>\nvarying float vAltura;')
+        .replace(
+          '#include <color_fragment>',
+          `#include <color_fragment>
+          diffuseColor.rgb *= mix(vec3(0.84, 0.92, 0.78), vec3(1.07, 1.04, 0.9), clamp((vAltura + 2.0) / 4.0, 0.0, 1.0));`
+        );
+    }
+  };
+  mat.customProgramCacheKey = () => 'altura' + (tinta ? 't' : '') + (viento ? 'v' : '');
+  return mat;
+}
+
+// --- geometría con el sol horneado ---
+// Color de un vértice según su normal (en coordenadas de escena: z = sur).
+// Cálido de cara al sol, frío de espaldas, con una transición suave: es el
+// sombreado «pintado» de todo el mundo.
+function tono(col, color, nx, ny, nz) {
+  const d = nx * SOL.x + ny * SOL.y + nz * SOL.z;
+  let t = d * 0.5 + 0.5;
+  t = Math.max(0, Math.min(1, (t - 0.18) / 0.64));
+  t = t * t * (3 - 2 * t);
+  col.push(
+    color.r * (FRIO[0] + (CALIDO[0] - FRIO[0]) * t),
+    color.g * (FRIO[1] + (CALIDO[1] - FRIO[1]) * t),
+    color.b * (FRIO[2] + (CALIDO[2] - FRIO[2]) * t)
+  );
 }
 // caja alineada a los ejes (x: este, z: sur), con tapa y sin fondo
 function caja(g, x0, y0, z0, x1, y1, z1, color) {
   const { pos, col } = g;
-  const lado = (ax, az, bx, bz, nx, nn) => {
-    const s = luzDe(nx, nn);
+  const lado = (ax, az, bx, bz, nx, nz) => {
     pos.push(ax, y0, az, bx, y0, bz, bx, y1, bz, ax, y0, az, bx, y1, bz, ax, y1, az);
-    for (let q = 0; q < 6; q++) col.push(color.r * s, color.g * s, color.b * s);
+    for (let q = 0; q < 6; q++) tono(col, color, nx, 0, nz);
   };
-  lado(x0, z1, x1, z1, 0, -1); // sur
+  lado(x0, z1, x1, z1, 0, 1); // sur
   lado(x1, z1, x1, z0, 1, 0); // este
-  lado(x1, z0, x0, z0, 0, 1); // norte
+  lado(x1, z0, x0, z0, 0, -1); // norte
   lado(x0, z0, x0, z1, -1, 0); // oeste
   pos.push(x0, y1, z0, x1, y1, z0, x1, y1, z1, x0, y1, z0, x1, y1, z1, x0, y1, z1);
-  for (let q = 0; q < 6; q++) col.push(color.r, color.g, color.b);
+  for (let q = 0; q < 6; q++) tono(col, color, 0, 1, 0);
 }
 // prisma regular de n lados con tapa; r1 permite que el remate sea más
 // estrecho que la base (r1 = 0 es un cono)
 function prisma(g, n, r, y0, y1, color, r1 = r, cx = 0, cz = 0) {
   const { pos, col } = g;
+  const inclina = Math.atan2(r - r1, y1 - y0); // hacia arriba si se estrecha
   for (let i = 0; i < n; i++) {
     const a0 = (i / n) * Math.PI * 2;
     const a1 = ((i + 1) / n) * Math.PI * 2;
     const am = (a0 + a1) / 2;
-    const s = luzDe(Math.cos(am), Math.sin(am));
+    const nx = Math.cos(am) * Math.cos(inclina);
+    const nz = -Math.sin(am) * Math.cos(inclina);
+    const ny = Math.sin(inclina);
     const x0 = cx + Math.cos(a0) * r;
     const z0 = cz - Math.sin(a0) * r;
     const x1 = cx + Math.cos(a1) * r;
@@ -90,45 +167,38 @@ function prisma(g, n, r, y0, y1, color, r1 = r, cx = 0, cz = 0) {
     const X1 = cx + Math.cos(a1) * r1;
     const Z1 = cz - Math.sin(a1) * r1;
     pos.push(x0, y0, z0, x1, y0, z1, X1, y1, Z1, x0, y0, z0, X1, y1, Z1, X0, y1, Z0);
-    for (let q = 0; q < 6; q++) col.push(color.r * s, color.g * s, color.b * s);
+    for (let q = 0; q < 6; q++) tono(col, color, nx, ny, nz);
     if (r1 > 0) {
       pos.push(cx, y1, cz, X0, y1, Z0, X1, y1, Z1);
-      for (let q = 0; q < 3; q++) col.push(color.r, color.g, color.b);
+      for (let q = 0; q < 3; q++) tono(col, color, 0, 1, 0);
     }
   }
 }
-// copa octaédrica (árbol, arbusto)
-function copa(g, hC, r, verde, cx = 0, cz = 0) {
-  const { pos, col } = g;
-  const eq = [
-    [r, 0],
-    [0, r],
-    [-r, 0],
-    [0, -r],
-  ];
-  const cara = (p1, p2, p3, s) => {
-    pos.push(p1[0], p1[1], p1[2], p2[0], p2[1], p2[2], p3[0], p3[1], p3[2]);
-    for (let q = 0; q < 3; q++) col.push(verde.r * s, verde.g * s, verde.b * s);
-  };
-  const top = [cx, hC + r * 1.15, cz];
-  const bot = [cx, hC - r * 0.85, cz];
-  for (let i = 0; i < 4; i++) {
-    const a = eq[i];
-    const b = eq[(i + 1) % 4];
-    const pa = [cx + a[0], hC, cz - a[1]];
-    const pb = [cx + b[0], hC, cz - b[1]];
-    cara(top, pa, pb, i % 2 ? 0.97 : 1.1);
-    cara(bot, pb, pa, i % 2 ? 0.72 : 0.8);
+// esfera (o elipsoide, con sy) con el sombreado suave por vértice: copas de
+// árbol, arbustos, nubes, cabezas. Las normales son las de la esfera, así
+// que la luz recorre la forma en degradado en vez de a cortes.
+const cacheEsferas = new Map();
+function esfera(g, cx, cy, cz, r, color, sy = 1, detalle = 10) {
+  const k = detalle;
+  let base = cacheEsferas.get(k);
+  if (!base) {
+    base = new THREE.SphereGeometry(1, detalle, Math.round(detalle * 0.7)).toNonIndexed();
+    cacheEsferas.set(k, base);
+  }
+  const p = base.getAttribute('position').array;
+  const n = base.getAttribute('normal').array;
+  for (let i = 0; i < p.length; i += 3) {
+    g.pos.push(cx + p[i] * r, cy + p[i + 1] * r * sy, cz + p[i + 2] * r);
+    tono(g.col, color, n[i], n[i + 1], n[i + 2]);
   }
 }
 // tejado a cuatro aguas sobre un rectángulo: alero en y0, cumbrera (paralela
 // a x, de -cr a cr) en y1
 function tejado(g, x0, z0, x1, z1, y0, y1, cr, color) {
   const { pos, col } = g;
-  const tri = (a, b, c, nx, nn) => {
-    const s = 0.84 + 0.16 * luzDe(nx, nn);
+  const tri = (a, b, c, nx, nz) => {
     pos.push(...a, ...b, ...c);
-    for (let q = 0; q < 3; q++) col.push(color.r * s, color.g * s, color.b * s);
+    for (let q = 0; q < 3; q++) tono(col, color, nx * 0.7, 0.7, nz * 0.7);
   };
   const A = [x0, y0, z0];
   const B = [x1, y0, z0];
@@ -136,10 +206,10 @@ function tejado(g, x0, z0, x1, z1, y0, y1, cr, color) {
   const D = [x0, y0, z1];
   const P = [-cr, y1, 0];
   const Q = [cr, y1, 0];
-  tri(D, C, Q, 0, -1); // faldón sur
-  tri(D, Q, P, 0, -1);
-  tri(B, A, P, 0, 1); // faldón norte
-  tri(B, P, Q, 0, 1);
+  tri(D, C, Q, 0, 1); // faldón sur
+  tri(D, Q, P, 0, 1);
+  tri(B, A, P, 0, -1); // faldón norte
+  tri(B, P, Q, 0, -1);
   tri(C, B, Q, 1, 0); // este
   tri(A, D, P, -1, 0); // oeste
 }
@@ -153,7 +223,9 @@ function aGeo(g) {
 
 // Cada pieza son dos geometrías: la que se TIÑE del color elegido (con el
 // color de vértice como factor de luz sobre blanco) y la fija. Origen en el
-// suelo, centrada, con el «frente» hacia el sur (+z) con giro 0.
+// suelo, centrada, con el «frente» hacia el sur (+z) con giro 0. `sombra` es
+// el radio de la mancha de sombra suave que se pinta debajo.
+const SOMBRA_DE = { casa: 6.2, torre: 4.2, arbol: 3.4, pino: 3, arbusto: 2, flores: 1.3, farola: 0.9, banco: 1.5, fuente: 4.2, bandera: 0.7 };
 function geometriaPieza(tipo) {
   const T = { pos: [], col: [] }; // tinte
   const F = { pos: [], col: [] }; // fijo
@@ -165,24 +237,27 @@ function geometriaPieza(tipo) {
     caja(F, 1.6, 1.1, 2.98, 3.2, 2.3, 3.08, CRISTAL);
     caja(F, 2.2, 4.2, -1.6, 3.1, 6.4, -0.7, PIEDRA_C); // chimenea
   } else if (tipo === 'torre') {
-    prisma(T, 8, 2.3, 0, 9, BLANCO);
-    prisma(F, 8, 2.8, 9, 9.3, PIEDRA_C);
-    prisma(F, 8, 2.8, 9.3, 13.5, TEJA, 0);
+    prisma(T, 12, 2.3, 0, 9, BLANCO);
+    prisma(F, 12, 2.8, 9, 9.3, PIEDRA_C);
+    prisma(F, 12, 2.8, 9.3, 13.5, TEJA, 0);
     caja(F, -0.5, 0, 2.15, 0.5, 2.1, 2.45, MADERA);
     caja(F, -0.45, 4, 2.2, 0.45, 5, 2.4, CRISTAL);
     caja(F, -0.45, 6.6, 2.2, 0.45, 7.6, 2.4, CRISTAL);
   } else if (tipo === 'arbol') {
-    caja(F, -0.24, 0, -0.24, 0.24, 3.2, 0.24, TRONCO);
-    copa(F, 4.8, 2.3, VERDE);
+    prisma(F, 7, 0.32, 0, 3.4, TRONCO, 0.22);
+    esfera(F, 0, 5.0, 0, 2.4, VERDE, 0.9);
+    esfera(F, 1.3, 4.2, 0.6, 1.5, VERDE_CLARO);
+    esfera(F, -1.2, 4.4, -0.7, 1.4, VERDE);
+    esfera(F, 0.2, 6.3, -0.3, 1.3, VERDE_CLARO);
   } else if (tipo === 'pino') {
-    caja(F, -0.2, 0, -0.2, 0.2, 2, 0.2, TRONCO);
-    prisma(F, 6, 2.4, 1.6, 4.2, VERDE_PINO, 0.4);
-    prisma(F, 6, 1.9, 3.6, 6.0, VERDE_PINO, 0.3);
-    prisma(F, 6, 1.3, 5.4, 7.6, VERDE_PINO, 0);
+    prisma(F, 7, 0.26, 0, 2, TRONCO, 0.2);
+    prisma(F, 9, 2.4, 1.6, 4.2, VERDE_PINO, 0.5);
+    prisma(F, 9, 1.9, 3.6, 6.0, VERDE_PINO, 0.4);
+    prisma(F, 9, 1.3, 5.4, 7.7, VERDE_PINO, 0);
   } else if (tipo === 'arbusto') {
-    copa(F, 0.9, 1.3, VERDE_ARBUSTO);
-    copa(F, 0.7, 0.9, VERDE_ARBUSTO, 1.1, 0.6);
-    copa(F, 0.7, 0.9, VERDE_ARBUSTO, -0.9, -0.7);
+    esfera(F, 0, 1.0, 0, 1.3, VERDE_ARBUSTO, 0.8);
+    esfera(F, 1.1, 0.7, 0.6, 0.9, VERDE_CLARO, 0.8);
+    esfera(F, -0.9, 0.7, -0.7, 0.9, VERDE_ARBUSTO, 0.8);
   } else if (tipo === 'flores') {
     const puntos = [
       [0, 0],
@@ -193,55 +268,64 @@ function geometriaPieza(tipo) {
       [0.9, -0.2],
     ];
     for (const [x, z] of puntos) {
-      caja(F, x - 0.05, 0, z - 0.05, x + 0.05, 0.55, z + 0.05, VERDE);
-      caja(T, x - 0.22, 0.5, z - 0.22, x + 0.22, 0.85, z + 0.22, BLANCO);
+      caja(F, x - 0.04, 0, z - 0.04, x + 0.04, 0.6, z + 0.04, VERDE);
+      esfera(T, x, 0.68, z, 0.24, BLANCO, 0.8, 6);
     }
   } else if (tipo === 'camino') {
-    caja(F, -2, 0, -2, 2, 0.08, 2, ARENA);
+    caja(F, -2, 0, -2, 2, 0.1, 2, ARENA);
   } else if (tipo === 'valla') {
     caja(F, -2, 0, -0.1, -1.8, 1.2, 0.1, MADERA);
     caja(F, 1.8, 0, -0.1, 2, 1.2, 0.1, MADERA);
     caja(F, -2, 0.35, -0.06, 2, 0.55, 0.06, MADERA);
     caja(F, -2, 0.85, -0.06, 2, 1.05, 0.06, MADERA);
   } else if (tipo === 'farola') {
-    caja(F, -0.14, 0, -0.14, 0.14, 5.4, 0.14, POSTE);
-    caja(F, -0.5, 5.2, -0.5, 0.5, 6.0, 0.5, LUZ);
+    prisma(F, 6, 0.16, 0, 5.4, POSTE, 0.12);
+    esfera(F, 0, 5.6, 0, 0.55, LUZ, 0.9, 8);
   } else if (tipo === 'banco') {
     caja(F, -0.95, 0, -0.28, -0.75, 0.45, 0.28, POSTE);
     caja(F, 0.75, 0, -0.28, 0.95, 0.45, 0.28, POSTE);
     caja(F, -1, 0.45, -0.3, 1, 0.62, 0.3, MADERA);
     caja(F, -1, 0.62, -0.3, 1, 1.15, -0.18, MADERA); // respaldo al norte: se sienta mirando al sur
   } else if (tipo === 'fuente') {
-    prisma(F, 8, 3.2, 0, 0.9, PIEDRA_C);
-    prisma(F, 8, 2.9, 0.9, 1.0, AGUA);
-    prisma(F, 6, 0.45, 1.0, 2.6, PIEDRA_C);
-    prisma(F, 8, 1.3, 2.6, 2.9, PIEDRA_C);
-    prisma(F, 8, 1.1, 2.9, 3.0, AGUA);
+    prisma(F, 12, 3.2, 0, 0.9, PIEDRA_C);
+    prisma(F, 12, 2.9, 0.9, 1.0, AGUA);
+    prisma(F, 8, 0.45, 1.0, 2.6, PIEDRA_C);
+    prisma(F, 12, 1.3, 2.6, 2.9, PIEDRA_C);
+    prisma(F, 12, 1.1, 2.9, 3.0, AGUA);
   } else if (tipo === 'bandera') {
-    caja(F, -0.1, 0, -0.1, 0.1, 7.5, 0.1, MASTIL);
+    prisma(F, 6, 0.1, 0, 7.5, MASTIL, 0.07);
     T.pos.push(0.1, 7.4, 0, 0.1, 6.2, 0, 2.6, 6.8, 0);
-    for (let q = 0; q < 3; q++) T.col.push(1, 1, 1);
+    for (let q = 0; q < 3; q++) tono(T.col, BLANCO, 0, 0, 1);
   }
   return { tinte: aGeo(T), fijo: aGeo(F) };
 }
 
-// El avatar: cuerpo del color del jugador, cabeza, pelo y ojos mirando al
-// frente (+z). Las piernas van aparte para poder moverlas.
+// El avatar: cuerpo redondo del color del jugador, cabeza, pelo y ojos
+// mirando al frente (+z). Las piernas van aparte para poder moverlas.
 function geometriaAvatar(color) {
   const g = { pos: [], col: [] };
-  caja(g, -0.45, 0.9, -0.25, 0.45, 1.9, 0.25, color); // cuerpo
-  caja(g, -0.62, 1.0, -0.14, -0.46, 1.8, 0.14, color); // brazos
-  caja(g, 0.46, 1.0, -0.14, 0.62, 1.8, 0.14, color);
-  caja(g, -0.36, 1.9, -0.36, 0.36, 2.6, 0.36, PIEL); // cabeza
-  caja(g, -0.4, 2.45, -0.4, 0.4, 2.72, 0.4, PELO); // pelo
-  caja(g, -0.4, 2.0, -0.4, 0.4, 2.5, -0.3, PELO); // nuca
-  caja(g, -0.2, 2.2, 0.36, -0.1, 2.32, 0.4, OJO); // ojos
-  caja(g, 0.1, 2.2, 0.36, 0.2, 2.32, 0.4, OJO);
+  esfera(g, 0, 1.5, 0, 0.38, color, 1.4); // cuerpo
+  esfera(g, -0.5, 1.5, 0, 0.15, color, 1.9); // brazos
+  esfera(g, 0.5, 1.5, 0, 0.15, color, 1.9);
+  esfera(g, 0, 2.35, 0, 0.42, PIEL); // cabeza
+  esfera(g, 0, 2.5, -0.06, 0.44, PELO, 0.75); // pelo
+  esfera(g, -0.15, 2.36, 0.36, 0.06, OJO, 1, 6); // ojos
+  esfera(g, 0.15, 2.36, 0.36, 0.06, OJO, 1, 6);
   return aGeo(g);
 }
 function geometriaPierna() {
   const g = { pos: [], col: [] };
-  caja(g, -0.16, -0.9, -0.16, 0.16, 0, 0.16, POSTE);
+  esfera(g, 0, -0.45, 0, 0.19, PANTALON, 2.6, 6);
+  return aGeo(g);
+}
+// una nube: varias esferas aplastadas, blancas arriba y lavanda abajo
+function geometriaNube(rnd) {
+  const g = { pos: [], col: [] };
+  const n = 4 + Math.floor(rnd() * 3);
+  for (let i = 0; i < n; i++) {
+    const r = 6 + rnd() * 7;
+    esfera(g, (i - n / 2) * 8 + rnd() * 4, rnd() * 3, rnd() * 6 - 3, r, i % 2 ? NUBE : NUBE_SOMBRA, 0.55, 8);
+  }
   return aGeo(g);
 }
 
@@ -259,6 +343,9 @@ function prng(seed) {
     s = (s * 1664525 + 1013904223) >>> 0;
     return s / 4294967296;
   };
+}
+function hash2(x, y) {
+  return ((Math.imul(x, 73856093) ^ Math.imul(y, 19349663)) >>> 0) / 4294967296;
 }
 
 export default function Mundo() {
@@ -320,6 +407,7 @@ export default function Mundo() {
       const grad = c.createLinearGradient(0, 0, 0, 256);
       const hex = (v) => '#' + v.toString(16).padStart(6, '0');
       grad.addColorStop(0, hex(CIELO_CENIT));
+      grad.addColorStop(0.36, '#a9d3ee');
       grad.addColorStop(0.5, hex(CIELO_HORIZONTE));
       grad.addColorStop(1, hex(CIELO_HORIZONTE));
       c.fillStyle = grad;
@@ -330,26 +418,28 @@ export default function Mundo() {
       return tex;
     })();
     scene.background = texCielo;
-    scene.fog = new THREE.Fog(CIELO_HORIZONTE, NIEBLA_DESDE, NIEBLA_HASTA);
+    scene.fog = new THREE.Fog(NIEBLA, NIEBLA_DESDE, NIEBLA_HASTA);
 
-    // --- suelo: hierba con la trama de parcelas, que sigue al avatar ---
-    // Una textura de UNA parcela repetida. El plano se mueve a saltos de una
-    // parcela para que la trama no resbale.
+    // --- suelo: colinas de hierba con la trama de parcelas, que siguen al avatar ---
+    // Una textura de UNA parcela repetida; el relieve lo pone el shader. El
+    // plano se mueve a saltos de una parcela para que la trama no resbale.
     const texSuelo = (() => {
       const S = 256;
       const cv = document.createElement('canvas');
       cv.width = cv.height = S;
       const c = cv.getContext('2d');
-      c.fillStyle = HIERBA;
+      c.fillStyle = '#a4d47c';
       c.fillRect(0, 0, S, S);
       const rnd = prng(7);
-      c.fillStyle = HIERBA_OSCURA;
-      for (let i = 0; i < 140; i++) {
+      for (let i = 0; i < 160; i++) {
+        c.fillStyle = i % 3 ? '#96c86f' : '#b3dd86';
         const x = rnd() * S;
         const y = rnd() * S;
-        c.fillRect(x, y, 2 + rnd() * 3, 2 + rnd() * 3);
+        c.beginPath();
+        c.ellipse(x, y, 2 + rnd() * 5, 1.2 + rnd() * 2, rnd() * 3, 0, Math.PI * 2);
+        c.fill();
       }
-      c.strokeStyle = 'rgba(120, 160, 100, 0.55)';
+      c.strokeStyle = 'rgba(110, 150, 90, 0.4)';
       c.lineWidth = 2;
       c.strokeRect(0, 0, S, S);
       const tex = new THREE.CanvasTexture(cv);
@@ -359,12 +449,14 @@ export default function Mundo() {
       tex.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
       return tex;
     })();
-    const suelo = new THREE.Mesh(new THREE.PlaneGeometry(SUELO_M, SUELO_M), new THREE.MeshBasicMaterial({ map: texSuelo }));
-    suelo.rotation.x = -Math.PI / 2;
+    const geoSuelo = new THREE.PlaneGeometry(SUELO_M, SUELO_M, 160, 160);
+    geoSuelo.rotateX(-Math.PI / 2);
+    const suelo = new THREE.Mesh(geoSuelo, conAltura(new THREE.MeshBasicMaterial({ map: texSuelo }), { tinta: true }));
+    suelo.frustumCulled = false;
     scene.add(suelo);
 
     // --- cámara: tercera persona alrededor del avatar ---
-    const camera = new THREE.PerspectiveCamera(50, 1, 0.5, 3000);
+    const camera = new THREE.PerspectiveCamera(48, 1, 0.5, 3000);
     const controls = new MapControls(camera, canvas);
     controls.enableDamping = true;
     controls.dampingFactor = 0.1;
@@ -398,13 +490,100 @@ export default function Mundo() {
         par.tinte = new THREE.InstancedMesh(g.tinte, matTinte, MAX_INST);
         par.tinte.count = 0;
         par.tinte.frustumCulled = false;
-        // hace falta tocar instanceColor una vez para que exista
-        par.tinte.setColorAt(0, BLANCO);
+        par.tinte.setColorAt(0, BLANCO); // hace falta tocarlo una vez para que exista
         grupoPiezas.add(par.tinte);
       }
       mallas[t] = par;
     }
     const coloresTinte = COLORES.map((h) => new THREE.Color(h));
+
+    // --- sombras suaves: una mancha bajo cada pieza y cada avatar ---
+    const texSombra = (() => {
+      const cv = document.createElement('canvas');
+      cv.width = cv.height = 128;
+      const c = cv.getContext('2d');
+      const g = c.createRadialGradient(64, 64, 6, 64, 64, 64);
+      g.addColorStop(0, 'rgba(40, 50, 80, 0.34)');
+      g.addColorStop(0.55, 'rgba(40, 50, 80, 0.18)');
+      g.addColorStop(1, 'rgba(40, 50, 80, 0)');
+      c.fillStyle = g;
+      c.fillRect(0, 0, 128, 128);
+      return new THREE.CanvasTexture(cv);
+    })();
+    const geoSombra = new THREE.PlaneGeometry(2, 2, 6, 6);
+    geoSombra.rotateX(-Math.PI / 2);
+    const matSombra = conAltura(new THREE.MeshBasicMaterial({ map: texSombra, transparent: true, depthWrite: false }));
+    const sombras = new THREE.InstancedMesh(geoSombra, matSombra, MAX_INST);
+    sombras.count = 0;
+    sombras.frustumCulled = false;
+    sombras.renderOrder = 1;
+    scene.add(sombras);
+    const matSombraAvatar = new THREE.MeshBasicMaterial({ map: texSombra, transparent: true, depthWrite: false });
+
+    // --- hierba: matas que se mecen, alrededor del avatar ---
+    const texHierba = (() => {
+      const cv = document.createElement('canvas');
+      cv.width = 64;
+      cv.height = 64;
+      const c = cv.getContext('2d');
+      const rnd = prng(3);
+      // hojas anchas y en dos verdes, más oscuras que el suelo: sobre la
+      // hierba del suelo, una brizna clara y fina desaparece
+      for (let i = 0; i < 8; i++) {
+        const x = 6 + i * 7 + rnd() * 3;
+        const alto = 34 + rnd() * 28;
+        const inclina = (rnd() - 0.5) * 22;
+        c.fillStyle = i % 3 === 0 ? '#5f9e4e' : i % 3 === 1 ? '#74b45c' : '#8ccb6c';
+        c.beginPath();
+        c.moveTo(x - 4.5, 64);
+        c.quadraticCurveTo(x + inclina * 0.4, 64 - alto * 0.55, x + inclina, 64 - alto);
+        c.quadraticCurveTo(x + inclina * 0.4 + 3, 64 - alto * 0.55, x + 4.5, 64);
+        c.fill();
+      }
+      const tex = new THREE.CanvasTexture(cv);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      return tex;
+    })();
+    const geoHierba = (() => {
+      // dos planos cruzados; la base a y=0 y la punta a y=1 (el viento va
+      // proporcional a la y)
+      const a = new THREE.PlaneGeometry(1.7, 1, 1, 2);
+      a.translate(0, 0.5, 0);
+      const b = a.clone().rotateY(Math.PI / 2);
+      const pos = [...a.getAttribute('position').array, ...b.getAttribute('position').array];
+      const uv = [...a.getAttribute('uv').array, ...b.getAttribute('uv').array];
+      const ia = Array.from(a.getIndex().array);
+      const ib = Array.from(b.getIndex().array).map((i) => i + a.getAttribute('position').count);
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+      geo.setIndex(ia.concat(ib));
+      a.dispose();
+      b.dispose();
+      return geo;
+    })();
+    const matHierba = conAltura(
+      new THREE.MeshBasicMaterial({ map: texHierba, alphaTest: 0.5, side: THREE.DoubleSide }),
+      { viento: true }
+    );
+    const hierba = new THREE.InstancedMesh(geoHierba, matHierba, MAX_HIERBA);
+    hierba.count = 0;
+    hierba.frustumCulled = false;
+    scene.add(hierba);
+    let hierbaCentro = null;
+    const CELDA_HIERBA = 1.9;
+    const RADIO_HIERBA = 56;
+
+    // --- nubes ---
+    const rndNubes = prng(11);
+    const nubes = [];
+    const matNube = new THREE.MeshBasicMaterial({ vertexColors: true, fog: false, transparent: true, opacity: 0.92 });
+    for (let i = 0; i < 7; i++) {
+      const m = new THREE.Mesh(geometriaNube(rndNubes), matNube);
+      m.frustumCulled = false;
+      nubes.push({ m, ox: (rndNubes() - 0.5) * 520, oz: (rndNubes() - 0.5) * 520, h: 95 + rndNubes() * 45, v: 1.2 + rndNubes() * 1.4 });
+      scene.add(m);
+    }
 
     // --- parcelas: marco de dueño y suelo de plaza ---
     const texMarco = (() => {
@@ -413,19 +592,20 @@ export default function Mundo() {
       const c = cv.getContext('2d');
       c.fillStyle = 'rgba(255,255,255,0.10)';
       c.fillRect(0, 0, 256, 256);
-      c.strokeStyle = 'rgba(255,255,255,0.85)';
-      c.lineWidth = 5;
-      c.strokeRect(3, 3, 250, 250);
+      c.strokeStyle = 'rgba(255,255,255,0.7)';
+      c.lineWidth = 3;
+      c.strokeRect(2, 2, 252, 252);
       const tex = new THREE.CanvasTexture(cv);
       tex.colorSpace = THREE.SRGBColorSpace;
       return tex;
     })();
-    const geoParcela = new THREE.PlaneGeometry(L, L);
+    // con segmentos: el shader los sube al terreno y el marco se ciñe a la colina
+    const geoParcela = new THREE.PlaneGeometry(L, L, 12, 12);
     geoParcela.rotateX(-Math.PI / 2);
     const MAX_PARC = (RADIO_PARCELAS * 2 + 3) ** 2;
     const marcos = new THREE.InstancedMesh(
       geoParcela,
-      new THREE.MeshBasicMaterial({ map: texMarco, transparent: true, depthWrite: false }),
+      conAltura(new THREE.MeshBasicMaterial({ map: texMarco, transparent: true, depthWrite: false })),
       MAX_PARC
     );
     marcos.count = 0;
@@ -433,7 +613,7 @@ export default function Mundo() {
     marcos.setColorAt(0, BLANCO);
     marcos.renderOrder = 1;
     scene.add(marcos);
-    const plazas = new THREE.InstancedMesh(geoParcela, new THREE.MeshBasicMaterial({ color: PIEDRA }), MAX_PARC);
+    const plazas = new THREE.InstancedMesh(geoParcela, conAltura(new THREE.MeshBasicMaterial({ color: 0xe9dfc8 })), MAX_PARC);
     plazas.count = 0;
     plazas.frustumCulled = false;
     scene.add(plazas);
@@ -451,9 +631,10 @@ export default function Mundo() {
       tex.colorSpace = THREE.SRGBColorSpace;
       return tex;
     })();
-    const marcoObra = new THREE.Mesh(geoParcela, new THREE.MeshBasicMaterial({ map: texObra, transparent: true, depthWrite: false }));
-    marcoObra.position.y = 0.15;
+    const marcoObra = new THREE.Mesh(geoParcela, conAltura(new THREE.MeshBasicMaterial({ map: texObra, transparent: true, depthWrite: false })));
+    marcoObra.position.y = 0.2;
     marcoObra.renderOrder = 2;
+    marcoObra.frustumCulled = false;
     marcoObra.visible = false;
     scene.add(marcoObra);
 
@@ -469,9 +650,11 @@ export default function Mundo() {
     const posI = new THREE.Vector3();
     const rotI = new THREE.Quaternion();
     const escI = new THREE.Vector3(1, 1, 1);
+    const escS = new THREE.Vector3(1, 1, 1);
     const ejeY = new THREE.Vector3(0, 1, 0);
-    const colorMio = new THREE.Color(0x2f6fed);
+    const colorMio = new THREE.Color(0x7fb0ff);
     const cacheColorDueno = new Map();
+    const sinGiro = new THREE.Quaternion();
 
     // Rehace TODAS las instancias: son cientos o pocos miles, y es más barato
     // que llevar la cuenta de qué instancia era de qué parcela.
@@ -480,6 +663,7 @@ export default function Mundo() {
       for (const t in mallas) cont[t] = 0;
       let nMarcos = 0;
       let nPlazas = 0;
+      let nSombras = 0;
       for (const [clave, pc] of parcelas) {
         const p = parseParcela(clave);
         if (!p) continue;
@@ -488,11 +672,11 @@ export default function Mundo() {
         const cen = centroParcela(p.px, p.py);
         if (pc.o === 'mundo') {
           if (nPlazas < MAX_PARC) {
-            mtx.makeTranslation(cen.x, 0.02, -cen.y);
+            mtx.makeTranslation(cen.x, 0.04, -cen.y);
             plazas.setMatrixAt(nPlazas++, mtx);
           }
         } else if (pc.o && nMarcos < MAX_PARC) {
-          mtx.makeTranslation(cen.x, 0.05, -cen.y);
+          mtx.makeTranslation(cen.x, 0.07, -cen.y);
           marcos.setMatrixAt(nMarcos, mtx);
           let col;
           if (pc.o === jugador.id) col = colorMio;
@@ -508,7 +692,11 @@ export default function Mundo() {
         for (const z of pc.d || []) {
           const par = mallas[z.t];
           if (!par) continue;
-          posI.set(bx + z.x, 0, -(by + z.y));
+          const wx = bx + z.x;
+          const wy = by + z.y;
+          // un pelín enterrada: en pendiente, mejor que el borde bajo se hunda
+          // a que el alto flote
+          posI.set(wx, alturaEn(wx, wy) - 0.12, -wy);
           rotI.setFromAxisAngle(ejeY, (z.r || 0) * (Math.PI / 2));
           mtx.compose(posI, rotI, escI);
           const i = cont[z.t];
@@ -519,6 +707,14 @@ export default function Mundo() {
             par.tinte.setColorAt(i, coloresTinte[z.c] || coloresTinte[0]);
           }
           cont[z.t] = i + 1;
+          const rs = SOMBRA_DE[z.t];
+          if (rs && nSombras < MAX_INST) {
+            // corrida un poco al noreste: el sol viene del suroeste
+            posI.set(wx + rs * 0.12, 0.1, -wy - rs * 0.1);
+            escS.set(rs, 1, rs);
+            mtx.compose(posI, sinGiro, escS);
+            sombras.setMatrixAt(nSombras++, mtx);
+          }
         }
       }
       for (const t in mallas) {
@@ -538,71 +734,136 @@ export default function Mundo() {
       if (marcos.instanceColor) marcos.instanceColor.needsUpdate = true;
       plazas.count = nPlazas;
       plazas.instanceMatrix.needsUpdate = true;
+      sombras.count = nSombras;
+      sombras.instanceMatrix.needsUpdate = true;
+      hierbaCentro = null; // la hierba esquiva plazas y caminos: se replanta
+    }
+
+    // La hierba se planta en una rejilla fija del mundo (hash por celda), así
+    // que al andar aparecen y desaparecen matas por los bordes, nunca en medio.
+    // Esquiva las parcelas del «mundo» (la plaza) y las losas de camino.
+    function plantaHierba() {
+      const cx = Math.round(yo.x / CELDA_HIERBA);
+      const cy = Math.round(yo.y / CELDA_HIERBA);
+      if (hierbaCentro && Math.abs(hierbaCentro.cx - cx) < 5 && Math.abs(hierbaCentro.cy - cy) < 5) return;
+      hierbaCentro = { cx, cy };
+      const R = Math.round(RADIO_HIERBA / CELDA_HIERBA);
+      const caminos = [];
+      for (const [clave, pc] of parcelas) {
+        const p = parseParcela(clave);
+        if (!p) continue;
+        for (const z of pc.d || []) if (z.t === 'camino') caminos.push([p.px * L + z.x, p.py * L + z.y]);
+      }
+      let n = 0;
+      for (let i = -R; i <= R && n < MAX_HIERBA; i++) {
+        for (let j = -R; j <= R && n < MAX_HIERBA; j++) {
+          if (i * i + j * j > R * R) continue;
+          const gx = cx + i;
+          const gy = cy + j;
+          const h = hash2(gx, gy);
+          const wx = (gx + hash2(gx * 7, gy) - 0.5) * CELDA_HIERBA;
+          const wy = (gy + hash2(gx, gy * 7) - 0.5) * CELDA_HIERBA;
+          // a rodales: una onda lenta decide dónde hay más y dónde menos, si
+          // no la hierba sale como un campo sembrado en filas
+          const rodal = 0.32 + 0.3 * Math.sin(wx * 0.09 + wy * 0.05) * Math.sin(wy * 0.11 - wx * 0.04);
+          if (h > rodal) continue;
+          const p = parcelaDe(wx, wy);
+          const pc = parcelas.get(claveParcela(p.px, p.py));
+          if (pc?.o === 'mundo') continue;
+          let tapada = false;
+          for (const c of caminos) {
+            if (Math.abs(c[0] - wx) < 2.3 && Math.abs(c[1] - wy) < 2.3) {
+              tapada = true;
+              break;
+            }
+          }
+          if (tapada) continue;
+          const s = 0.45 + h * 1.3; // como mucho a la rodilla del avatar
+          posI.set(wx, 0, -wy);
+          rotI.setFromAxisAngle(ejeY, h * 9);
+          escS.set(s, s * (0.9 + hash2(gy, gx) * 0.7), s);
+          mtx.compose(posI, rotI, escS);
+          hierba.setMatrixAt(n++, mtx);
+        }
+      }
+      hierba.count = n;
+      hierba.instanceMatrix.needsUpdate = true;
     }
 
     // --- el avatar propio ---
-    const avatar = new THREE.Group();
-    const cuerpo = new THREE.Mesh(geometriaAvatar(coloresTinte[jugador.color]), matFijo);
     const geoPierna = geometriaPierna();
-    const piernaI = new THREE.Mesh(geoPierna, matFijo);
-    const piernaD = new THREE.Mesh(geoPierna, matFijo);
-    piernaI.position.set(-0.22, 0.9, 0);
-    piernaD.position.set(0.22, 0.9, 0);
-    avatar.add(cuerpo, piernaI, piernaD);
-    scene.add(avatar);
+    function creaFigura(color) {
+      const grupo = new THREE.Group();
+      const cuerpo = new THREE.Mesh(geometriaAvatar(color), matFijo);
+      const pi = new THREE.Mesh(geoPierna, matFijo);
+      const pd = new THREE.Mesh(geoPierna, matFijo);
+      pi.position.set(-0.19, 1.0, 0);
+      pd.position.set(0.19, 1.0, 0);
+      const sombra = new THREE.Mesh(geoSombra, matSombraAvatar);
+      sombra.scale.set(0.9, 1, 0.9);
+      sombra.position.y = 0.08;
+      sombra.renderOrder = 1;
+      grupo.add(cuerpo, pi, pd, sombra);
+      return { grupo, cuerpo, pi, pd, sombra };
+    }
+    const avatar = creaFigura(coloresTinte[jugador.color]);
+    scene.add(avatar.grupo);
     // posición en metros del mundo (y hacia el norte); rumbo en radianes
-    const yo = { x: L / 2, y: L / 2 - 12, rumbo: 0, destino: null, fase: 0, andando: false };
+    const yo = { x: L / 2, y: L / 2 - 12, h: 0, rumbo: 0, destino: null, fase: 0, andando: false };
     const px0 = parseFloat(params.get('x'));
     const py0 = parseFloat(params.get('y'));
     if (Number.isFinite(px0) && Number.isFinite(py0)) {
       yo.x = px0;
       yo.y = py0;
     }
-    function colocaAvatar(grupo, e, pi, pd, o) {
-      grupo.position.set(o.x, o.andando ? Math.abs(Math.sin(o.fase)) * 0.08 : 0, -o.y);
-      grupo.rotation.y = o.rumbo;
+    yo.h = alturaEn(yo.x, yo.y);
+    function colocaFigura(f, o) {
+      const salto = o.andando ? Math.abs(Math.sin(o.fase)) * 0.09 : 0;
+      f.grupo.position.set(o.x, o.h + salto, -o.y);
+      f.grupo.rotation.y = o.rumbo;
       const a = o.andando ? Math.sin(o.fase) * 0.65 : 0;
-      pi.rotation.x = a;
-      pd.rotation.x = -a;
+      f.pi.rotation.x = a;
+      f.pd.rotation.x = -a;
+      f.sombra.position.y = 0.08 - salto;
     }
 
     // Cámara inicial: al sur del avatar, mirando al norte. Reproducible desde
     // la URL (?d=&pol=&az=) para el banco visual: az es el rumbo desde el
     // avatar hacia la cámara (180 = la cámara está al sur).
-    controls.target.set(yo.x, 1.2, -yo.y);
+    controls.target.set(yo.x, yo.h + 1.2, -yo.y);
     {
       const dCam = parseFloat(params.get('d'));
       const polCam = parseFloat(params.get('pol'));
       const azCam = parseFloat(params.get('az'));
       const d = dCam > 0 ? dCam : 22;
-      const pol = (Number.isFinite(polCam) ? Math.max(9, Math.min(83, polCam)) : 58) * (Math.PI / 180);
+      const pol = (Number.isFinite(polCam) ? Math.max(9, Math.min(83, polCam)) : 62) * (Math.PI / 180);
       const az = (Number.isFinite(azCam) ? azCam : 180) * (Math.PI / 180);
       const r = d * Math.sin(pol);
-      camera.position.set(yo.x + r * Math.sin(az), 1.2 + d * Math.cos(pol), -yo.y - r * Math.cos(az));
+      camera.position.set(yo.x + r * Math.sin(az), yo.h + 1.2 + d * Math.cos(pol), -yo.y - r * Math.cos(az));
     }
 
     // --- otros jugadores ---
-    const otros = new Map(); // id → {grupo, pi, pd, o: {x, y, rumbo, ...}, objetivo, nombre, visto}
+    const otros = new Map(); // id → {figura, o: {x, y, h, rumbo, ...}, objetivo, nombre, color, visto}
     const nodos = new Map(); // id → <div> del nombre
     function creaOtro(id, datos) {
-      const grupo = new THREE.Group();
-      const c = new THREE.Mesh(geometriaAvatar(coloresTinte[datos.c] || coloresTinte[0]), matFijo);
-      const pi = new THREE.Mesh(geoPierna, matFijo);
-      const pd = new THREE.Mesh(geoPierna, matFijo);
-      pi.position.set(-0.22, 0.9, 0);
-      pd.position.set(0.22, 0.9, 0);
-      grupo.add(c, pi, pd);
-      scene.add(grupo);
-      const o = { grupo, cuerpo: c, pi, pd, color: datos.c, nombre: datos.n, visto: Date.now(),
-        o: { x: datos.x, y: datos.y, rumbo: datos.r, fase: 0, andando: false }, objetivo: { x: datos.x, y: datos.y, rumbo: datos.r } };
+      const figura = creaFigura(coloresTinte[datos.c] || coloresTinte[0]);
+      scene.add(figura.grupo);
+      const o = {
+        figura,
+        color: datos.c,
+        nombre: datos.n,
+        visto: Date.now(),
+        o: { x: datos.x, y: datos.y, h: alturaEn(datos.x, datos.y), rumbo: datos.r, fase: 0, andando: false },
+        objetivo: { x: datos.x, y: datos.y, rumbo: datos.r },
+      };
       otros.set(id, o);
       return o;
     }
     function quitaOtro(id) {
       const o = otros.get(id);
       if (!o) return;
-      scene.remove(o.grupo);
-      o.cuerpo.geometry.dispose();
+      scene.remove(o.figura.grupo);
+      o.figura.cuerpo.geometry.dispose();
       otros.delete(id);
       const el = nodos.get(id);
       if (el) {
@@ -618,7 +879,7 @@ export default function Mundo() {
     function pintaNombres() {
       const cont = rotulosRef.current;
       if (!cont) return;
-      const pinta = (id, nombre, x, y, propio) => {
+      const pinta = (id, nombre, x, y, h, propio) => {
         let el = nodos.get(id);
         if (!el) {
           el = document.createElement('div');
@@ -630,7 +891,7 @@ export default function Mundo() {
           el.textContent = nombre;
           el._txt = nombre;
         }
-        pv.set(x, 3.1, -y);
+        pv.set(x, h + 3.2, -y);
         const dist = pv.distanceTo(camera.position);
         pv.project(camera);
         if (pv.z > 1 || dist > 160 || Math.abs(pv.x) > 1.1 || Math.abs(pv.y) > 1.1) {
@@ -643,11 +904,14 @@ export default function Mundo() {
           'translate3d(' + Math.round((pv.x * 0.5 + 0.5) * vpW) + 'px,' + Math.round((-pv.y * 0.5 + 0.5) * vpH) + 'px,0) translate(-50%,-100%)';
       };
       const yoP = perfil();
-      if (yoP.nombre) pinta('yo', yoP.nombre, yo.x, yo.y, true);
-      for (const [id, o] of otros) pinta(id, o.nombre, o.o.x, o.o.y, false);
+      if (yoP.nombre) pinta('yo', yoP.nombre, yo.x, yo.y, yo.h, true);
+      for (const [id, o] of otros) pinta(id, o.nombre, o.o.x, o.o.y, o.o.h, false);
     }
 
     // --- conversiones y toques ---
+    // El rayo se corta con el plano a la altura del avatar y se afina una vez
+    // con la altura del punto encontrado: con colinas de ±2 m y la cámara a
+    // 20 m el error que queda es de centímetros.
     const ndc = new THREE.Vector2();
     const rayo = new THREE.Raycaster();
     const planoSuelo = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
@@ -655,6 +919,9 @@ export default function Mundo() {
     function sueloEn(sx, sy) {
       ndc.set((sx / vpW) * 2 - 1, -(sy / vpH) * 2 + 1);
       rayo.setFromCamera(ndc, camera);
+      planoSuelo.constant = -yo.h;
+      if (!rayo.ray.intersectPlane(planoSuelo, pSuelo)) return null;
+      planoSuelo.constant = -alturaEn(pSuelo.x, -pSuelo.z);
       if (!rayo.ray.intersectPlane(planoSuelo, pSuelo)) return null;
       return { x: pSuelo.x, y: -pSuelo.z };
     }
@@ -902,8 +1169,23 @@ export default function Mundo() {
       }
     }
 
+    function mueveA(x, y) {
+      const dx = x - yo.x;
+      const dy = y - yo.y;
+      yo.x = x;
+      yo.y = y;
+      yo.destino = null;
+      camera.position.x += dx;
+      camera.position.z -= dy;
+      controls.target.x += dx;
+      controls.target.z -= dy;
+    }
+
+    // Diagnóstico y pruebas (npm run prueba): con render por software un
+    // paseo de 30 m tarda lo que tarde, así que la prueba se teletransporta.
+    window.__mundo = { mueve: mueveA, pos: () => ({ x: yo.x, y: yo.y }) };
+
     engineRef.current = {
-      // ¿Puedo construir aquí? Devuelve el nº de piezas de la parcela
       construye(clave, cb) {
         vaciaGuardado();
         if (!clave) {
@@ -917,7 +1199,7 @@ export default function Mundo() {
         obraBase = { bx: p.px * L, by: p.py * L };
         avisaObra = cb;
         const c = centroParcela(p.px, p.py);
-        marcoObra.position.set(c.x, 0.15, -c.y);
+        marcoObra.position.set(c.x, 0.2, -c.y);
         marcoObra.visible = true;
         return parcelas.get(clave)?.d?.length || 0;
       },
@@ -980,22 +1262,14 @@ export default function Mundo() {
         const p = parseParcela(clave);
         if (!p) return;
         const c = centroParcela(p.px, p.py);
-        const dx = c.x - yo.x;
-        const dy = c.y - 12 - yo.y;
-        yo.x += dx;
-        yo.y += dy;
-        yo.destino = null;
-        camera.position.x += dx;
-        camera.position.z -= dy;
-        controls.target.x += dx;
-        controls.target.z -= dy;
+        mueveA(c.x, c.y - 12);
         actualizaDonde(false);
         traeParcelas(true);
       },
       // el avatar cambia de color al cambiar el perfil
       recolorea(c) {
-        cuerpo.geometry.dispose();
-        cuerpo.geometry = geometriaAvatar(coloresTinte[c] || coloresTinte[0]);
+        avatar.cuerpo.geometry.dispose();
+        avatar.cuerpo.geometry = geometriaAvatar(coloresTinte[c] || coloresTinte[0]);
       },
       presentate() {
         mandaPresencia();
@@ -1023,6 +1297,7 @@ export default function Mundo() {
       // software), el avatar no se teletransporta pero tampoco se arrastra
       const dt = Math.min(0.25, (t - tAnt) / 1000 || 0);
       tAnt = t;
+      uTiempo.value = t / 1000;
 
       // --- mover el avatar propio ---
       let mx = 0;
@@ -1067,7 +1342,13 @@ export default function Mundo() {
       } else {
         yo.fase = 0;
       }
-      colocaAvatar(avatar, null, piernaI, piernaD, yo);
+      // sube y baja con la colina; la cámara acompaña
+      const h = alturaEn(yo.x, yo.y);
+      const dh = h - yo.h;
+      yo.h = h;
+      camera.position.y += dh;
+      controls.target.y += dh;
+      colocaFigura(avatar, yo);
 
       // --- los demás, interpolados hacia su última posición conocida ---
       for (const o of otros.values()) {
@@ -1087,12 +1368,20 @@ export default function Mundo() {
           s.fase = 0;
           s.rumbo = o.objetivo.rumbo;
         }
-        colocaAvatar(o.grupo, null, o.pi, o.pd, s);
+        s.h = alturaEn(s.x, s.y);
+        colocaFigura(o.figura, s);
       }
 
       // el suelo sigue al avatar a saltos de parcela: la trama no resbala
       suelo.position.x = Math.round(yo.x / L) * L;
       suelo.position.z = -Math.round(yo.y / L) * L;
+      plantaHierba();
+
+      // nubes: van con el avatar (siempre hay cielo encima) y derivan al este
+      for (const nb of nubes) {
+        const ox = ((((nb.ox + uTiempo.value * nb.v + 260) % 520) + 520) % 520) - 260;
+        nb.m.position.set(yo.x + ox, nb.h, -yo.y + nb.oz);
+      }
 
       controls.update();
       renderer.render(scene, camera);
@@ -1123,16 +1412,7 @@ export default function Mundo() {
         const j = await r.json();
         if (!vivo) return;
         const sinPos = !(Number.isFinite(px0) && Number.isFinite(py0));
-        if (sinPos && j.yo && Number.isFinite(j.yo.x)) {
-          const dx = j.yo.x - yo.x;
-          const dy = j.yo.y - yo.y;
-          yo.x += dx;
-          yo.y += dy;
-          camera.position.x += dx;
-          camera.position.z -= dy;
-          controls.target.x += dx;
-          controls.target.z -= dy;
-        }
+        if (sinPos && j.yo && Number.isFinite(j.yo.x)) mueveA(j.yo.x, j.yo.y);
       } catch {
         /* se reintenta en el bucle */
       }
@@ -1162,6 +1442,17 @@ export default function Mundo() {
           m.dispose();
         }
       }
+      for (const nb of nubes) nb.m.geometry.dispose();
+      matNube.dispose();
+      hierba.dispose();
+      geoHierba.dispose();
+      matHierba.dispose();
+      texHierba.dispose();
+      sombras.dispose();
+      geoSombra.dispose();
+      matSombra.dispose();
+      matSombraAvatar.dispose();
+      texSombra.dispose();
       marcos.dispose();
       marcos.material.dispose();
       plazas.dispose();
@@ -1170,7 +1461,7 @@ export default function Mundo() {
       marcoObra.material.dispose();
       texMarco.dispose();
       texObra.dispose();
-      cuerpo.geometry.dispose();
+      avatar.cuerpo.geometry.dispose();
       geoPierna.dispose();
       suelo.geometry.dispose();
       suelo.material.dispose();
@@ -1181,6 +1472,7 @@ export default function Mundo() {
       controls.dispose();
       renderer.dispose();
       engineRef.current = null;
+      delete window.__mundo;
     };
   }, []);
 
@@ -1260,6 +1552,7 @@ export default function Mundo() {
   return (
     <>
       <canvas id="lienzo" ref={canvasRef} />
+      <div id="vineta" aria-hidden="true" />
       <div id="rotulos" ref={rotulosRef} aria-hidden="true" />
 
       {yo && !presentado && (
@@ -1302,11 +1595,7 @@ export default function Mundo() {
         </span>
       </div>
 
-      <button
-        className="ui btn-cuad b-info"
-        aria-label="Cómo funciona"
-        onClick={() => setInfoOpen((v) => !v)}
-      >
+      <button className="ui btn-cuad b-info" aria-label="Cómo funciona" onClick={() => setInfoOpen((v) => !v)}>
         i
       </button>
       <button className="ui btn-cuad b-plaza" aria-label="Ir a la plaza" title="Ir a la plaza" onClick={() => engineRef.current?.vaA('0/0')}>

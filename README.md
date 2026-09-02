@@ -15,8 +15,20 @@ servidor solo guarda qué hay en cada parcela y quién anda cerca.
   parcela 0/0 es la **plaza de llegada**, pública, donde aparece quien entra;
   la 1/0 es una **casa de muestra** para que se vea qué se puede hacer.
   Las dos son del «mundo»: nadie las reclama ni las cambia.
-- **El avatar**: cuerpo del color elegido, cabeza, pelo y ojos; low-poly con
-  el sol horneado en el color de vértice, como todo lo demás. Anda **tocando
+- **El look, tarde de verano**: no hay luces. Cada vértice lleva su color ya
+  sombreado por un sol 3D bajo y del suroeste: lo que le da la cara sale
+  cálido y lo que le da la espalda, frío y azulado, con transición suave; es
+  lo que hace que parezca pintado a mano. Las formas son redondas (copas de
+  árbol, arbustos, nubes y cabezas son esferas con el degradado por normal),
+  cada pieza lleva una **mancha de sombra suave** debajo, hay **hierba** que
+  se mece (un vertex shader con el tiempo, instanciada en una rejilla fija
+  del mundo alrededor del avatar), nubes que derivan y una viñeta cálida en
+  CSS. El **relieve** son colinas suaves: una suma de senos que está
+  escrita dos veces, en JS (para colocar piezas y avatares) y en GLSL (para
+  desplazar el suelo, los marcos de parcela y las sombras en el vertex
+  shader), y que nunca da más de medio metro de desnivel en una parcela.
+- **El avatar**: cuerpo redondo del color elegido, cabeza, pelo y ojos; el
+  mismo sombreado horneado que todo lo demás. Anda **tocando
   el suelo** (o con WASD / flechas, relativo a la cámara) y la cámara, en
   tercera persona, va con él: arrastrar gira, pellizcar acerca.
 - **Presencia**: cada 1,5 s el cliente manda su posición a `POST

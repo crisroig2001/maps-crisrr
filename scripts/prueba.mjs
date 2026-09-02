@@ -45,12 +45,18 @@ const nombresBea = await bea.$$eval('#rotulos .nombre', (els) => els.filter((e) 
 console.log('Bea ve los nombres:', nombresBea);
 await bea.screenshot({ path: path.join(OUT, 'm3-bea-ve-a-ana.png') });
 
-// Ana se va a un solar libre (parcela -1/0) y lo reclama
-// andamos hacia el oeste con el teclado hasta el solar -1/0
+// el teclado mueve: un par de segundos hacia el oeste y la x baja
+const antes = await ana.evaluate(() => window.__mundo.pos());
 await ana.keyboard.down('a');
-await ana.waitForTimeout(6500);
+await ana.waitForTimeout(2000);
 await ana.keyboard.up('a');
-await ana.waitForTimeout(600);
+const despues = await ana.evaluate(() => window.__mundo.pos());
+console.log('teclado: x', antes.x.toFixed(1), '→', despues.x.toFixed(1), despues.x < antes.x - 1 ? 'anda' : 'NO ANDA');
+
+// Ana se va a un solar libre (parcela -2/1) y lo reclama. Se teletransporta:
+// con render por software (CI) un paseo de 100 m tarda lo que tarde.
+await ana.evaluate(() => window.__mundo.mueve(-2 * 48 + 24, 48 + 12));
+await ana.waitForTimeout(2500);
 const accion = (await ana.textContent('.acciones').catch(() => '')) || '';
 console.log('acciones de Ana en el solar:', accion.trim());
 await ana.click('.acciones .btn-principal');
@@ -78,13 +84,17 @@ await ana.click('.paleta .btn-principal'); // Listo
 await ana.waitForTimeout(500);
 
 // ¿Lo ve Bea? (sondeo de parcelas cada 6 s)
-await bea.keyboard.down('a');
-await bea.waitForTimeout(4000);
-await bea.keyboard.up('a');
-await bea.waitForTimeout(7000);
+await bea.evaluate(() => window.__mundo.mueve(-2 * 48 + 24, 48 - 20));
+await bea.waitForTimeout(7500);
 await bea.screenshot({ path: path.join(OUT, 'm5-bea-ve-la-casa.png') });
 
-const r = await ana.evaluate(async () => (await fetch('/api/mundo?px0=-1&py0=0&px1=-1&py1=0')).json());
-console.log('servidor parcela -1/0:', JSON.stringify(r.parcelas[0]));
+// el guardado va con retardo: se pregunta hasta tres veces
+let guardada = null;
+for (let i = 0; i < 3 && !guardada; i++) {
+  const r = await ana.evaluate(async () => (await fetch('/api/mundo?px0=-2&py0=1&px1=-2&py1=1', { cache: 'no-store' })).json());
+  guardada = r.parcelas?.find((p) => p.k === '-2/1' && p.d?.length) || null;
+  if (!guardada) await ana.waitForTimeout(1500);
+}
+console.log('servidor parcela -2/1:', guardada ? guardada.d.length + ' piezas, dueño ' + guardada.o : 'NO GUARDADA');
 console.log('errores:', errores.length ? errores : 'ninguno');
 await browser.close();
