@@ -28,6 +28,13 @@ async function abre(nombre, color, q = '') {
   return page;
 }
 
+// Los botones se pulsan por DOM: con dos pestañas y render por software, la
+// comprobación de «visible y estable» de Playwright se queda sin frames.
+const pulsa = async (pg, sel) => {
+  await pg.waitForSelector(sel, { state: 'attached', timeout: 20000 });
+  await pg.$eval(sel, (b) => b.click());
+};
+
 const ana = await abre('Ana', 1);
 await ana.waitForTimeout(800);
 await ana.screenshot({ path: path.join(OUT, 'm1-llegada.png') });
@@ -57,30 +64,38 @@ console.log('teclado: x', antes.x.toFixed(1), '→', despues.x.toFixed(1), despu
 // con render por software (CI) un paseo de 100 m tarda lo que tarde.
 await ana.evaluate(() => window.__mundo.mueve(-2 * 48 + 24, 48 + 12));
 await ana.waitForTimeout(2500);
-const accion = (await ana.textContent('.acciones').catch(() => '')) || '';
-console.log('acciones de Ana en el solar:', accion.trim());
-await ana.click('.acciones .btn-principal');
-await ana.waitForTimeout(600);
+// se espera al botón CONCRETO: la parcela tarda un sondeo en saberse libre,
+// y tras reclamar, «Construir» tarda un frame en pintarse
+const reclamar = '.acciones .btn-principal:has-text("Reclamar")';
+await ana.waitForSelector(reclamar, { state: 'attached', timeout: 20000 });
+console.log('acciones de Ana en el solar:', (await ana.textContent('.acciones')).trim());
+await pulsa(ana, reclamar);
+const construir = '.acciones .btn-principal:has-text("Construir")';
+await ana.waitForSelector(construir, { state: 'attached', timeout: 20000 });
 console.log('toast:', (await ana.textContent('.toast')).trim());
-await ana.click('.acciones .btn-principal'); // Construir
-await ana.waitForSelector('.paleta');
-await ana.click('.paleta button[aria-label="Casa"]');
-await ana.click('.paleta .colores .color >> nth=5');
+await pulsa(ana, construir);
+await ana.waitForSelector('.paleta', { state: 'attached' });
+await pulsa(ana, '.paleta button[aria-label="Casa"]');
+await pulsa(ana, '.paleta .colores .color >> nth=5');
 await ana.mouse.click(500, 250);
-await ana.click('.paleta button[aria-label="Árbol"]');
+await pulsa(ana, '.paleta button[aria-label="Árbol"]');
 await ana.mouse.click(300, 380);
 await ana.mouse.click(700, 380);
-await ana.click('.paleta button[aria-label="Valla"]');
-await ana.mouse.click(400, 470);
-await ana.mouse.click(600, 470);
-await ana.click('.paleta button[aria-label="Bandera"]');
-await ana.mouse.click(500, 470);
-await ana.click('.paleta button[aria-label="Borrar"]');
-await ana.mouse.click(700, 380);
+// (los toques van por encima de y=420: más abajo está la paleta)
+await pulsa(ana, '.paleta button[aria-label="Valla"]');
+await ana.mouse.click(400, 300);
+await ana.mouse.click(600, 300);
+await pulsa(ana, '.paleta button[aria-label="Bandera"]');
+await ana.mouse.click(560, 340);
+// la recién colocada queda seleccionada: se empuja, se gira y se borra
+await pulsa(ana, '.paleta button[aria-label="Mover hacia delante"]');
+await pulsa(ana, '.paleta button[title="Gira la pieza"]');
+console.log('tras mover y girar:', (await ana.textContent('.deco-cab')).trim());
+await pulsa(ana, '.paleta button[aria-label="Borrar pieza"]');
 console.log('cabecera obra:', (await ana.textContent('.deco-cab')).trim());
 await ana.waitForTimeout(1500);
 await ana.screenshot({ path: path.join(OUT, 'm4-ana-construye.png') });
-await ana.click('.paleta .btn-principal'); // Listo
+await pulsa(ana, '.paleta .btn-principal'); // Listo
 await ana.waitForTimeout(500);
 
 // ¿Lo ve Bea? (sondeo de parcelas cada 6 s)
@@ -96,5 +111,31 @@ for (let i = 0; i < 3 && !guardada; i++) {
   if (!guardada) await ana.waitForTimeout(1500);
 }
 console.log('servidor parcela -2/1:', guardada ? guardada.d.length + ' piezas, dueño ' + guardada.o : 'NO GUARDADA');
+// Móvil: con pantalla táctil sale el joystick, y arrastrarlo mueve el avatar.
+// Las otras dos pestañas se cierran antes: tres mundos con sombras a la vez
+// dejan sin frames al render por software.
+await ana.context().close();
+await bea.context().close();
+const movil = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+const cid = await movil.newPage();
+cid.on('pageerror', (e) => errores.push('Cid: ' + e.message));
+await cid.goto(URL + '/', { waitUntil: 'domcontentloaded' });
+await cid.waitForFunction(() => window.__mundoListo === true, { timeout: 60000 });
+await cid.$eval('.presenta input', (i) => (i.value = 'Cid'));
+await pulsa(cid, '.presenta button[type=submit]');
+await cid.waitForSelector('.joy', { timeout: 15000 });
+const joy = await cid.$('.joy');
+const jb = await joy.boundingBox();
+const jc = { x: jb.x + jb.width / 2, y: jb.y + jb.height / 2 };
+const p0 = await cid.evaluate(() => window.__mundo.pos());
+await cid.mouse.move(jc.x, jc.y);
+await cid.mouse.down();
+await cid.mouse.move(jc.x, jc.y - 45, { steps: 5 });
+await cid.waitForTimeout(2000);
+await cid.mouse.up();
+const p1 = await cid.evaluate(() => window.__mundo.pos());
+console.log('joystick móvil: y', p0.y.toFixed(1), '→', p1.y.toFixed(1), p1.y > p0.y + 1 ? 'anda' : 'NO ANDA');
+await cid.screenshot({ path: path.join(OUT, 'm6-movil-joystick.png') });
+
 console.log('errores:', errores.length ? errores : 'ninguno');
 await browser.close();

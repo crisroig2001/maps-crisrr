@@ -250,6 +250,20 @@ body {
   overflow-x: auto;
   scrollbar-width: none;
 }
+/* las piezas, en dos filas que se desplazan a lo ancho */
+.paleta .fila.piezas {
+  display: grid;
+  grid-auto-flow: column;
+  grid-template-rows: repeat(2, auto);
+  gap: 3px 4px;
+}
+.paleta .herr .mini { width: 32px; height: 32px; overflow: hidden; display: block; border-radius: 6px; }
+.paleta .herr .mini img { width: 32px; height: 32px; object-fit: contain; display: block; }
+/* los previews del Nature Kit traen mucho aire: se amplían al centro */
+.paleta .herr .mini.zoom img { width: 64px; height: 64px; margin: -16px; }
+.paleta .pista { font-size: 12px; font-weight: 800; color: var(--accent); white-space: nowrap; }
+.paleta .cruz { display: flex; gap: 4px; }
+.paleta .cruz .btn-sec { padding: 10px 12px; }
 .paleta .fila::-webkit-scrollbar { display: none; }
 .paleta .fila.abajo { align-items: center; gap: 8px; padding: 2px 4px; }
 .paleta .fila.abajo .colores { flex: 1; min-width: 0; }
@@ -321,4 +335,27 @@ body {
   .btn-principal { padding: 13px 16px; font-size: 14px; }
   .paleta .fila.abajo { flex-wrap: wrap; }
   .paleta .fila.abajo .colores { flex-basis: 100%; }
+}
+
+/* joystick táctil */
+.joy {
+  left: 18px;
+  bottom: calc(18px + env(safe-area-inset-bottom));
+  width: 120px;
+  height: 120px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.35);
+  border: 2px solid rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(6px);
+  touch-action: none;
+  display: grid;
+  place-items: center;
+}
+.joy-knob {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: var(--card);
+  box-shadow: 0 6px 18px rgba(43, 52, 64, 0.25);
+  pointer-events: none;
 }
