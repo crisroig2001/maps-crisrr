@@ -1,84 +1,61 @@
-# maps-crisrr — mapa 3D colaborativo estilo cartoon
+# crisrr world — un mundo que se construye entre todos
 
 **https://maps.crisrr.com**
 
-Un mapa 3D del mundo estilo cartoon (tipo Apple/Google Maps) que se va
-«coloreando» a medida que los usuarios escanean zonas. Todo el renderizado
-ocurre **en la GPU del dispositivo**: el servidor no renderiza nada.
+Un mundo 3D estilo cartoon, sin mapa real: un suelo infinito dividido en
+parcelas por el que cada persona anda con su avatar, reclama una parcela y
+construye en ella su casa, su jardín o lo que quiera. Lo que construye uno lo
+ven todos. Todo el renderizado ocurre **en la GPU del dispositivo**: el
+servidor solo guarda qué hay en cada parcela y quién anda cerca.
 
 ## Cómo funciona
 
-- **Base del mundo**: teselas vectoriales de [OpenFreeMap](https://openfreemap.org)
-  (datos © OpenStreetMap contributors), z14. El navegador las descodifica
-  (`pbf` + `@mapbox/vector-tile`), dibuja el suelo (calles, parques, agua, usos
-  del suelo) en un canvas por tesela y **extruye los edificios** con Three.js —
-  colores planos con el sombreado por cara horneado en los vértices (sin luces:
-  rapidísimo en móvil).
-- **La luz**: hay un sol, con una dirección (`SOL_AZ`), y la comparten las dos
-  cosas que dependen de él. Las fachadas hornean en el color de vértice el
-  producto **con signo** de su normal por esa dirección, así que la cara que da
-  al sol y la que le da la espalda salen distintas — antes ese producto llevaba
-  un `Math.abs` y las dos salían igual de claras: había contraste entre
-  orientaciones, pero no sol, y la ciudad se leía plana. El arranque de la
-  fachada lo oscurece un `aoMap` de un píxel de ancho que **reaprovecha la UV de
-  las ventanas** (v = altura en plantas) sin repetir: se recorta a los 3 m, así
-  que es una sombra a ras de acera y no un degradado estirado hasta el remate.
-  Cero vértices y cero draw calls de más.
-- **Sombras de contacto**: la huella de cada edificio, corrida en sentido
-  contrario al sol y alargada según su altura, va pintada en el canvas del
-  suelo. Es lo que asienta los edificios en el mundo en vez de dejarlos como
-  pegatinas. Tampoco cuesta geometría: ~23 ms por tesela, frente a los ~8 s que
-  cuesta construir sus edificios.
-- **Tejados a cuatro aguas**: OpenMapTiles no dice la forma del tejado (la capa
-  `building` solo trae `render_height`, `render_min_height` y `colour`), así que
-  se deduce de la huella: se mete el contorno hacia dentro con la misma función
-  que separa los edificios pegados y se levanta, lo que da faldones en cualquier
-  forma y no solo en rectángulos. El alero **baja** en vez de subir la cumbrera,
-  para que el edificio conserve la altura que dice el dato. Solo en edificios
-  pequeños y bajos: en el Eixample las azoteas planas son las de verdad. Y con
-  un suelo de 40 m², porque por debajo de eso la huella son 3-4 px y el faldón
-  no se ve — pero eran el 58% de los candidatos y la mitad de las aristas
-  (+9,8 MB de geometría en vez de +27, medido en las 9 teselas de la vista de
-  partida).
-- **Rótulos**: topónimos (ciudad, distrito, barrio) y nombres de calle salen de
-  las capas `place` y `transportation_name`, que ya venían dentro del `.pbf` y
-  antes se descartaban — así que **no cuestan ni un byte de red**. No se pintan
-  en la textura del suelo (borrosos de cerca, del revés al girar): son `<div>`
-  proyectados desde el 3D en cada frame, nítidos a cualquier zoom y con cero
-  draw calls. Los de calle se deslizan por la vía para quedarse cerca de lo que
-  miras, y se descartan por colisión para que el mapa no se sature.
-- **Horizonte**: el bloque de detalle son 3×3 teselas z14, así que los edificios
-  acaban a 2,8 km del centro. Más allá va un **anillo de contexto** de teselas
-  z11 pintadas solo como suelo: una z11 cubre 8×8 teselas z14 y pesa 119 KB
-  contra los ~13 MB que costarían esas 64. Con eso el mundo con suelo pasa de
-  2,8 a 9 km por **+9% de descarga**, y la niebla —recalculada por frame— ya no
-  tapa un corte sino que funde el escalón de detalle con el cielo. El cielo va en degradado, como
-  textura **equirectangular** y no como imagen de fondo plana, para que quede
-  anclado al mundo y el horizonte no resbale con la pantalla al inclinar la
-  cámara. Su color de abajo y el de la niebla son el mismo a propósito: si no,
-  aparece una costura justo donde el mapa se acaba, que es lo que la niebla
-  estaba tapando.
-- **Zonas escaneadas**: celdas z18 (115 m, ~una manzana) compartidas entre todos los usuarios
-  (`/api/scans`, almacén JSON en `DATA_DIR`, volumen persistente en Coolify).
-  Una celda escaneada pinta sus edificios a color pastel; el resto queda en gris
-  «pendiente». El botón de escanear de momento **simula** el escaneo (la captura
-  con cámara es la siguiente fase).
-- **Un mundo que se construye entre todos**: la manzana que escaneas es
-  **tuya** para decorar. «Decorar» abre una paleta (árbol, farola, banco,
-  fuente, bandera y borrar) y cada toque en el suelo de la manzana marcada
-  coloca un adorno, que ve todo el mundo. Un adorno es `{t, x, y}`: tipo y
-  posición como fracción de la celda z18 (30 bytes, sin depender de la
-  latitud ni del origen de la escena); van en la misma respuesta de
-  `/api/scans` (campo `d`) y se guardan por `POST /api/adornos`, con tope de
-  40 por manzana. Se pintan como **cinco `InstancedMesh`** (uno por tipo) que
-  comparten el material de los tejados: cinco draw calls sean 3 adornos o
-  3.000, con la misma niebla y el mismo sol horneado en el vértice que el
-  resto. La identidad es un id anónimo por dispositivo en `localStorage`
-  (`src/lib/jugador.js`): quien escanea una celda se la queda, una celda sin
-  dueño (la semilla, o escaneada por un cliente viejo) se la queda el primero
-  que la decora, y nadie decora la de otro. **No es una cuenta** y se puede
-  falsificar: las cuentas son el punto 3 de la hoja de ruta, esto es la
-  mecánica de juego que las necesita.
+- **El mundo**: una rejilla infinita de parcelas de 48 m sobre un suelo plano
+  (`src/lib/parcela.js`). Coordenadas en metros, x al este e y al norte. La
+  parcela 0/0 es la **plaza de llegada**, pública, donde aparece quien entra;
+  la 1/0 es una **casa de muestra** para que se vea qué se puede hacer.
+  Las dos son del «mundo»: nadie las reclama ni las cambia.
+- **El avatar**: cuerpo del color elegido, cabeza, pelo y ojos; low-poly con
+  el sol horneado en el color de vértice, como todo lo demás. Anda **tocando
+  el suelo** (o con WASD / flechas, relativo a la cámara) y la cámara, en
+  tercera persona, va con él: arrastrar gira, pellizcar acerca.
+- **Presencia**: cada 1,5 s el cliente manda su posición a `POST
+  /api/presencia` y recibe a quien esté a menos de 400 m. Los demás se
+  interpolan hacia su última posición conocida, así que se les ve andar y no
+  saltar. Es presencia **por sondeo**: sin infraestructura nueva (el servidor
+  es Next.js standalone) y suficiente para un mundo con decenas de personas.
+  WebSockets es el paso siguiente si se llena.
+- **Parcelas**: ponte en un solar libre y pulsa «Reclamar». Una por jugador,
+  de momento (`MAX_PARCELAS_POR_JUGADOR`): el mundo se llena de vecinos, no
+  de un solo constructor. Se puede abandonar, y vuelve a ser un solar.
+  Cada parcela reclamada lleva un marco en el suelo del color de su dueño
+  (derivado de su id, sin preguntarle a nadie); la tuya, en azul.
+- **Construir**: en tu parcela, «Construir» abre la paleta: casa, torre,
+  árbol, pino, arbusto, flores, camino, valla, farola, banco, fuente y
+  bandera, más borrar. Cada toque en el suelo coloca una pieza; las que
+  tienen tinte (casa, torre, flores, bandera) van del color elegido; «Girar»
+  gira la última colocada en cuartos de vuelta; camino y valla se pegan a una
+  rejilla de 4 m para que casen entre sí. Tope de 150 piezas por parcela.
+  Una pieza guardada es `{t, x, y, r, c}`: tipo, metros dentro de la parcela
+  (1 decimal), giro y color — 40 bytes que no dependen de dónde esté la
+  parcela.
+- **Render de las piezas**: cada tipo son dos geometrías, la que se tiñe y la
+  fija, y cada una un **`InstancedMesh`**: un draw call por tipo y parte sean
+  3 piezas o 3.000. El tinte va por instancia (`instanceColor`) multiplicado
+  al color de vértice, que en las partes teñibles es solo la luz sobre
+  blanco. Al cambiar cualquier parcela se rehacen todas las instancias del
+  mundo cargado (13×13 parcelas): son cientos o pocos miles, y es más barato
+  que llevar la cuenta de qué instancia era de qué parcela.
+- **Datos**: `GET /api/mundo` devuelve las parcelas de la caja de índices que
+  el cliente tiene a la vista y, con `desde`, solo las cambiadas desde el
+  sondeo anterior (delta, con `ETag`). `POST /api/parcela` reclama, guarda
+  las piezas (entero, con retardo de 900 ms: un POST por ráfaga de toques) o
+  abandona. Almacén JSON en `DATA_DIR` (`src/lib/mundo.js`), escritura
+  atómica, volumen persistente en Coolify. Cuando crezca, SQLite.
+- **Identidad**: un id anónimo por dispositivo, con nombre y color, en
+  `localStorage` (`src/lib/jugador.js`). **No es una cuenta** y se puede
+  falsificar; las cuentas son el siguiente paso, esto es la mecánica de juego
+  que las necesita.
 - **Despliegue**: Dockerfile multi-stage → Next.js `standalone`, en Coolify.
 
 ## Desarrollo
@@ -88,10 +65,9 @@ npm install
 npm run dev
 ```
 
-Parámetros de URL: `/?lat=41.3874&lng=2.1686`, y opcionalmente la cámara:
-`&d=630&pol=47&az=38` (distancia en metros, inclinación y rumbo en grados;
-0° de inclinación = cenital). Sin esos tres no cambia nada. La distancia la
-recorta `maxDistance`, unos 3.850 m a latitud de Barcelona.
+Parámetros de URL para reproducir una vista: `/?x=24&y=12&d=26&pol=58&az=180`
+(posición del avatar en metros, distancia de la cámara, inclinación y rumbo
+en grados). Sin ellos, apareces donde dejaste el avatar o en la plaza.
 
 ## Banco visual
 
@@ -99,40 +75,43 @@ Un cambio en el visor se juzga mirando capturas, no desplegando a producción.
 
 ```bash
 npx playwright install chromium   # una vez
-npm run teselas                   # cachea en .teselas/ lo que hace falta (~17 MB)
-npm run dev                       # en otra terminal
+npm run dev                       # en otra terminal, con el almacén de semilla
 npm run vistas                    # captura y compara
 ```
 
-Deja `capturas/index.html`: cada vista con su referencia al lado, el porcentaje
-de píxeles que han cambiado y, si han cambiado, una imagen que los señala en
-magenta. Las teselas salen de disco, así que dos ejecuciones seguidas dan
-exactamente lo mismo — un `igual` significa que de verdad no has tocado nada.
+Deja `capturas/index.html`: cada vista con su referencia al lado, el
+porcentaje de píxeles que han cambiado y, si han cambiado, una imagen que los
+señala en magenta. El banco entra ya presentado (perfil fijo «Banco») y mira
+la plaza y la casa de muestra, así que un `.data/` con parcelas de pruebas
+encima cambia las capturas: bórralo y reinicia `npm run dev` antes.
 
 ```bash
 npm run vistas -- --base                  # acepta lo capturado como referencia
-npm run vistas -- --solo ras-de-tejados   # una sola vista (la hoja no se vacía)
+npm run vistas -- --solo casa-de-muestra  # una sola vista
 ```
 
-Las vistas están en `scripts/vistas.config.mjs`. **Cada una existe porque un
-fallo real se vio ahí** — `ras-de-tejados` es donde los nombres de calle
-flotaban sobre los tejados, `lejos-oblicuo` donde el mundo se cortaba en recto,
-`pie-de-fachada` donde el oscurecido del pie se estiraba por toda la pared, y
-`barrio-de-casas` (Gràcia) porque los tejados a cuatro aguas solo salen en
-edificios pequeños y en el Eixample no se aprecian.
-Si aparece un fallo nuevo, añade la vista que lo enseña antes de arreglarlo.
+`npm run prueba` es la otra mitad: dos jugadores de verdad en dos pestañas
+(Ana y Bea) que se presentan, andan, se ven, reclaman un solar, construyen y
+comprueban que el otro lo ve y que el servidor lo guardó. Deja capturas de
+cada paso en `OUT` (por defecto, el directorio actual).
 
-Dos detalles del entorno: el banco necesita `npm run dev`, porque `next start`
-no sirve bien este proyecto (`next.config.js` usa `output: 'standalone'`); y si
-ya tienes un Chromium instalado, `CHROMIUM_BIN=/ruta/a/chrome npm run vistas`
-evita que Playwright se baje otro.
+Las vistas están en `scripts/vistas.config.mjs`. Si aparece un fallo nuevo,
+añade la vista que lo enseña antes de arreglarlo. Si ya tienes un Chromium
+instalado, `CHROMIUM_BIN=/ruta/a/chrome npm run vistas` evita que Playwright
+se baje otro.
 
 ## Hoja de ruta
 
-1. ✅ Visor 3D cartoon con datos reales + escaneos compartidos (simulados)
-2. Captura real con la cámara (vídeo guiado → reconstrucción → detalles por celda)
-3. ✅ Mundo construido por los usuarios: la manzana escaneada se decora (prototipo, id anónimo)
-4. Cuentas de usuario (la propiedad de las manzanas de verdad), moderación, LOD/optimización de teselas
+1. ✅ Mundo, avatar, presencia por sondeo, parcelas y construcción con piezas
+2. Cuentas de usuario (la propiedad de las parcelas de verdad), moderación
+3. WebSockets para la presencia, chat entre avatares
+4. Más piezas, piezas apilables (plantas), interiores
 
-El detalle y el orden real están en los issues; el índice es el
-[#10](https://github.com/crisroig2001/maps-crisrr/issues/10).
+## Historia
+
+Este repositorio empezó como un mapa 3D del mundo real (OpenStreetMap) que se
+coloreaba escaneando zonas con la cámara. El visor de teselas, los escaneos y
+su banco visual están en el historial de git hasta el commit «La manzana que
+escaneas es tuya»; de ahí se conserva la forma de dibujar (Three.js, low-poly
+con el sol horneado en el vértice, sin luces) y la de trabajar (banco visual,
+almacén JSON con deltas).

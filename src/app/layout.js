@@ -4,9 +4,9 @@ import './globals.css';
 const nunito = Nunito({ subsets: ['latin'], weight: ['600', '700', '800'] });
 
 export const metadata = {
-  title: 'crisrr maps — mapa 3D colaborativo',
+  title: 'crisrr world — un mundo que se construye entre todos',
   description:
-    'Un mapa 3D del mundo estilo cartoon que se colorea con los escaneos de la gente. Renderizado en tu GPU con datos de OpenStreetMap.',
+    'Un mundo 3D estilo cartoon donde cada persona anda con su avatar, reclama una parcela y construye su casa. Renderizado en tu GPU.',
   manifest: '/manifest.webmanifest',
   icons: {
     icon: [
@@ -18,7 +18,7 @@ export const metadata = {
   appleWebApp: {
     capable: true,
     statusBarStyle: 'default',
-    title: 'crisrr maps',
+    title: 'crisrr world',
   },
 };
 
