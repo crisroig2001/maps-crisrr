@@ -25,22 +25,38 @@ servidor solo guarda qué hay en cada parcela y quién anda cerca.
   ríos (la misma función en JS y en GLSL) y el agua es un plano a su nivel
   que solo existe en la banda del río; el avatar no entra en el agua, salvo
   por el puente.
-- **El look, tarde de verano**, con la misma receta que las demos de
-  referencia: un **sol** (luz direccional cálida, baja y del suroeste, con
-  sombras proyectadas de 2048 px que siguen al avatar), un **cielo** (luz
-  hemisférica fría desde arriba y verdosa rebotada desde abajo) y materiales
-  **toon con rampa**: la luz cae a escalones, con un corte duro al entrar en
-  la sombra y un degradado suave hacia la luz plena, y como la luz es dorada
-  y el cielo azul, lo iluminado sale cálido y la sombra azulada sin pintar
-  nada a mano. Las formas son redondas (copas, arbustos, nubes y cabezas son
-  esferas con normales suaves), hay **sombras de nubes** cruzando el suelo
-  (una textura de manchas que se desplaza con el tiempo), **hierba** que se
-  mece (vertex shader, instanciada a rodales en una rejilla fija del mundo
-  alrededor del avatar), copas que se mecen, nubes en el cielo, tone mapping
-  ACES y una viñeta cálida en CSS. El **relieve** son colinas suaves: una
-  suma de senos escrita dos veces, en JS (para colocar piezas y avatares) y
-  en GLSL (para desplazar suelo, marcos y plazas en el vertex shader y sacar
-  su normal), y que nunca da más de medio metro de desnivel en una parcela.
+- **El look, tarde de verano**, imitando la receta de
+  [Summer Afternoon](https://summer-afternoon.vlucendo.com/): un **sol** (luz
+  direccional cálida, baja y del suroeste, con sombras proyectadas de 2048 px
+  que siguen al avatar), un **cielo** (luz hemisférica fría desde arriba y
+  verdosa rebotada desde abajo) y materiales **toon con rampa de dos tonos**:
+  un corte duro justo donde la cara deja de mirar al sol y un tercer escalón
+  apenas más claro en lo que le da de frente; como la luz es dorada y el
+  cielo azul, lo iluminado sale cálido y la sombra azulada sin pintar nada a
+  mano. El **cielo** es una cúpula pintada en el shader, como la de la
+  referencia: azul intenso arriba, celeste pálido en el horizonte, una banda
+  de **cúmulos** (textura de una franja, pintada al arrancar) que gira muy
+  despacio y una calima blanquecina a ras de horizonte. La **niebla** no tiñe
+  de un color: con la distancia todo pierde saturación y se aclara (se mezcla
+  en HSV), así el verde lejano sigue siendo verde, solo más pálido; y antes
+  de ella un revelado ligero (algo más de saturación y contraste, lo que la
+  referencia hace con una LUT). El **verde del suelo** lo calcula el shader
+  con ruido a varias escalas (dos verdes a manchas grandes, calvas más claras
+  y matas más oscuras); la textura solo pone la trama de parcelas. Los verdes
+  menta del Nature Kit se llevan al verde hierba, para que el follaje sea de
+  la familia del suelo. Las formas son redondas (copas, arbustos, nubes y
+  cabezas son esferas con normales suaves), hay **sombras de nubes** cruzando
+  el suelo (dos capas de manchas que van cada una por su lado: solo hay
+  sombra donde coinciden), **hierba** que se mece y **se aparta del avatar**
+  al pasar (vertex shader, instanciada a rodales en una rejilla fija del
+  mundo alrededor del avatar), copas que se mecen, nubes en el cielo, una
+  **bandada de pájaros** aleteando en círculos por encima, tone mapping ACES
+  y una viñeta cálida en CSS. La cámara arranca cerca y baja, para que
+  siempre se vea el horizonte con sus nubes. El **relieve** son colinas
+  suaves: una suma de senos escrita dos veces, en JS (para colocar piezas y
+  avatares) y en GLSL (para desplazar suelo, marcos y plazas en el vertex
+  shader y sacar su normal), y que nunca da más de medio metro de desnivel
+  en una parcela.
 - **El avatar**: cuerpo redondo del color elegido, cabeza, pelo y ojos. Anda
   **tocando el suelo**, con el **joystick** de abajo a la izquierda (solo en
   pantallas táctiles) o con WASD / flechas, todo relativo a la cámara, que va

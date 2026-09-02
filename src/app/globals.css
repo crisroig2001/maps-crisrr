@@ -1,6 +1,6 @@
 /* crisrr world — un solo look (día, cartoon); todo pintado explícito */
 :root {
-  --sky: #fbe7c8;   /* el cálido del horizonte del cielo 3D: es lo que se ve antes de que WebGL pinte */
+  --sky: #caf0fe;   /* el celeste del horizonte del cielo 3D: es lo que se ve antes de que WebGL pinte */
   --ink: #2b3440;
   --ink-2: #5c6875;
   --card: rgba(255, 255, 255, 0.9);
