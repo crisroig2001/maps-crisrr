@@ -20,11 +20,13 @@ async function abre(nombre, color, q = '') {
   });
   await page.goto(URL + '/' + q, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => window.__mundoListo === true, { timeout: 60000 });
-  // hoja de bienvenida
-  await page.fill('.presenta input', nombre);
-  await page.click(`.presenta .color >> nth=${color}`);
-  await page.click('.presenta button[type=submit]');
-  await page.waitForSelector('.velo', { state: 'detached' });
+  // hoja de bienvenida (por DOM: recién arrancado, el servidor compila y la
+  // página tarda en responder a la comprobación de «visible» de Playwright)
+  await page.waitForSelector('.presenta input', { state: 'attached', timeout: 60000 });
+  await page.$eval('.presenta input', (i, v) => (i.value = v), nombre);
+  await page.$eval(`.presenta .color:nth-child(${color + 1})`, (b) => b.click());
+  await page.$eval('.presenta button[type=submit]', (b) => b.click());
+  await page.waitForSelector('.velo', { state: 'detached', timeout: 30000 });
   return page;
 }
 
@@ -153,7 +155,7 @@ const p1 = await cid.evaluate(() => window.__mundo.pos());
 console.log('joystick móvil: y', p0.y.toFixed(1), '→', p1.y.toFixed(1), p1.y > p0.y + 1 ? 'anda' : 'NO ANDA');
 await cid.screenshot({ path: path.join(OUT, 'm6-movil-joystick.png') });
 // y en obras: la hoja de piezas plegada, y abierta
-await cid.evaluate(() => window.__mundo.mueve(-3 * 48 + 24, -2 * 48 + 12));
+await cid.evaluate(() => window.__mundo.mueve(-5 * 48 + 24, -2 * 48 + 12));
 await pulsa(cid, '.acciones .btn-principal:has-text("Reclamar")');
 await pulsa(cid, '.acciones .btn-principal:has-text("Construir")');
 await cid.waitForSelector('.panel.plegado', { state: 'attached', timeout: 15000 });

@@ -18,6 +18,8 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { PARCELA_M, parcelaDe, claveParcela, parseParcela, centroParcela } from '../lib/parcela';
 import { PIEZAS, CATEGORIAS, COLORES, MAX_PIEZAS, MAX_NOMBRE } from '../lib/piezas';
 import { perfil, guardaPerfil } from '../lib/jugador';
+import { tipoParcela, conSuelo, cauce, distRio, rioEsteX as rioEsteXEnEscena, rioSurY as rioSurYEnEscena, GLSL_CAUCE, RIO_ANCHO, NIVEL_AGUA, LECHO, BANDA_AGUA } from '../lib/paisaje';
+const LECHO_G = LECHO.toFixed(1);
 
 const L = PARCELA_M;
 
@@ -73,26 +75,29 @@ const ONDAS = [
   [0.7, 0.009, -0.027, 1.3],
   [0.35, 0.047, 0.041, 2.1],
 ];
+// Las colinas van 1,2 m por encima de cero: así ningún valle baja del nivel
+// del agua y los ríos son los únicos sitios con agua. Junto al río, el
+// terreno se mezcla con el lecho según el factor de cauce.
 function alturaEn(x, y) {
-  let h = 0;
+  let h = 1.2;
   for (const [a, kx, ky, f] of ONDAS) h += a * Math.sin(x * kx + y * ky + f);
-  return h;
+  const c = cauce(x, y);
+  return c > 0 ? h + (LECHO - h) * c : h;
 }
 // p = xz del mundo (z = -norte). dAltura da la pendiente (dh/dx, dh/dz) para
 // sacar la normal del terreno en el shader, que es lo que la luz necesita.
-const GLSL_ALTURA = `
+const GLSL_ALTURA = GLSL_CAUCE + `
 float altura(vec2 p) {
   float y = -p.y;
-  return 1.0 * sin(p.x * 0.021 + y * 0.013) + 0.7 * sin(p.x * 0.009 - y * 0.027 + 1.3) + 0.35 * sin(p.x * 0.047 + y * 0.041 + 2.1);
+  float h = 1.2 + 1.0 * sin(p.x * 0.021 + y * 0.013) + 0.7 * sin(p.x * 0.009 - y * 0.027 + 1.3) + 0.35 * sin(p.x * 0.047 + y * 0.041 + 2.1);
+  return mix(h, ${LECHO_G}, cauce(p.x, y));
 }
+// pendiente por diferencias finitas (con el cauce ya no sale analítica)
 vec2 dAltura(vec2 p) {
-  float y = -p.y;
-  float c1 = cos(p.x * 0.021 + y * 0.013);
-  float c2 = cos(p.x * 0.009 - y * 0.027 + 1.3);
-  float c3 = cos(p.x * 0.047 + y * 0.041 + 2.1);
-  float dx = 1.0 * 0.021 * c1 + 0.7 * 0.009 * c2 + 0.35 * 0.047 * c3;
-  float dy = 1.0 * 0.013 * c1 + 0.7 * -0.027 * c2 + 0.35 * 0.041 * c3;
-  return vec2(dx, -dy);
+  float e = 0.6;
+  float dx = (altura(p + vec2(e, 0.0)) - altura(p - vec2(e, 0.0))) / (2.0 * e);
+  float dz = (altura(p + vec2(0.0, e)) - altura(p - vec2(0.0, e))) / (2.0 * e);
+  return vec2(dx, dz);
 }`;
 const uTiempo = { value: 0 };
 const uNubes = { value: null }; // textura de sombras de nubes (se crea en el efecto)
@@ -143,7 +148,7 @@ function conAltura(mat, { tinta = false, viento = false, normales = false, nubes
       .replace(
         '#include <color_fragment>',
         `#include <color_fragment>
-        ${tinta ? 'diffuseColor.rgb *= mix(vec3(0.86, 0.93, 0.8), vec3(1.06, 1.04, 0.92), clamp((vAltura + 2.0) / 4.0, 0.0, 1.0));' : ''}
+        ${tinta ? 'diffuseColor.rgb *= mix(vec3(0.86, 0.93, 0.8), vec3(1.06, 1.04, 0.92), clamp((vAltura - 0.2) / 3.0, 0.0, 1.0)); diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.78, 0.72, 0.55), clamp((-0.2 - vAltura) / 2.0, 0.0, 1.0));' : ''}
         ${nubes ? 'diffuseColor.rgb *= mix(0.74, 1.0, texture2D(tNubes, vMundoXZ / 420.0 + vec2(tiempo * 0.006, tiempo * 0.0025)).r);' : ''}`
       );
   };
@@ -609,6 +614,33 @@ export default function Mundo() {
     suelo.receiveShadow = true;
     scene.add(suelo);
 
+    // --- el agua de los ríos: un plano a NIVEL_AGUA que sigue al avatar ---
+    // El terreno se hunde bajo el río (cauce), así que el plano solo se ve
+    // donde el suelo queda por debajo: en los ríos. Unas olas pequeñas en el
+    // vertex shader para que no sea una lámina muerta.
+    const matAgua = new THREE.MeshToonMaterial({ color: 0x6db9e6, gradientMap: rampa, transparent: true, opacity: 0.86 });
+    matAgua.onBeforeCompile = (sh) => {
+      sh.uniforms.tiempo = uTiempo;
+      sh.vertexShader = sh.vertexShader
+        .replace('#include <common>', '#include <common>\nuniform float tiempo;\n' + GLSL_CAUCE)
+        .replace(
+          '#include <begin_vertex>',
+          `#include <begin_vertex>
+          vec4 wpa = modelMatrix * vec4(transformed, 1.0);
+          transformed.y += sin(tiempo * 1.4 + wpa.x * 0.35 + wpa.z * 0.2) * 0.07 + sin(tiempo * 0.9 - wpa.z * 0.5) * 0.05;
+          // fuera de la banda del río, el agua se hunde: no hay lagos en los valles
+          if (distRioG(wpa.x, -wpa.z) > ${BANDA_AGUA.toFixed(1)}) transformed.y -= 60.0;`
+        );
+    };
+    matAgua.customProgramCacheKey = () => 'agua';
+    const geoAgua = new THREE.PlaneGeometry(SUELO_M, SUELO_M, 96, 96);
+    geoAgua.rotateX(-Math.PI / 2);
+    const agua = new THREE.Mesh(geoAgua, matAgua);
+    agua.position.y = NIVEL_AGUA;
+    agua.frustumCulled = false;
+    agua.receiveShadow = true;
+    scene.add(agua);
+
     // --- cámara: tercera persona alrededor del avatar ---
     const camera = new THREE.PerspectiveCamera(48, 1, 0.5, 3000);
     const controls = new MapControls(camera, canvas);
@@ -930,7 +962,7 @@ export default function Mundo() {
         const by = p.py * L;
         const cen = centroParcela(p.px, p.py);
         if (pc.o === 'mundo') {
-          if (nPlazas < MAX_PARC) {
+          if (conSuelo(tipoParcela(p.px, p.py)) && nPlazas < MAX_PARC) {
             mtx.makeTranslation(cen.x, 0.04, -cen.y);
             plazas.setMatrixAt(nPlazas++, mtx);
           }
@@ -1018,8 +1050,8 @@ export default function Mundo() {
           const rodal = 0.32 + 0.3 * Math.sin(wx * 0.09 + wy * 0.05) * Math.sin(wy * 0.11 - wx * 0.04);
           if (h > rodal) continue;
           const p = parcelaDe(wx, wy);
-          const pc = parcelas.get(claveParcela(p.px, p.py));
-          if (pc?.o === 'mundo') continue;
+          if (conSuelo(tipoParcela(p.px, p.py))) continue;
+          if (distRio(wx, wy).d < RIO_ANCHO + 2) continue;
           let tapada = false;
           for (const c of caminos) {
             if (Math.abs(c[0] - wx) < 2.3 && Math.abs(c[1] - wy) < 2.3) {
@@ -1489,11 +1521,13 @@ export default function Mundo() {
       if (!forzar && clave === dondeClave) return;
       dondeClave = clave;
       const pc = parcelas.get(clave);
+      const tipo = tipoParcela(p.px, p.py);
       setDonde({
         clave,
+        tipo,
         dueno: pc?.o || null,
         mia: pc?.o === jugador.id,
-        libre: !pc?.o,
+        libre: !pc?.o && tipo === 'residencial',
         n: pc?.d?.length || 0,
       });
     }
@@ -1546,7 +1580,17 @@ export default function Mundo() {
 
     // Diagnóstico y pruebas (npm run prueba): con render por software un
     // paseo de 30 m tarda lo que tarde, así que la prueba se teletransporta.
-    window.__mundo = { mueve: mueveA, pos: () => ({ x: yo.x, y: yo.y }), seleccion: () => (seleccion ? { ...seleccion.z } : null) };
+    window.__mundo = {
+      mueve: mueveA,
+      pos: () => ({ x: yo.x, y: yo.y }),
+      seleccion: () => (seleccion ? { ...seleccion.z } : null),
+      // qué piezas hay bajo un punto de pantalla (diagnóstico)
+      bajo: (sx, sy) => {
+        ndc.set((sx / vpW) * 2 - 1, -(sy / vpH) * 2 + 1);
+        rayo.setFromCamera(ndc, camera);
+        return rayo.intersectObjects(grupoPiezas.children, false).map((h) => ({ t: h.object.userData.tipo, i: h.instanceId, d: Math.round(h.distance * 10) / 10, o: origen[h.object.userData.tipo]?.[h.instanceId]?.clave }));
+      },
+    };
 
     engineRef.current = {
       construye(clave, cb) {
@@ -1665,7 +1709,11 @@ export default function Mundo() {
     function medir() {
       vpW = window.innerWidth;
       vpH = window.innerHeight;
-      renderer.setSize(vpW, vpH, false);
+      // OJO: con updateStyle=false el lienzo se queda con su tamaño en píxeles
+      // FÍSICOS como tamaño CSS (un canvas es un elemento «replaced»: inset:0
+      // no lo estira). En un móvil con densidad 3 salía el doble de grande
+      // que la pantalla: el avatar en una esquina y los toques descolocados.
+      renderer.setSize(vpW, vpH);
       camera.aspect = vpW / vpH;
       camera.updateProjectionMatrix();
     }
@@ -1738,6 +1786,17 @@ export default function Mundo() {
             yo.y = so.y + (ey / d) * r;
           }
         }
+        // ni por el río: se queda en la orilla (por el puente sí)
+        const rio = distRio(yo.x, yo.y);
+        if (!rio.puente && rio.d < RIO_ANCHO + 1) {
+          if (rio.cual === 'este') {
+            const cx = rioEsteXEnEscena(yo.y);
+            yo.x = cx + Math.sign(yo.x - cx || 1) * (RIO_ANCHO + 1);
+          } else {
+            const cy = rioSurYEnEscena(yo.x);
+            yo.y = cy + Math.sign(yo.y - cy || 1) * (RIO_ANCHO + 1);
+          }
+        }
         yo.rumbo = Math.atan2(dx, -dy); // el frente del avatar es +z (sur)
         yo.fase += dt * 11;
         // la cámara va con él
@@ -1784,6 +1843,8 @@ export default function Mundo() {
       // el suelo sigue al avatar a saltos de parcela: la trama no resbala
       suelo.position.x = Math.round(yo.x / L) * L;
       suelo.position.z = -Math.round(yo.y / L) * L;
+      agua.position.x = suelo.position.x;
+      agua.position.z = suelo.position.z;
       plantaHierba();
 
       // nubes: van con el avatar (siempre hay cielo encima) y derivan al este
@@ -1878,6 +1939,8 @@ export default function Mundo() {
       geoPierna.dispose();
       suelo.geometry.dispose();
       suelo.material.dispose();
+      geoAgua.dispose();
+      matAgua.dispose();
       texSuelo.dispose();
       texCielo.dispose();
       matFijo.dispose();
@@ -1910,6 +1973,7 @@ export default function Mundo() {
     if (!eng || !donde) return;
     const err = await eng.reclama(donde.clave);
     if (err === 'ocupada') avisa('Alguien se te ha adelantado con esta parcela');
+    else if (err === 'no_residencial') avisa('Aquí no se puede construir: busca un solar en la zona residencial, cerca de la plaza');
     else if (err === 'cupo') avisa('Ya tienes una parcela. Puedes abandonarla desde «Construir»');
     else if (err) avisa('No se pudo reclamar (¿sin conexión?)');
     else avisa('¡Parcela tuya! Pulsa «Construir» y toca el suelo para poner piezas');
@@ -1922,7 +1986,10 @@ export default function Mundo() {
       else if (ev.lleno) avisa('Tu parcela ya tiene ' + MAX_PIEZAS + ' piezas: borra alguna para poner otra');
       else if (ev.error === 'ajena') avisa('Esta parcela no es tuya: no se ha guardado');
       else if (ev.error) avisa('No se pudo guardar (¿sin conexión?)');
-      else setObra((o) => (o ? { ...o, n: typeof ev.n === 'number' ? ev.n : o.n, sel: !!ev.seleccion } : o));
+      else {
+        setObra((o) => (o ? { ...o, n: typeof ev.n === 'number' ? ev.n : o.n, sel: !!ev.seleccion } : o));
+        if (ev.seleccion && estrecho) setPanelAbierto(false); // que se vea la barra de la pieza
+      }
     });
     eng.herramienta(herr, tinte);
     setInfoOpen(false);
@@ -2042,7 +2109,7 @@ export default function Mundo() {
             <b>Anda</b> tocando el suelo, con el joystick de abajo a la izquierda (en el móvil) o con WASD / flechas. Arrastra para girar la cámara y pellizca para acercarla.
           </p>
           <p>
-            <b>Reclama una parcela</b> libre: ponte encima y pulsa «Reclamar». Es tuya para siempre (o hasta que la abandones).
+            <b>Reclama una parcela</b> libre de la zona residencial (alrededor de la plaza, los paseos y los parques): ponte encima y pulsa «Reclamar». Es tuya para siempre (o hasta que la abandones).
           </p>
           <p>
             <b>Construye</b> en tu parcela: casas, árboles, rocas, caminos, vallas, muebles… Elige una pieza del panel y toca el suelo para colocarla. <b>Arrastra</b> una pieza para llevarla donde quieras; tócala para girarla o borrarla. Lo ve todo el mundo al momento.
@@ -2067,7 +2134,21 @@ export default function Mundo() {
           )}
           {donde.libre && miParcela && <span className="etiqueta glass">Solar libre</span>}
           {!donde.libre && !donde.mia && (
-            <span className="etiqueta glass">{donde.dueno === 'mundo' ? 'Plaza pública' : 'Parcela de otra persona'}</span>
+            <span className="etiqueta glass">
+              {donde.dueno && donde.dueno !== 'mundo'
+                ? 'Parcela de otra persona'
+                : donde.tipo === 'plaza'
+                  ? 'Plaza pública'
+                  : donde.tipo === 'paseo'
+                    ? 'Paseo público'
+                    : donde.tipo === 'parque'
+                      ? 'Parque público'
+                      : donde.tipo === 'rio'
+                        ? 'Río: aquí no se construye'
+                        : donde.tipo === 'muestra'
+                          ? 'Casa de muestra'
+                          : 'Campo: se construye cerca de la plaza'}
+            </span>
           )}
         </div>
       )}
