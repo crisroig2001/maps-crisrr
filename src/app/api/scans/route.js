@@ -2,28 +2,13 @@ import { NextResponse } from 'next/server';
 import { getCells, addCell, ultimoCambio, totalCeldas } from '../../../lib/store';
 import { CELL_RE } from '../../../lib/geo';
 import { RE_COLOR } from '../../../lib/colorCam';
+import { RE_JUGADOR } from '../../../lib/adornos';
+import { creaLimite, ipDe } from '../../../lib/ratelimit';
 
 export const dynamic = 'force-dynamic';
 
-// Rate limit sencillo en memoria (una instancia): 30 escaneos/min por IP.
-// Se limpia al vuelo: sin esto el Map crecía sin techo, una entrada por IP,
-// mientras viviera el proceso.
-const hits = new Map();
-let ultimaLimpieza = 0;
-function limited(ip) {
-  const now = Date.now();
-  if (now - ultimaLimpieza > 60_000) {
-    ultimaLimpieza = now;
-    for (const [k, v] of hits) if (now - v.t > 60_000) hits.delete(k);
-  }
-  const h = hits.get(ip);
-  if (!h || now - h.t > 60_000) {
-    hits.set(ip, { t: now, n: 1 });
-    return false;
-  }
-  h.n += 1;
-  return h.n > 30;
-}
+// 30 escaneos/min por IP
+const limited = creaLimite(30);
 
 // OJO: Number(null) es 0, así que sin este guard un parámetro ausente se
 // convertía en un 0 válido y "sin caja" pasaba a ser la caja 0,0,0,0 — que no
@@ -69,8 +54,7 @@ export async function GET(req) {
 }
 
 export async function POST(req) {
-  const ip = (req.headers.get('x-forwarded-for') || 'local').split(',')[0].trim();
-  if (limited(ip)) {
+  if (limited(ipDe(req))) {
     return NextResponse.json({ error: 'rate_limited' }, { status: 429 });
   }
   let body = null;
@@ -89,6 +73,8 @@ export async function POST(req) {
     typeof body?.color === 'string' && RE_COLOR.test(body.color.toLowerCase())
       ? body.color.toLowerCase()
       : null;
-  const added = addCell(cell, color);
+  // quien escanea se queda la manzana para decorarla (id anónimo, opcional)
+  const jugador = typeof body?.jugador === 'string' && RE_JUGADOR.test(body.jugador) ? body.jugador : null;
+  const added = addCell(cell, color, jugador);
   return NextResponse.json({ ok: true, added });
 }

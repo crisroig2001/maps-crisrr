@@ -4,6 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { lonLatToTile, cellKey, Z_CELL } from './geo';
+import { validaAdornos } from './adornos';
 
 const DIR = process.env.DATA_DIR || path.join(process.cwd(), '.data');
 const FILE = path.join(DIR, 'scans.json');
@@ -11,7 +12,8 @@ const FILE = path.join(DIR, 'scans.json');
 let cache = null;
 
 // Semilla: 3x3 celdas alrededor de plaça de Catalunya (Barcelona) para que la
-// primera visita ya enseñe la diferencia color/gris.
+// primera visita ya enseñe la diferencia color/gris. La del centro va
+// decorada, para que también se vea qué es un adorno sin tener que ponerlo.
 function seed() {
   const cells = {};
   const t = lonLatToTile(2.1686, 41.3874, Z_CELL);
@@ -20,6 +22,18 @@ function seed() {
       cells[cellKey(t.x + dx, t.y + dy)] = { t: Date.now(), seed: true };
     }
   }
+  cells[cellKey(t.x, t.y)].d = [
+    { t: 'fuente', x: 0.5, y: 0.5 },
+    { t: 'bandera', x: 0.5, y: 0.2 },
+    { t: 'arbol', x: 0.25, y: 0.3 },
+    { t: 'arbol', x: 0.75, y: 0.3 },
+    { t: 'arbol', x: 0.25, y: 0.7 },
+    { t: 'arbol', x: 0.75, y: 0.7 },
+    { t: 'banco', x: 0.4, y: 0.62 },
+    { t: 'banco', x: 0.6, y: 0.62 },
+    { t: 'farola', x: 0.15, y: 0.5 },
+    { t: 'farola', x: 0.85, y: 0.5 },
+  ];
   return cells;
 }
 
@@ -89,8 +103,13 @@ export function getCells(caja, desde) {
       const cy = Number(p[2]);
       if (cx < caja.cx0 || cx > caja.cx1 || cy < caja.cy0 || cy > caja.cy1) continue;
     }
-    // {k, c, t}: c es el color de fachada capturado con la cámara (o null)
-    out.push({ k, c: e.c || null, t: e.t || 0 });
+    // {k, c, t}: c es el color de fachada capturado con la cámara (o null).
+    // o (dueño) y d (adornos) solo van si existen: la mayoría de celdas no
+    // los tienen y son la mayor parte de la respuesta.
+    const it = { k, c: e.c || null, t: e.t || 0 };
+    if (e.o) it.o = e.o;
+    if (e.d?.length) it.d = e.d;
+    out.push(it);
   }
   return out;
 }
@@ -108,7 +127,9 @@ export function totalCeldas() {
   return Object.keys(load().cells).length;
 }
 
-export function addCell(key, color) {
+// jugador: quien escanea se queda la manzana para decorarla. Opcional, por
+// compatibilidad con clientes que aún no lo mandan.
+export function addCell(key, color, jugador) {
   const c = load();
   const ya = c.cells[key];
   if (ya) {
@@ -123,7 +144,28 @@ export function addCell(key, color) {
   }
   const e = { t: Date.now() };
   if (color) e.c = color;
+  if (jugador) e.o = jugador;
   c.cells[key] = e;
   save();
   return true;
+}
+
+// Sustituye los adornos de una celda. Reglas del juego:
+//  - la celda tiene que estar escaneada (el mundo se decora andando);
+//  - una celda con dueño solo la decora su dueño; una sin dueño (semilla, o
+//    escaneada por un cliente viejo) se la queda el primero que la decora.
+// Devuelve null si ha ido bien, o el motivo del rechazo.
+export function setAdornos(key, jugador, lista) {
+  const c = load();
+  const e = c.cells[key];
+  if (!e) return 'no_escaneada';
+  if (e.o && e.o !== jugador) return 'ajena';
+  const d = validaAdornos(lista);
+  if (!d) return 'bad_adornos';
+  e.o = jugador;
+  if (d.length) e.d = d;
+  else delete e.d;
+  e.t = Date.now(); // el delta por `desde` tiene que traer este cambio
+  save();
+  return null;
 }

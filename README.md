@@ -63,6 +63,22 @@ ocurre **en la GPU del dispositivo**: el servidor no renderiza nada.
   Una celda escaneada pinta sus edificios a color pastel; el resto queda en gris
   «pendiente». El botón de escanear de momento **simula** el escaneo (la captura
   con cámara es la siguiente fase).
+- **Un mundo que se construye entre todos**: la manzana que escaneas es
+  **tuya** para decorar. «Decorar» abre una paleta (árbol, farola, banco,
+  fuente, bandera y borrar) y cada toque en el suelo de la manzana marcada
+  coloca un adorno, que ve todo el mundo. Un adorno es `{t, x, y}`: tipo y
+  posición como fracción de la celda z18 (30 bytes, sin depender de la
+  latitud ni del origen de la escena); van en la misma respuesta de
+  `/api/scans` (campo `d`) y se guardan por `POST /api/adornos`, con tope de
+  40 por manzana. Se pintan como **cinco `InstancedMesh`** (uno por tipo) que
+  comparten el material de los tejados: cinco draw calls sean 3 adornos o
+  3.000, con la misma niebla y el mismo sol horneado en el vértice que el
+  resto. La identidad es un id anónimo por dispositivo en `localStorage`
+  (`src/lib/jugador.js`): quien escanea una celda se la queda, una celda sin
+  dueño (la semilla, o escaneada por un cliente viejo) se la queda el primero
+  que la decora, y nadie decora la de otro. **No es una cuenta** y se puede
+  falsificar: las cuentas son el punto 3 de la hoja de ruta, esto es la
+  mecánica de juego que las necesita.
 - **Despliegue**: Dockerfile multi-stage → Next.js `standalone`, en Coolify.
 
 ## Desarrollo
@@ -115,7 +131,8 @@ evita que Playwright se baje otro.
 
 1. ✅ Visor 3D cartoon con datos reales + escaneos compartidos (simulados)
 2. Captura real con la cámara (vídeo guiado → reconstrucción → detalles por celda)
-3. Cuentas de usuario, moderación, LOD/optimización de teselas
+3. ✅ Mundo construido por los usuarios: la manzana escaneada se decora (prototipo, id anónimo)
+4. Cuentas de usuario (la propiedad de las manzanas de verdad), moderación, LOD/optimización de teselas
 
 El detalle y el orden real están en los issues; el índice es el
 [#10](https://github.com/crisroig2001/maps-crisrr/issues/10).

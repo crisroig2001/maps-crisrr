@@ -10,6 +10,8 @@ import * as THREE from 'three';
 import { MapControls } from 'three/examples/jsm/controls/MapControls.js';
 import { loadTileData } from '../lib/mvt';
 import { colorFachada, cartoniza } from '../lib/colorCam';
+import { TIPOS, MAX_ADORNOS } from '../lib/adornos';
+import { idJugador } from '../lib/jugador';
 import { WORLD, Z_TILE, Z_CELL, lonLatToMerc, lonLatToTile, mercToLonLat, tileToMerc, cellKey } from '../lib/geo';
 
 const N_TILE = 2 ** Z_TILE;
@@ -28,6 +30,17 @@ const GRIS_PARED = new THREE.Color(0xb7bdc5);
 const GRIS_TEJADO = new THREE.Color(0xcbcfd4);
 const VERDES_ARBOL = [0x5f9e63, 0x6faa6b, 0x7db473, 0x679c58].map((h) => new THREE.Color(h));
 const TRONCO = new THREE.Color(0x8a6b4f);
+// adornos (lo que los usuarios colocan en su manzana)
+const COL_MADERA = new THREE.Color(0x9a6b45);
+const COL_PIEDRA = new THREE.Color(0xc4beb0);
+const COL_AGUA = new THREE.Color(0x8ec3e0);
+const COL_POSTE = new THREE.Color(0x6b7480);
+const COL_LUZ = new THREE.Color(0xffe08a);
+const COL_BANDERA = new THREE.Color(0xde5a4a);
+const COL_MASTIL = new THREE.Color(0xe9e4d8);
+// instancias por tipo de adorno en el mundo cargado (5x5 teselas). Más allá
+// se dejan de pintar: 2.000 farolas en pantalla ya no son un mapa.
+const MAX_INSTANCIAS = 2000;
 const PLANTA_M = 3; // metros por planta/ventana (escala de la textura de fachada)
 
 // --- el sol ---
@@ -205,7 +218,7 @@ export default function MapView() {
   const engineRef = useRef(null);
   const rotulosRef = useRef(null);
   const toastT = useRef(null);
-  const [status, setStatus] = useState({ pct: null, total: 0, global: 0 });
+  const [status, setStatus] = useState({ pct: null, total: 0, global: 0, adornos: 0 });
   const [cargando, setCargando] = useState(0);
   const [toast, setToast] = useState('');
   const [infoOpen, setInfoOpen] = useState(false);
@@ -217,6 +230,9 @@ export default function MapView() {
   const instalaEvRef = useRef(null);
   // cámara del escaneo: null | 'listo' | 'capturando'
   const [cam, setCam] = useState(null);
+  // modo decorar: null, o {cell, n} con la manzana en edición y sus adornos
+  const [edicion, setEdicion] = useState(null);
+  const [herr, setHerr] = useState('arbol');
   const [prog, setProg] = useState(0);
   // color dominante que va emergiendo durante la captura (se enseña en vivo)
   const [colorVivo, setColorVivo] = useState(null);
@@ -602,6 +618,8 @@ export default function MapView() {
     // --- estado del mundo ---
     const tiles = new Map(); // "x/y" → entrada
     const scans = new Map(); // celda → color de fachada '#rrggbb' o null
+    const decos = new Map(); // celda → {o: dueño, d: [{t, x, y}, …]}
+    const jugador = idJugador();
     let vivo = true;
     let enCarga = 0;
 
@@ -619,6 +637,306 @@ export default function MapView() {
       window.__mapaListo = enCarga === 0;
       setCargando(enCarga);
     }
+
+    // --- adornos: lo que los usuarios colocan en su manzana ---
+    // Cada tipo es UNA geometría low-poly con el sombreado del sol horneado en
+    // el color de vértice (como edificios y árboles) y UN InstancedMesh para
+    // todo el mundo cargado: cinco draw calls sean 3 adornos o 3.000. Comparten
+    // el material de los tejados, así que llevan la misma niebla y el mismo
+    // look que el resto del mapa sin ninguna textura más.
+    const cellM = (WORLD / N_CELL) * k; // metros de lado de una celda z18
+
+    // nx: componente este de la normal; nn: componente norte
+    function luzDe(nx, nn) {
+      const luz = 0.5 + 0.5 * (nx * SOL_E + nn * SOL_N);
+      return LUZ_SOMBRA + (1 - LUZ_SOMBRA) * luz;
+    }
+    // caja alineada a los ejes (x: este, z: sur), con tapa y sin fondo
+    function caja(pos, col, x0, y0, z0, x1, y1, z1, color) {
+      const lado = (ax, az, bx, bz, nx, nn) => {
+        const s = luzDe(nx, nn);
+        pos.push(ax, y0, az, bx, y0, bz, bx, y1, bz, ax, y0, az, bx, y1, bz, ax, y1, az);
+        for (let q = 0; q < 6; q++) col.push(color.r * s, color.g * s, color.b * s);
+      };
+      lado(x0, z1, x1, z1, 0, -1); // sur
+      lado(x1, z1, x1, z0, 1, 0); // este
+      lado(x1, z0, x0, z0, 0, 1); // norte
+      lado(x0, z0, x0, z1, -1, 0); // oeste
+      pos.push(x0, y1, z0, x1, y1, z0, x1, y1, z1, x0, y1, z0, x1, y1, z1, x0, y1, z1);
+      for (let q = 0; q < 6; q++) col.push(color.r, color.g, color.b);
+    }
+    // prisma regular de n lados centrado en el origen, con tapa; r1 permite
+    // que el remate sea más estrecho que la base (tronco de cono)
+    function prisma(pos, col, n, r, y0, y1, color, r1 = r) {
+      for (let i = 0; i < n; i++) {
+        const a0 = (i / n) * Math.PI * 2;
+        const a1 = ((i + 1) / n) * Math.PI * 2;
+        const am = (a0 + a1) / 2;
+        const s = luzDe(Math.cos(am), Math.sin(am));
+        const x0 = Math.cos(a0) * r;
+        const z0 = -Math.sin(a0) * r;
+        const x1 = Math.cos(a1) * r;
+        const z1 = -Math.sin(a1) * r;
+        const X0 = Math.cos(a0) * r1;
+        const Z0 = -Math.sin(a0) * r1;
+        const X1 = Math.cos(a1) * r1;
+        const Z1 = -Math.sin(a1) * r1;
+        pos.push(x0, y0, z0, x1, y0, z1, X1, y1, Z1, x0, y0, z0, X1, y1, Z1, X0, y1, Z0);
+        for (let q = 0; q < 6; q++) col.push(color.r * s, color.g * s, color.b * s);
+        pos.push(0, y1, 0, X0, y1, Z0, X1, y1, Z1);
+        for (let q = 0; q < 3; q++) col.push(color.r, color.g, color.b);
+      }
+    }
+    // copa octaédrica, la misma que la de los árboles de los parques
+    function copa(pos, col, hC, r, verde) {
+      const eq = [
+        [r, 0],
+        [0, r],
+        [-r, 0],
+        [0, -r],
+      ];
+      const cara = (p1, p2, p3, s) => {
+        pos.push(p1[0], p1[1], p1[2], p2[0], p2[1], p2[2], p3[0], p3[1], p3[2]);
+        for (let q = 0; q < 3; q++) col.push(verde.r * s, verde.g * s, verde.b * s);
+      };
+      const top = [0, hC + r * 1.15, 0];
+      const bot = [0, hC - r * 0.85, 0];
+      for (let i = 0; i < 4; i++) {
+        const a = eq[i];
+        const b = eq[(i + 1) % 4];
+        const pa = [a[0], hC, -a[1]];
+        const pb = [b[0], hC, -b[1]];
+        cara(top, pa, pb, i % 2 ? 0.97 : 1.1);
+        cara(bot, pb, pa, i % 2 ? 0.72 : 0.8);
+      }
+    }
+    function geometriaAdorno(tipo) {
+      const pos = [];
+      const col = [];
+      if (tipo === 'arbol') {
+        caja(pos, col, -0.22, 0, -0.22, 0.22, 3.2, 0.22, TRONCO);
+        copa(pos, col, 4.8, 2.3, VERDES_ARBOL[1]);
+      } else if (tipo === 'farola') {
+        caja(pos, col, -0.14, 0, -0.14, 0.14, 5.4, 0.14, COL_POSTE);
+        caja(pos, col, -0.5, 5.2, -0.5, 0.5, 6.0, 0.5, COL_LUZ);
+      } else if (tipo === 'banco') {
+        caja(pos, col, -0.95, 0, -0.28, -0.75, 0.45, 0.28, COL_POSTE);
+        caja(pos, col, 0.75, 0, -0.28, 0.95, 0.45, 0.28, COL_POSTE);
+        caja(pos, col, -1, 0.45, -0.3, 1, 0.62, 0.3, COL_MADERA); // asiento
+        caja(pos, col, -1, 0.62, 0.18, 1, 1.15, 0.3, COL_MADERA); // respaldo
+      } else if (tipo === 'fuente') {
+        prisma(pos, col, 8, 3.2, 0, 0.9, COL_PIEDRA);
+        prisma(pos, col, 8, 2.9, 0.9, 1.0, COL_AGUA); // lámina de agua
+        prisma(pos, col, 6, 0.45, 1.0, 2.6, COL_PIEDRA);
+        prisma(pos, col, 8, 1.3, 2.6, 2.9, COL_PIEDRA);
+        prisma(pos, col, 8, 1.1, 2.9, 3.0, COL_AGUA);
+      } else if (tipo === 'bandera') {
+        caja(pos, col, -0.1, 0, -0.1, 0.1, 7.5, 0.1, COL_MASTIL);
+        // el paño es un triángulo suelto: se ve por las dos caras (DoubleSide)
+        pos.push(0.1, 7.4, 0, 0.1, 6.2, 0, 2.6, 6.8, 0);
+        for (let q = 0; q < 3; q++) col.push(COL_BANDERA.r, COL_BANDERA.g, COL_BANDERA.b);
+      }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+      return geo;
+    }
+    const mallasAdorno = {};
+    const grupoAdornos = new THREE.Group();
+    scene.add(grupoAdornos);
+    for (const t of Object.keys(TIPOS)) {
+      const m = new THREE.InstancedMesh(geometriaAdorno(t), matEdificios, MAX_INSTANCIAS);
+      m.count = 0;
+      // la esfera envolvente sería la de la geometría base, en el origen:
+      // con ella, en cuanto el origen sale de pantalla se descartan TODAS las
+      // instancias, estén donde estén
+      m.frustumCulled = false;
+      mallasAdorno[t] = m;
+      grupoAdornos.add(m);
+    }
+    const mtxI = new THREE.Matrix4();
+    const posI = new THREE.Vector3();
+    const rotI = new THREE.Quaternion();
+    const escI = new THREE.Vector3();
+    const ejeY = new THREE.Vector3(0, 1, 0);
+    let nAdornos = 0;
+
+    // Esquina noroeste de una celda en coordenadas de escena. Los adornos se
+    // guardan como fracción de la celda, así que esto es lo único que hace
+    // falta para plantarlos.
+    function esquinaCelda(cx, cy) {
+      const base = tileToMerc(Z_CELL, cx, cy);
+      return { e0: (base.mx - origen.mx) * k, n0: (base.my - origen.my) * k };
+    }
+
+    // Rehace TODAS las instancias. Es una pasada por los adornos cargados
+    // (unos cientos, como mucho unos miles): más barato que llevar la cuenta
+    // de qué instancia era de qué celda cuando una cambia.
+    function pintaAdornos() {
+      const cont = {};
+      for (const t in mallasAdorno) cont[t] = 0;
+      let total = 0;
+      for (const [key, dc] of decos) {
+        if (!dc.d?.length) continue;
+        const p = key.split('/');
+        const cx = Number(p[1]);
+        const cy = Number(p[2]);
+        // sin su tesela no hay suelo bajo el adorno: se espera a que cargue
+        const entry = tiles.get(Math.floor(cx / CELLS_POR_TESELA) + '/' + Math.floor(cy / CELLS_POR_TESELA));
+        if (!entry?.data) continue;
+        const { e0, n0 } = esquinaCelda(cx, cy);
+        for (const a of dc.d) {
+          const m = mallasAdorno[a.t];
+          if (!m || cont[a.t] >= MAX_INSTANCIAS) continue;
+          // giro y tamaño deterministas por posición: variedad sin guardar nada
+          const h = ((Math.round(a.x * 1000) * 73856093) ^ (Math.round(a.y * 1000) * 19349663)) >>> 0;
+          posI.set(e0 + a.x * cellM, 0, -(n0 - a.y * cellM));
+          const giro = a.t === 'banco' ? (h % 4) * (Math.PI / 2) : (h % 360) * (Math.PI / 180);
+          rotI.setFromAxisAngle(ejeY, giro);
+          const sc = a.t === 'fuente' ? 1 : 0.9 + (h % 21) * 0.01;
+          escI.set(sc, sc, sc);
+          mtxI.compose(posI, rotI, escI);
+          m.setMatrixAt(cont[a.t]++, mtxI);
+          total++;
+        }
+      }
+      for (const t in mallasAdorno) {
+        mallasAdorno[t].count = cont[t];
+        mallasAdorno[t].instanceMatrix.needsUpdate = true;
+      }
+      if (total !== nAdornos) {
+        nAdornos = total;
+        setStatus((st) => ({ ...st, adornos: total }));
+      }
+    }
+
+    // --- modo decorar ---
+    // Se decora la manzana que está en el centro de la vista, si es tuya. Un
+    // toque en el suelo coloca la herramienta elegida (o borra el adorno más
+    // cercano). El guardado va con retardo: un POST por ráfaga, no por toque.
+    let edicion = null; // {key, e0, n0}
+    let avisaEdicion = null; // callback a React
+    let herramienta = 'arbol';
+    let guardadoT = null;
+    const texMarco = (() => {
+      const cv = document.createElement('canvas');
+      cv.width = cv.height = 256;
+      const c = cv.getContext('2d');
+      c.fillStyle = 'rgba(47, 111, 237, 0.13)';
+      c.fillRect(0, 0, 256, 256);
+      c.strokeStyle = 'rgba(47, 111, 237, 0.92)';
+      c.lineWidth = 9;
+      c.setLineDash([24, 14]);
+      c.strokeRect(5, 5, 246, 246);
+      const tex = new THREE.CanvasTexture(cv);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      return tex;
+    })();
+    // El marco va a 40 cm del suelo y con test de profundidad: en la calle se
+    // ve, y donde hay un edificio lo tapan sus paredes — que es justo lo que
+    // dice «esta manzana», sin pintar por encima de los tejados.
+    const marco = new THREE.Mesh(
+      new THREE.PlaneGeometry(cellM, cellM),
+      new THREE.MeshBasicMaterial({ map: texMarco, transparent: true, depthWrite: false })
+    );
+    marco.rotation.x = -Math.PI / 2;
+    marco.renderOrder = 1;
+    marco.visible = false;
+    scene.add(marco);
+
+    async function guardaAdornos(key) {
+      const dc = decos.get(key);
+      if (!dc) return;
+      ultimoHasta = null; // el POST cambia el servidor: el próximo sondeo, completo
+      try {
+        const r = await fetch('/api/adornos', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ cell: key, jugador, adornos: dc.d }),
+        });
+        if (!r.ok) {
+          const j = await r.json().catch(() => ({}));
+          avisaEdicion?.({ error: j.error || 'red' });
+        }
+      } catch {
+        avisaEdicion?.({ error: 'red' });
+      }
+    }
+    function programaGuardado(key) {
+      clearTimeout(guardadoT);
+      guardadoT = setTimeout(() => {
+        guardadoT = null;
+        guardaAdornos(key);
+      }, 900);
+    }
+    function vaciaGuardado() {
+      if (!guardadoT || !edicion) return;
+      clearTimeout(guardadoT);
+      guardadoT = null;
+      guardaAdornos(edicion.key);
+    }
+
+    function colocaEn(sx, sy) {
+      const ed = edicion;
+      if (!ed) return;
+      sueloEn(sx, sy, pSuelo);
+      const fx = (pSuelo.x - ed.e0) / cellM;
+      const fy = (ed.n0 + pSuelo.z) / cellM; // z de escena = -norte
+      if (fx < 0 || fx > 1 || fy < 0 || fy > 1) {
+        avisaEdicion?.({ fuera: true });
+        return;
+      }
+      const dc = decos.get(ed.key);
+      const lista = dc?.d ? dc.d.slice() : [];
+      if (herramienta === 'borrar') {
+        let mejor = -1;
+        let md = Infinity;
+        for (let i = 0; i < lista.length; i++) {
+          const d = Math.hypot((lista[i].x - fx) * cellM, (lista[i].y - fy) * cellM);
+          if (d < md) {
+            md = d;
+            mejor = i;
+          }
+        }
+        if (mejor < 0 || md > 6) return; // nada a menos de 6 m del toque
+        lista.splice(mejor, 1);
+      } else {
+        if (lista.length >= MAX_ADORNOS) {
+          avisaEdicion?.({ lleno: true });
+          return;
+        }
+        lista.push({ t: herramienta, x: Math.round(fx * 1000) / 1000, y: Math.round(fy * 1000) / 1000 });
+      }
+      decos.set(ed.key, { o: dc?.o || jugador, d: lista });
+      pintaAdornos();
+      avisaEdicion?.({ n: lista.length });
+      programaGuardado(ed.key);
+    }
+
+    // Un toque es bajar y subir el MISMO puntero, solo, sin moverse apenas.
+    // Arrastrar mueve el mapa (MapControls) y no coloca nada.
+    let toque = null;
+    let punteros = 0;
+    function onToqueBaja(e) {
+      if (e.isPrimary) punteros = 0; // un primario nuevo es una secuencia nueva
+      punteros++;
+      toque = punteros === 1 ? { x: e.clientX, y: e.clientY, t: performance.now() } : null;
+    }
+    function onToqueSube(e) {
+      punteros = Math.max(0, punteros - 1);
+      const tq = toque;
+      toque = null;
+      if (!tq || !edicion || punteros !== 0) return;
+      if (Math.hypot(e.clientX - tq.x, e.clientY - tq.y) > 8 || performance.now() - tq.t > 600) return;
+      colocaEn(e.clientX, e.clientY);
+    }
+    function onToqueCancela() {
+      punteros = Math.max(0, punteros - 1);
+      toque = null;
+    }
+    canvas.addEventListener('pointerdown', onToqueBaja);
+    canvas.addEventListener('pointerup', onToqueSube);
+    canvas.addEventListener('pointercancel', onToqueCancela);
 
     // --- conversiones ---
     function sceneToMerc(e, n) {
@@ -1696,6 +2014,7 @@ export default function MapView() {
         entry.group.add(plano);
         scene.add(entry.group);
         actualizaEstado();
+        pintaAdornos(); // los de esta tesela esperaban a tener suelo
         await construyeEdificios(entry);
       } catch (e) {
         entry.error = Date.now();
@@ -1712,6 +2031,7 @@ export default function MapView() {
       tiles.delete(key);
       entry.token++;
       recogeRotulos();
+      pintaAdornos();
       scene.remove(entry.group);
       if (entry.mesh) entry.mesh.geometry.dispose();
       if (entry.meshP) entry.meshP.geometry.dispose();
@@ -1792,6 +2112,7 @@ export default function MapView() {
         pct: total.size ? Math.round((hechas / total.size) * 100) : null,
         total: total.size,
         global: scans.size,
+        adornos: nAdornos,
       });
     }
 
@@ -1899,6 +2220,7 @@ export default function MapView() {
         const j = await r.json();
         if (typeof j.hasta === 'number') ultimoHasta = j.hasta;
         const cambios = new Map();
+        let adornosCambiados = false;
         for (const it of j.cells || []) {
           // compat: la respuesta vieja era un array de strings
           const c = typeof it === 'string' ? it : it.k;
@@ -1907,11 +2229,23 @@ export default function MapView() {
             if (!cambios.has(c)) cambios.set(c, scans.get(c)); // el estado de ANTES
             scans.set(c, col);
           }
+          // dueño y adornos. La manzana en edición NO se toca: lo local aún
+          // no se ha guardado y el servidor la devolvería como estaba.
+          if (typeof it !== 'string' && c !== edicion?.key) {
+            const d = it.d || [];
+            const o = it.o || null;
+            const prev = decos.get(c);
+            if (!prev || prev.o !== o || JSON.stringify(prev.d) !== JSON.stringify(d)) {
+              decos.set(c, { o, d });
+              if (prev?.d?.length || d.length) adornosCambiados = true;
+            }
+          }
         }
         if (cambios.size) {
           aplicaCambios(cambios);
           actualizaEstado();
         }
+        if (adornosCambiados) pintaAdornos();
       } catch {
         /* sin red: se reintenta en el siguiente sondeo */
       }
@@ -1967,15 +2301,42 @@ export default function MapView() {
         if (scans.has(key)) return { already: true };
         const antes = scans.get(key);
         scans.set(key, color || null);
+        decos.set(key, { o: jugador, d: [] }); // quien escanea se la queda
         aplicaCambios(new Map([[key, antes]]));
         actualizaEstado();
         ultimoHasta = null; // el POST cambia el servidor: el próximo sondeo, completo
         fetch('/api/scans', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify(color ? { cell: key, color } : { cell: key }),
+          body: JSON.stringify(color ? { cell: key, color, jugador } : { cell: key, jugador }),
         }).catch(() => {});
         return { already: false };
+      },
+      // ¿Se puede decorar esta celda? Escaneada y sin dueño, o del jugador.
+      estadoCelda(key) {
+        const dc = decos.get(key);
+        return { escaneada: scans.has(key), dueno: dc?.o || null, n: dc?.d?.length || 0, yo: jugador };
+      },
+      // Entra (key) o sale (null) del modo decorar. Devuelve cuántos adornos
+      // tiene ya la manzana. Al salir se guarda lo que quedara pendiente.
+      editaCelda(key, cb) {
+        vaciaGuardado();
+        if (!key) {
+          edicion = null;
+          avisaEdicion = null;
+          marco.visible = false;
+          return 0;
+        }
+        const p = key.split('/');
+        const { e0, n0 } = esquinaCelda(Number(p[1]), Number(p[2]));
+        edicion = { key, e0, n0 };
+        avisaEdicion = cb;
+        marco.position.set(e0 + cellM / 2, 0.4, -(n0 - cellM / 2));
+        marco.visible = true;
+        return decos.get(key)?.d?.length || 0;
+      },
+      herramienta(t) {
+        herramienta = t;
       },
     };
 
@@ -2058,6 +2419,17 @@ export default function MapView() {
       canvas.removeEventListener('pointermove', onDedoMueve);
       canvas.removeEventListener('pointerup', onDedoSube);
       canvas.removeEventListener('pointercancel', onDedoSube);
+      canvas.removeEventListener('pointerdown', onToqueBaja);
+      canvas.removeEventListener('pointerup', onToqueSube);
+      canvas.removeEventListener('pointercancel', onToqueCancela);
+      vaciaGuardado(); // lo pendiente sale igual: el fetch sobrevive al visor
+      for (const t in mallasAdorno) {
+        mallasAdorno[t].geometry.dispose();
+        mallasAdorno[t].dispose();
+      }
+      marco.geometry.dispose();
+      marco.material.dispose();
+      texMarco.dispose();
       controls.dispose();
       horizonte.geometry.dispose();
       horizonte.material.dispose();
@@ -2221,6 +2593,42 @@ export default function MapView() {
     }
   }
 
+  // Decorar: la manzana del centro de la vista, si la escaneaste tú (o si no
+  // tiene dueño: las de la semilla, o las escaneadas por un cliente viejo).
+  function onDecorar() {
+    const eng = engineRef.current;
+    if (!eng) return;
+    const key = eng.celdaCentro();
+    const st = eng.estadoCelda(key);
+    if (!st.escaneada) {
+      avisa('Primero escanea esta manzana: el mundo se decora donde se ha estado');
+      return;
+    }
+    if (st.dueno && st.dueno !== st.yo) {
+      avisa('Esta manzana la escaneó otra persona: solo la decora quien la escaneó');
+      return;
+    }
+    const n = eng.editaCelda(key, (ev) => {
+      if (ev.fuera) avisa('Toca dentro de la manzana marcada');
+      else if (ev.lleno) avisa('Esta manzana ya tiene ' + MAX_ADORNOS + ' adornos: borra alguno para poner otro');
+      else if (ev.error === 'ajena') avisa('Esta manzana ya tiene dueño: no se ha guardado');
+      else if (ev.error) avisa('No se pudo guardar (¿sin conexión?)');
+      else if (typeof ev.n === 'number') setEdicion((e) => (e ? { ...e, n: ev.n } : e));
+    });
+    eng.herramienta(herr);
+    setInfoOpen(false);
+    setIosOpen(false);
+    setEdicion({ cell: key, n });
+  }
+  function terminaDecorar() {
+    engineRef.current?.editaCelda(null);
+    setEdicion(null);
+  }
+  function eligeHerr(t) {
+    setHerr(t);
+    engineRef.current?.herramienta(t);
+  }
+
   async function capturaCam() {
     const video = camVideoRef.current;
     if (!video || cam !== 'listo') return;
@@ -2345,6 +2753,11 @@ export default function MapView() {
             dominante de las fachadas y esa zona se colorea con su color REAL para
             todo el mundo. Más adelante: formas y detalles.
           </p>
+          <p>
+            <b>La manzana que escaneas es tuya.</b> Pulsa «Decorar» sobre ella y coloca
+            árboles, farolas, bancos, fuentes o tu bandera. Lo verá todo el mundo: el mapa
+            es un solo mundo que se va construyendo entre todos.
+          </p>
         </div>
       )}
 
@@ -2362,16 +2775,63 @@ export default function MapView() {
         <div className="chip">
           <s className="c2" /> Pendiente de escanear
         </div>
-        <div className="meta">{status.global} celdas escaneadas en el mundo</div>
+        <div className="meta">
+          {status.global} celdas escaneadas en el mundo
+          {status.adornos > 0 && <> · {status.adornos} adornos a la vista</>}
+        </div>
       </div>
 
-      <button className="ui escanear" onClick={onScan}>
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M3 8a2 2 0 0 1 2-2h1.5l1.4-2h8.2l1.4 2H19a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-          <circle cx="12" cy="13" r="3.6" />
-        </svg>
-        Escanear esta zona
-      </button>
+      {!edicion && (
+        <div className="ui acciones">
+          <button className="escanear" onClick={onScan}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 8a2 2 0 0 1 2-2h1.5l1.4-2h8.2l1.4 2H19a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+              <circle cx="12" cy="13" r="3.6" />
+            </svg>
+            Escanear esta zona
+          </button>
+          <button className="escanear decorar" onClick={onDecorar} aria-label="Decorar tu manzana">
+            🎨 Decorar
+          </button>
+        </div>
+      )}
+
+      {edicion && (
+        <>
+          <div className="ui deco-cab glass">
+            <b>Decorando tu manzana</b>
+            <span>
+              {edicion.n}/{MAX_ADORNOS} · toca el suelo para colocar
+            </span>
+          </div>
+          <div className="ui paleta glass" role="toolbar" aria-label="Adornos">
+            {Object.entries(TIPOS).map(([t, d]) => (
+              <button
+                key={t}
+                className={'herr' + (herr === t ? ' on' : '')}
+                onClick={() => eligeHerr(t)}
+                aria-label={d.nombre}
+                aria-pressed={herr === t}
+              >
+                <span>{d.icono}</span>
+                <small>{d.nombre}</small>
+              </button>
+            ))}
+            <button
+              className={'herr' + (herr === 'borrar' ? ' on' : '')}
+              onClick={() => eligeHerr('borrar')}
+              aria-label="Borrar"
+              aria-pressed={herr === 'borrar'}
+            >
+              <span>🧹</span>
+              <small>Borrar</small>
+            </button>
+            <button className="listo" onClick={terminaDecorar}>
+              Listo
+            </button>
+          </div>
+        </>
+      )}
 
       {cargando > 0 && (
         <div className="ui carga glass">
