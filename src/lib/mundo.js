@@ -21,6 +21,11 @@ export const MAX_PARCELAS_POR_JUGADOR = 1;
 
 let cache = null;
 
+// Versión de la semilla. Al cambiar el número, las parcelas del «mundo» (la
+// plaza y la casa de muestra) se reescriben en el arranque: la semilla solo
+// se creaba la primera vez y producción se quedaba con la muestra vieja.
+const SEMILLA = 2;
+
 // La plaza de llegada (0/0) y una casa de muestra al lado, para que quien
 // entra vea qué se puede hacer sin tener que construirlo. Dueño «mundo»: nadie
 // las puede reclamar ni cambiar.
@@ -79,6 +84,7 @@ function seed() {
 
   const t = Date.now();
   return {
+    semilla: SEMILLA,
     parcelas: {
       [claveParcela(0, 0)]: { o: 'mundo', t, d: plaza },
       [claveParcela(1, 0)]: { o: 'mundo', t, d: casa },
@@ -97,6 +103,14 @@ function load() {
   }
   if (!cache) {
     cache = seed();
+    save();
+  } else if (cache.semilla !== SEMILLA) {
+    // solo las parcelas del «mundo»: lo de los jugadores no se toca
+    const nueva = seed();
+    for (const k of Object.keys(nueva.parcelas)) {
+      if (!cache.parcelas[k] || cache.parcelas[k].o === 'mundo') cache.parcelas[k] = nueva.parcelas[k];
+    }
+    cache.semilla = SEMILLA;
     save();
   }
   if (!cache.jugadores) cache.jugadores = {};
