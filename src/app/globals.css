@@ -217,7 +217,8 @@ body {
   white-space: nowrap;
 }
 
-/* modo construir: cabecera arriba y paleta de piezas abajo */
+/* modo construir: cabecera arriba, panel de piezas a la derecha (o una hoja
+   abajo en el móvil) y barra de la pieza seleccionada */
 .deco-cab {
   top: 66px;
   left: 50%;
@@ -235,60 +236,148 @@ body {
   overflow: hidden;
 }
 .deco-cab b { color: var(--accent); }
-.paleta {
-  left: 50%;
-  transform: translateX(-50%);
-  bottom: calc(14px + env(safe-area-inset-bottom));
-  padding: 8px;
-  display: grid;
-  gap: 6px;
-  width: min(760px, calc(100vw - 20px));
+
+.panel {
+  top: 66px;
+  right: 14px;
+  bottom: 14px;
+  width: 320px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
-.paleta .fila {
+.panel-cab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 8px 8px 10px;
+  border-bottom: 1px solid var(--card-line);
+}
+.panel-cab .actual {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: var(--ink);
+  padding: 4px;
+  border-radius: 10px;
+}
+.panel-cab .actual b { flex: 1; font-size: 14px; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.panel-cab .actual small { font-size: 11px; font-weight: 800; color: var(--accent); white-space: nowrap; }
+.panel-cab .listo { padding: 11px 16px; font-size: 14px; box-shadow: 0 6px 18px rgba(47, 111, 237, 0.35); }
+.panel-cuerpo { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.tabs {
   display: flex;
   gap: 4px;
+  padding: 8px 10px 4px;
   overflow-x: auto;
   scrollbar-width: none;
 }
-/* las piezas, en dos filas que se desplazan a lo ancho */
-.paleta .fila.piezas {
-  display: grid;
-  grid-auto-flow: column;
-  grid-template-rows: repeat(2, auto);
-  gap: 3px 4px;
-}
-.paleta .herr .mini { width: 32px; height: 32px; overflow: hidden; display: block; border-radius: 6px; }
-.paleta .herr .mini img { width: 32px; height: 32px; object-fit: contain; display: block; }
-/* los previews del Nature Kit traen mucho aire: se amplían al centro */
-.paleta .herr .mini.zoom img { width: 64px; height: 64px; margin: -16px; }
-.paleta .pista { font-size: 12px; font-weight: 800; color: var(--accent); white-space: nowrap; }
-.paleta .cruz { display: flex; gap: 4px; }
-.paleta .cruz .btn-sec { padding: 10px 12px; }
-.paleta .fila::-webkit-scrollbar { display: none; }
-.paleta .fila.abajo { align-items: center; gap: 8px; padding: 2px 4px; }
-.paleta .fila.abajo .colores { flex: 1; min-width: 0; }
-.paleta .herr {
+.tabs::-webkit-scrollbar { display: none; }
+.tab {
   flex: none;
-  width: 52px;
   border: 1px solid transparent;
-  border-radius: 12px;
+  border-radius: 99px;
   background: transparent;
+  color: var(--ink-2);
+  font: 800 12.5px/1 inherit;
+  padding: 9px 12px;
+  cursor: pointer;
+}
+.tab.on { background: #e8effd; border-color: rgba(47, 111, 237, 0.35); color: var(--accent); }
+.rejilla {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  padding: 6px 10px 10px;
+  align-content: start;
+}
+.pieza {
+  border: 2px solid transparent;
+  border-radius: 14px;
+  background: #f4f6f8;
   color: var(--ink-2);
   cursor: pointer;
   display: grid;
-  gap: 2px;
+  gap: 4px;
   justify-items: center;
-  padding: 7px 0 6px;
-  font: 700 10.5px/1 inherit;
+  padding: 8px 4px 7px;
+  font: 700 11px/1.15 inherit;
+  text-align: center;
 }
-.paleta .herr span { font-size: 21px; line-height: 1; }
-.paleta .herr.on {
-  background: #e8effd;
-  border-color: rgba(47, 111, 237, 0.35);
-  color: var(--accent);
+.pieza.on { background: #e8effd; border-color: var(--accent); color: var(--accent); }
+.pieza:focus-visible, .tab:focus-visible, .panel-cab .actual:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.mini { width: 64px; height: 64px; overflow: hidden; display: block; border-radius: 10px; }
+.mini img { width: 64px; height: 64px; object-fit: contain; display: block; }
+/* los previews del Nature Kit traen mucho aire: se amplían al centro */
+.mini.zoom img { width: 128px; height: 128px; margin: -32px; }
+.panel-cab .mini { width: 40px; height: 40px; border-radius: 8px; }
+.panel-cab .mini img { width: 40px; height: 40px; }
+.panel-cab .mini.zoom img { width: 80px; height: 80px; margin: -20px; }
+.emoji { font-size: 40px; line-height: 64px; height: 64px; }
+.panel-cab .emoji { font-size: 26px; line-height: 40px; height: 40px; }
+.panel-pie {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px 10px;
+  border-top: 1px solid var(--card-line);
 }
-.paleta .herr:focus-visible, .paleta button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.paleta .btn-principal { padding: 12px 18px; font-size: 14px; box-shadow: 0 6px 18px rgba(47, 111, 237, 0.35); }
+.panel-pie .colores { flex-basis: 100%; }
+
+.sel-bar {
+  left: 14px;
+  right: 348px;
+  bottom: calc(14px + env(safe-area-inset-bottom));
+  padding: 8px 10px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+.sel-bar .pista { font-size: 12px; font-weight: 800; color: var(--accent); white-space: nowrap; }
+.sel-bar .cruz { display: flex; gap: 4px; }
+.sel-bar .cruz .btn-sec { padding: 10px 12px; }
+.sel-bar .btn-principal { padding: 11px 16px; font-size: 14px; box-shadow: 0 6px 18px rgba(47, 111, 237, 0.35); }
+
+@media (max-width: 719px) {
+  .panel {
+    top: auto;
+    left: 8px;
+    right: 8px;
+    bottom: calc(8px + env(safe-area-inset-bottom));
+    width: auto;
+    max-height: 62vh;
+  }
+  .panel.plegado .panel-cuerpo { display: none; }
+  .panel-cab { border-bottom: none; }
+  .panel:not(.plegado) .panel-cab { border-bottom: 1px solid var(--card-line); }
+  .rejilla { grid-template-columns: repeat(4, 1fr); }
+  .mini { width: 56px; height: 56px; }
+  .mini img { width: 56px; height: 56px; }
+  .mini.zoom img { width: 112px; height: 112px; margin: -28px; }
+  .emoji { font-size: 34px; line-height: 56px; height: 56px; }
+  .sel-bar {
+    left: 8px;
+    right: 8px;
+    bottom: calc(78px + env(safe-area-inset-bottom));
+    padding: 6px 8px;
+    gap: 6px;
+  }
+  .sel-bar .pista { display: none; }
+  .deco-cab { font-size: 11.5px; padding: 7px 12px; }
+}
 
 /* toast + carga */
 .toast {

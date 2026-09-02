@@ -16,7 +16,7 @@ import { MapControls } from 'three/examples/jsm/controls/MapControls.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { PARCELA_M, parcelaDe, claveParcela, parseParcela, centroParcela } from '../lib/parcela';
-import { PIEZAS, COLORES, MAX_PIEZAS, MAX_NOMBRE } from '../lib/piezas';
+import { PIEZAS, CATEGORIAS, COLORES, MAX_PIEZAS, MAX_NOMBRE } from '../lib/piezas';
 import { perfil, guardaPerfil } from '../lib/jugador';
 
 const L = PARCELA_M;
@@ -375,6 +375,10 @@ export default function Mundo() {
   // modo construir: null o {clave, n}
   const [obra, setObra] = useState(null);
   const [herr, setHerr] = useState('casa');
+  const [cat, setCat] = useState('casas');
+  // el panel de piezas: en pantalla estrecha es una hoja abajo que se pliega
+  const [panelAbierto, setPanelAbierto] = useState(true);
+  const [estrecho, setEstrecho] = useState(false);
   const [tinte, setTinte] = useState(2);
   const [cargando, setCargando] = useState(true);
   const [tactil, setTactil] = useState(false);
@@ -394,6 +398,10 @@ export default function Mundo() {
     try {
       setTactil(window.matchMedia('(pointer: coarse)').matches);
     } catch {}
+    const mide = () => setEstrecho(window.innerWidth < 720);
+    mide();
+    window.addEventListener('resize', mide);
+    return () => window.removeEventListener('resize', mide);
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
   }, []);
 
@@ -904,12 +912,15 @@ export default function Mundo() {
     // origen[t][i] = {clave, z}: de qué parcela y qué pieza es cada instancia,
     // para poder tocarla y seleccionarla
     const origen = {};
+    // lo que no se puede atravesar: [{x, y, r}] en metros del mundo
+    let solidos = [];
     function pintaMundo() {
       const cont = {};
       for (const t in mallas) {
         cont[t] = 0;
         origen[t] = [];
       }
+      solidos = [];
       let nMarcos = 0;
       let nPlazas = 0;
       for (const [clave, pc] of parcelas) {
@@ -942,6 +953,7 @@ export default function Mundo() {
           if (!par) continue;
           const wx = bx + z.x;
           const wy = by + z.y;
+          if (PIEZAS[z.t]?.solido) solidos.push({ x: wx, y: wy, r: PIEZAS[z.t].solido });
           // un pelín enterrada: en pendiente, mejor que el borde bajo se hunda
           // a que el alto flote
           posI.set(wx, alturaEn(wx, wy) - 0.12, -wy);
@@ -962,6 +974,10 @@ export default function Mundo() {
           p.mesh.count = cont[t];
           p.mesh.instanceMatrix.needsUpdate = true;
           if (p.tinte) p.mesh.instanceColor.needsUpdate = true;
+          // la esfera envolvente del InstancedMesh se calcula UNA vez y se
+          // queda: si se calculó con 0 instancias, el rayo de selección no
+          // acierta nunca. Se invalida para que se rehaga al siguiente toque.
+          p.mesh.boundingSphere = null;
         }
       }
       pintaSeleccion();
@@ -1312,18 +1328,67 @@ export default function Mundo() {
     }
 
     // Un toque es bajar y subir el mismo puntero, solo, sin moverse apenas:
-    // arrastrar gira la cámara y no coloca ni mueve nada.
+    // arrastrar gira la cámara y no coloca ni mueve nada. En obras, bajar
+    // sobre una pieza propia y arrastrar la LLEVA con el dedo (o el ratón),
+    // a pasos de 10 cm; la cámara se queda quieta mientras tanto.
     let toque = null;
     let punteros = 0;
+    let arrastre = null; // {z, ox, oy, movido}
+    function piezaBajo(sx, sy) {
+      ndc.set((sx / vpW) * 2 - 1, -(sy / vpH) * 2 + 1);
+      rayo.setFromCamera(ndc, camera);
+      for (const h of rayo.intersectObjects(grupoPiezas.children, false)) {
+        const o = origen[h.object.userData.tipo]?.[h.instanceId];
+        if (o && o.clave === obraClave) return o;
+      }
+      return null;
+    }
     function onBaja(e) {
       if (e.isPrimary) punteros = 0;
       punteros++;
       toque = punteros === 1 ? { x: e.clientX, y: e.clientY, t: performance.now() } : null;
+      if (obraClave && punteros === 1) {
+        const o = piezaBajo(e.clientX, e.clientY);
+        if (o) {
+          const p = sueloEn(e.clientX, e.clientY);
+          seleccion = o;
+          pintaSeleccion();
+          avisaObra?.({ seleccion: true });
+          arrastre = { z: o.z, ox: p ? o.z.x - (p.x - obraBase.bx) : 0, oy: p ? o.z.y - (p.y - obraBase.by) : 0, movido: false };
+          controls.enabled = false;
+          try {
+            canvas.setPointerCapture(e.pointerId);
+          } catch {}
+        }
+      }
+    }
+    function onMueve(e) {
+      if (!arrastre || !obraClave) return;
+      const p = sueloEn(e.clientX, e.clientY);
+      if (!p) return;
+      const z = arrastre.z;
+      const x = p.x - obraBase.bx + arrastre.ox;
+      const y = p.y - obraBase.by + arrastre.oy;
+      const q = PIEZAS[z.t]?.rejilla ? ajusta(z.t, x, y) : { x: Math.min(L, Math.max(0, Math.round(x * 10) / 10)), y: Math.min(L, Math.max(0, Math.round(y * 10) / 10)) };
+      if (q.x === z.x && q.y === z.y) return;
+      z.x = q.x;
+      z.y = q.y;
+      arrastre.movido = true;
+      pintaMundo();
+    }
+    function acabaArrastre() {
+      if (!arrastre) return false;
+      const movido = arrastre.movido;
+      arrastre = null;
+      controls.enabled = true;
+      if (movido && obraClave) programaGuardado(obraClave);
+      return movido;
     }
     function onSube(e) {
       punteros = Math.max(0, punteros - 1);
       const tq = toque;
       toque = null;
+      if (acabaArrastre()) return; // se ha arrastrado: no es un toque
       if (!tq || punteros !== 0) return;
       if (Math.hypot(e.clientX - tq.x, e.clientY - tq.y) > 12 || performance.now() - tq.t > 900) return;
       if (obraClave) colocaEn(e.clientX, e.clientY);
@@ -1335,8 +1400,10 @@ export default function Mundo() {
     function onCancela() {
       punteros = Math.max(0, punteros - 1);
       toque = null;
+      acabaArrastre();
     }
     canvas.addEventListener('pointerdown', onBaja);
+    canvas.addEventListener('pointermove', onMueve);
     canvas.addEventListener('pointerup', onSube);
     canvas.addEventListener('pointercancel', onCancela);
 
@@ -1479,11 +1546,12 @@ export default function Mundo() {
 
     // Diagnóstico y pruebas (npm run prueba): con render por software un
     // paseo de 30 m tarda lo que tarde, así que la prueba se teletransporta.
-    window.__mundo = { mueve: mueveA, pos: () => ({ x: yo.x, y: yo.y }) };
+    window.__mundo = { mueve: mueveA, pos: () => ({ x: yo.x, y: yo.y }), seleccion: () => (seleccion ? { ...seleccion.z } : null) };
 
     engineRef.current = {
       construye(clave, cb) {
         vaciaGuardado();
+        acabaArrastre();
         seleccion = null;
         anillo.visible = false;
         if (!clave) {
@@ -1654,15 +1722,30 @@ export default function Mundo() {
         const paso = Math.min(VELOCIDAD * dt * Math.min(1, l), yo.destino ? Math.hypot(yo.destino.x - yo.x, yo.destino.y - yo.y) : Infinity);
         const dx = (mx / l) * paso;
         const dy = (my / l) * paso;
+        const x0 = yo.x;
+        const y0 = yo.y;
         yo.x += dx;
         yo.y += dy;
+        // sin atravesar casas, árboles ni la fuente: si se mete en un
+        // sólido, se le empuja fuera por el radio (y así resbala por el borde)
+        for (const so of solidos) {
+          const ex = yo.x - so.x;
+          const ey = yo.y - so.y;
+          const d = Math.hypot(ex, ey);
+          const r = so.r + 0.45;
+          if (d < r && d > 0.001) {
+            yo.x = so.x + (ex / d) * r;
+            yo.y = so.y + (ey / d) * r;
+          }
+        }
         yo.rumbo = Math.atan2(dx, -dy); // el frente del avatar es +z (sur)
         yo.fase += dt * 11;
         // la cámara va con él
-        camera.position.x += dx;
-        camera.position.z -= dy;
-        controls.target.x += dx;
-        controls.target.z -= dy;
+        camera.position.x += yo.x - x0;
+        camera.position.z -= yo.y - y0;
+        controls.target.x += yo.x - x0;
+        controls.target.z -= yo.y - y0;
+        if (yo.destino && Math.hypot(yo.x - x0, yo.y - y0) < paso * 0.2) yo.destino = null; // atascado: se para
         actualizaDonde(false);
       } else {
         yo.fase = 0;
@@ -1755,6 +1838,7 @@ export default function Mundo() {
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
       canvas.removeEventListener('pointerdown', onBaja);
+      canvas.removeEventListener('pointermove', onMueve);
       canvas.removeEventListener('pointerup', onSube);
       canvas.removeEventListener('pointercancel', onCancela);
       for (const id of [...otros.keys()]) quitaOtro(id);
@@ -1842,8 +1926,9 @@ export default function Mundo() {
     });
     eng.herramienta(herr, tinte);
     setInfoOpen(false);
+    setPanelAbierto(!estrecho);
     setObra({ clave: donde.clave, n, sel: false });
-    avisa('Toca el suelo para colocar; toca una pieza para moverla, girarla o borrarla');
+    avisa(estrecho ? 'Elige una pieza y toca el suelo para colocarla; arrástrala para moverla' : 'Toca el suelo para colocar; arrastra una pieza para moverla');
   }
   function terminaObra() {
     engineRef.current?.construye(null);
@@ -1864,6 +1949,7 @@ export default function Mundo() {
     engineRef.current?.herramienta(t, tinte);
     engineRef.current?.suelta();
     setObra((o) => (o ? { ...o, sel: false } : o));
+    if (estrecho) setPanelAbierto(false); // en el móvil, elegir cierra la hoja: se ve el mundo
   }
   function eligeTinte(c) {
     setTinte(c);
@@ -1959,7 +2045,7 @@ export default function Mundo() {
             <b>Reclama una parcela</b> libre: ponte encima y pulsa «Reclamar». Es tuya para siempre (o hasta que la abandones).
           </p>
           <p>
-            <b>Construye</b> en tu parcela: casas, árboles, rocas, caminos, vallas, muebles… Toca el suelo para colocar una pieza; toca una pieza para seleccionarla y moverla con las flechas, girarla o borrarla. Lo ve todo el mundo al momento.
+            <b>Construye</b> en tu parcela: casas, árboles, rocas, caminos, vallas, muebles… Elige una pieza del panel y toca el suelo para colocarla. <b>Arrastra</b> una pieza para llevarla donde quieras; tócala para girarla o borrarla. Lo ve todo el mundo al momento.
           </p>
           <p>
             <b>Todo se dibuja en tu GPU.</b> El servidor solo guarda qué hay en cada parcela y quién anda cerca.
@@ -1994,59 +2080,82 @@ export default function Mundo() {
               {obra.n}/{MAX_PIEZAS} piezas · toca el suelo para colocar
             </span>
           </div>
-          <div className="ui paleta glass" role="toolbar" aria-label="Piezas">
-            <div className="fila piezas">
-              {Object.entries(PIEZAS).map(([t, d]) => (
-                <button key={t} className={'herr' + (herr === t ? ' on' : '')} onClick={() => eligeHerr(t)} aria-label={d.nombre} aria-pressed={herr === t} title={d.nombre}>
-                  {d.mini ? (
-                    <i className={'mini' + (d.zoom ? ' zoom' : '')}>
-                      <img src={'/miniaturas/' + t + '.png'} alt="" />
-                    </i>
-                  ) : (
-                    <span>{d.icono}</span>
-                  )}
-                  <small>{d.nombre}</small>
-                </button>
-              ))}
+          <div className={'ui panel glass' + (panelAbierto ? '' : ' plegado')}>
+            <div className="panel-cab">
+              <button className="actual" onClick={() => setPanelAbierto((v) => !v)} aria-expanded={panelAbierto} aria-label="Elegir pieza">
+                {PIEZAS[herr]?.mini ? (
+                  <i className={'mini' + (PIEZAS[herr].zoom ? ' zoom' : '')}>
+                    <img src={'/miniaturas/' + herr + '.png'} alt="" />
+                  </i>
+                ) : (
+                  <span className="emoji">{PIEZAS[herr]?.icono}</span>
+                )}
+                <b>{PIEZAS[herr]?.nombre}</b>
+                <small>{panelAbierto ? 'Cerrar' : 'Elegir pieza ▴'}</small>
+              </button>
+              <button className="btn-principal listo" onClick={terminaObra}>
+                Listo
+              </button>
             </div>
-            {obra.sel ? (
-              <div className="fila abajo">
-                <span className="pista">Pieza seleccionada</span>
-                <div className="cruz" role="group" aria-label="Mover la pieza">
-                  <button className="btn-sec" onClick={() => engineRef.current?.empuja(0, 1)} aria-label="Mover hacia delante">▲</button>
-                  <button className="btn-sec" onClick={() => engineRef.current?.empuja(-1, 0)} aria-label="Mover a la izquierda">◀</button>
-                  <button className="btn-sec" onClick={() => engineRef.current?.empuja(0, -1)} aria-label="Mover hacia atrás">▼</button>
-                  <button className="btn-sec" onClick={() => engineRef.current?.empuja(1, 0)} aria-label="Mover a la derecha">▶</button>
-                </div>
-                <button className="btn-sec" onClick={() => engineRef.current?.gira()} title="Gira la pieza">
-                  ↻ Girar
-                </button>
-                <button className="btn-sec peligro" onClick={onBorrar} aria-label="Borrar pieza">
-                  🗑 Borrar
-                </button>
-                <button className="btn-principal" onClick={onSoltar}>
-                  ✓ Soltar
-                </button>
+            <div className="panel-cuerpo">
+              <div className="tabs" role="tablist">
+                {Object.entries(CATEGORIAS).map(([c, nombre]) => (
+                  <button key={c} className={'tab' + (cat === c ? ' on' : '')} data-cat={c} role="tab" aria-selected={cat === c} onClick={() => setCat(c)}>
+                    {nombre}
+                  </button>
+                ))}
               </div>
-            ) : (
-              <div className="fila abajo">
-                <div className="colores mini" style={{ visibility: tiñe ? 'visible' : 'hidden' }}>
+              <div className="rejilla">
+                {Object.entries(PIEZAS)
+                  .filter(([, d]) => d.cat === cat)
+                  .map(([t, d]) => (
+                    <button key={t} className={'pieza' + (herr === t ? ' on' : '')} onClick={() => eligeHerr(t)} aria-label={d.nombre} aria-pressed={herr === t} title={d.nombre}>
+                      {d.mini ? (
+                        <i className={'mini' + (d.zoom ? ' zoom' : '')}>
+                          <img src={'/miniaturas/' + t + '.png'} alt="" />
+                        </i>
+                      ) : (
+                        <span className="emoji">{d.icono}</span>
+                      )}
+                      <small>{d.nombre}</small>
+                    </button>
+                  ))}
+              </div>
+              <div className="panel-pie">
+                <div className="colores mini" style={{ display: tiñe ? 'flex' : 'none' }}>
                   {COLORES.map((c, i) => (
                     <button key={c} className={'color' + (tinte === i ? ' on' : '')} style={{ background: c }} onClick={() => eligeTinte(i)} aria-label={'Color ' + (i + 1)} />
                   ))}
                 </div>
                 <button className="btn-sec" onClick={() => engineRef.current?.gira()} title="Giro para la siguiente pieza">
-                  ↻ Girar
+                  ↻ Girar la siguiente
                 </button>
                 <button className="btn-sec peligro" onClick={onAbandonar}>
-                  Abandonar
-                </button>
-                <button className="btn-principal" onClick={terminaObra}>
-                  Listo
+                  Abandonar parcela
                 </button>
               </div>
-            )}
+            </div>
           </div>
+          {obra.sel && !(estrecho && panelAbierto) && (
+            <div className="ui sel-bar glass" role="toolbar" aria-label="Pieza seleccionada">
+              <span className="pista">Arrastra la pieza, o:</span>
+              <div className="cruz" role="group" aria-label="Mover la pieza">
+                <button className="btn-sec" onClick={() => engineRef.current?.empuja(0, 1)} aria-label="Mover hacia delante">▲</button>
+                <button className="btn-sec" onClick={() => engineRef.current?.empuja(-1, 0)} aria-label="Mover a la izquierda">◀</button>
+                <button className="btn-sec" onClick={() => engineRef.current?.empuja(0, -1)} aria-label="Mover hacia atrás">▼</button>
+                <button className="btn-sec" onClick={() => engineRef.current?.empuja(1, 0)} aria-label="Mover a la derecha">▶</button>
+              </div>
+              <button className="btn-sec" onClick={() => engineRef.current?.gira()} title="Gira la pieza">
+                ↻ Girar
+              </button>
+              <button className="btn-sec peligro" onClick={onBorrar} aria-label="Borrar pieza">
+                🗑 Borrar
+              </button>
+              <button className="btn-principal" onClick={onSoltar}>
+                ✓ Soltar
+              </button>
+            </div>
+          )}
         </>
       )}
 

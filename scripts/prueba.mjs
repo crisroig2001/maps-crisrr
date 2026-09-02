@@ -74,28 +74,44 @@ const construir = '.acciones .btn-principal:has-text("Construir")';
 await ana.waitForSelector(construir, { state: 'attached', timeout: 20000 });
 console.log('toast:', (await ana.textContent('.toast')).trim());
 await pulsa(ana, construir);
-await ana.waitForSelector('.paleta', { state: 'attached' });
-await pulsa(ana, '.paleta button[aria-label="Casa"]');
-await pulsa(ana, '.paleta .colores .color >> nth=5');
-await ana.mouse.click(500, 250);
-await pulsa(ana, '.paleta button[aria-label="Árbol"]');
+await ana.waitForSelector('.panel', { state: 'attached' });
+// elegir una pieza: su pestaña y luego la pieza. Los toques van a la
+// izquierda de x=640 (a la derecha está el panel).
+const elige = async (cat, nombre) => {
+  await pulsa(ana, `.panel .tab[data-cat="${cat}"]`);
+  await pulsa(ana, `.panel button[aria-label="${nombre}"]`);
+};
+await elige('casas', 'Casa');
+await pulsa(ana, '.panel .colores .color >> nth=5');
+await ana.mouse.click(400, 250);
+// arrastrar la casa recién colocada (seleccionada) con el ratón
+await ana.waitForTimeout(600);
+const antesArr = await ana.evaluate(() => window.__mundo.seleccion());
+await ana.mouse.move(400, 232);
+await ana.mouse.down();
+await ana.mouse.move(340, 232, { steps: 6 });
+await ana.mouse.move(300, 232, { steps: 6 });
+await ana.mouse.up();
+await ana.waitForTimeout(400);
+const trasArr = await ana.evaluate(() => window.__mundo.seleccion());
+console.log('arrastre: x', antesArr?.x, '→', trasArr?.x, trasArr && antesArr && Math.abs(trasArr.x - antesArr.x) > 1.5 ? 'se mueve' : 'NO SE MUEVE');
+await elige('naturaleza', 'Árbol');
 await ana.mouse.click(300, 380);
-await ana.mouse.click(700, 380);
-// (los toques van por encima de y=420: más abajo está la paleta)
-await pulsa(ana, '.paleta button[aria-label="Valla"]');
-await ana.mouse.click(400, 300);
-await ana.mouse.click(600, 300);
-await pulsa(ana, '.paleta button[aria-label="Bandera"]');
-await ana.mouse.click(560, 340);
+await ana.mouse.click(600, 380);
+await elige('suelo', 'Valla');
+await ana.mouse.click(350, 300);
+await ana.mouse.click(550, 300);
+await elige('jardin', 'Bandera');
+await ana.mouse.click(450, 340);
 // la recién colocada queda seleccionada: se empuja, se gira y se borra
-await pulsa(ana, '.paleta button[aria-label="Mover hacia delante"]');
-await pulsa(ana, '.paleta button[title="Gira la pieza"]');
+await pulsa(ana, '.sel-bar button[aria-label="Mover hacia delante"]');
+await pulsa(ana, '.sel-bar button[title="Gira la pieza"]');
 console.log('tras mover y girar:', (await ana.textContent('.deco-cab')).trim());
-await pulsa(ana, '.paleta button[aria-label="Borrar pieza"]');
+await pulsa(ana, '.sel-bar button[aria-label="Borrar pieza"]');
 console.log('cabecera obra:', (await ana.textContent('.deco-cab')).trim());
 await ana.waitForTimeout(1500);
 await ana.screenshot({ path: path.join(OUT, 'm4-ana-construye.png') });
-await pulsa(ana, '.paleta .btn-principal'); // Listo
+await pulsa(ana, '.panel .listo'); // Listo
 await ana.waitForTimeout(500);
 
 // ¿Lo ve Bea? (sondeo de parcelas cada 6 s)
@@ -136,6 +152,18 @@ await cid.mouse.up();
 const p1 = await cid.evaluate(() => window.__mundo.pos());
 console.log('joystick móvil: y', p0.y.toFixed(1), '→', p1.y.toFixed(1), p1.y > p0.y + 1 ? 'anda' : 'NO ANDA');
 await cid.screenshot({ path: path.join(OUT, 'm6-movil-joystick.png') });
+// y en obras: la hoja de piezas plegada, y abierta
+await cid.evaluate(() => window.__mundo.mueve(-3 * 48 + 24, -2 * 48 + 12));
+await pulsa(cid, '.acciones .btn-principal:has-text("Reclamar")');
+await pulsa(cid, '.acciones .btn-principal:has-text("Construir")');
+await cid.waitForSelector('.panel.plegado', { state: 'attached', timeout: 15000 });
+await cid.mouse.click(195, 300);
+await cid.waitForTimeout(800);
+console.log('móvil en obras:', (await cid.textContent('.deco-cab')).trim(), '| hoja plegada:', await cid.$('.panel.plegado') !== null);
+await cid.screenshot({ path: path.join(OUT, 'm7-movil-obras.png') });
+await pulsa(cid, '.panel .actual');
+await cid.waitForTimeout(600);
+await cid.screenshot({ path: path.join(OUT, 'm8-movil-panel.png') });
 
 console.log('errores:', errores.length ? errores : 'ninguno');
 await browser.close();
