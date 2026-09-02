@@ -51,10 +51,16 @@ servidor solo guarda qué hay en cada parcela y quién anda cerca.
   arbustos, flores, setas, calabazas, rocas, troncos, hoguera, camino, puente,
   valla, cartel, banco, mesa, silla, farola, fuente y bandera. Toca el suelo
   para colocar una pieza (se pega a medio metro; caminos, vallas y puentes a
-  una rejilla de 4 m para que casen) y **toca una pieza para seleccionarla**:
-  sale un anillo y se puede mover con las flechas paso a paso, llevarla a
-  otro sitio tocando el suelo, girarla en cuartos de vuelta o borrarla. La
-  recién colocada queda seleccionada, para ajustarla al momento. Tope de 150
+  una rejilla de 4 m para que casen) y **arrastra una pieza** con el dedo o
+  el ratón para llevarla donde quieras (a pasos de 10 cm; la cámara se queda
+  quieta mientras). Tocarla la selecciona: sale un anillo y una barra con
+  flechas de medio metro, girar, borrar y soltar. La recién colocada queda
+  seleccionada, para ajustarla al momento. Las piezas van en un **panel** a
+  la derecha por pestañas (Casas, Naturaleza, Jardín, Suelo) con miniaturas
+  grandes; en el móvil es una hoja abajo que se pliega al elegir, para ver
+  el mundo. Casas, árboles, rocas y la fuente son **sólidos**: el avatar no
+  los atraviesa (se le empuja fuera por el radio y resbala por el borde), así
+  que ya no desaparece dentro de una casa. Tope de 150
   piezas por parcela. Una pieza guardada es `{t, x, y, r, c}`: tipo, metros
   dentro de la parcela (1 decimal), giro y color — 40 bytes que no dependen
   de dónde esté la parcela.
