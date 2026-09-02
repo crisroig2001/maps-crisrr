@@ -33,11 +33,18 @@ const SOL_FUERZA = 2.9;
 const CIELO_LUZ = 0xa9c6ff; // luz hemisférica: desde arriba
 const SUELO_LUZ = 0x7f8f6e; // ... y rebotada desde la hierba
 const HEMI_FUERZA = 1.55;
-const CIELO_CENIT = 0x5eaee6;
-const CIELO_HORIZONTE = 0xfbe7c8;
-const NIEBLA = 0xf1e2cc;
-const NIEBLA_DESDE = 150;
-const NIEBLA_HASTA = 420;
+// El cielo, como en la referencia: azul intenso en lo alto, celeste pálido
+// en el horizonte, cúmulos cremosos pintados sobre él y una calima
+// blanquecina a ras de horizonte. La niebla NO tiñe de un color: a lo lejos
+// las cosas pierden saturación y se aclaran (se mezcla en HSV), así el
+// verde lejano sigue siendo verde, solo más pálido.
+const CIELO_CENIT = 0x248fd5;
+const CIELO_HORIZONTE = 0xcaf0fe;
+const CIELO_CALIMA = 0xd8eeff;
+const CIELO_NUBES = 0xffe5c4;
+const NIEBLA = 0xd8eeff;
+const NIEBLA_DESDE = 60;
+const NIEBLA_HASTA = 380;
 const SUELO_M = 16 * L; // el plano del suelo que sigue al avatar: 768 m
 const RADIO_PARCELAS = 6; // se piden (2r+1)² parcelas alrededor: 13×13
 
@@ -101,19 +108,80 @@ vec2 dAltura(vec2 p) {
 }`;
 const uTiempo = { value: 0 };
 const uNubes = { value: null }; // textura de sombras de nubes (se crea en el efecto)
+const uAvatar = { value: new THREE.Vector3() }; // dónde está el avatar: la hierba se aparta
+
+// ruido de valor 2D: para variar el verde del suelo sin textura
+const GLSL_RUIDO = `
+float hash21(vec2 p) { p = fract(p * vec2(127.1, 311.7)); p += dot(p, p + 19.19); return fract(p.x * p.y); }
+float ruido(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash21(i), hash21(i + vec2(1.0, 0.0)), f.x), mix(hash21(i + vec2(0.0, 1.0)), hash21(i + vec2(1.0, 1.0)), f.x), f.y);
+}`;
+const GLSL_HSV = `
+vec3 rgb2hsv(vec3 c) {
+  vec4 K = vec4(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
+  vec4 p = mix(vec4(c.bg, K.wz), vec4(c.gb, K.xy), step(c.b, c.g));
+  vec4 q = mix(vec4(p.xyw, c.r), vec4(c.r, p.yzx), step(p.x, c.r));
+  float d = q.x - min(q.w, q.y);
+  float e = 1.0e-10;
+  return vec3(abs(q.z + (q.w - q.y) / (6.0 * d + e)), d / (q.x + e), q.x);
+}
+vec3 hsv2rgb(vec3 c) {
+  vec4 K = vec4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
+  vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
+  return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
+}`;
+// La niebla de la referencia: con la distancia el color pierde saturación
+// y sube de valor hacia el tono del horizonte, en vez de fundirse a un
+// color plano. Se aplica donde three aplica la suya (ya en espacio de
+// pantalla, después del tone mapping), así que sustituye a ese trozo.
+// Antes, un revelado ligero (la referencia lo hace con una LUT): un poco
+// más de saturación y de contraste, que el tone mapping se come.
+const GLSL_NIEBLA = `
+  {
+    vec3 gc = gl_FragColor.rgb;
+    float gl = dot(gc, vec3(0.2125, 0.7154, 0.0721));
+    gc = mix(vec3(gl), gc, 1.18);
+    gc = (gc - 0.5) * 1.06 + 0.5;
+    gl_FragColor.rgb = clamp(gc, 0.0, 1.0);
+  }
+#ifdef USE_FOG
+  float nieblaF = smoothstep(fogNear, fogFar, vFogDepth);
+  vec3 nHSV = rgb2hsv(gl_FragColor.rgb);
+  nHSV.z = mix(nHSV.z, 0.88, nieblaF);
+  nHSV.y = mix(nHSV.y, 0.12, nieblaF);
+  gl_FragColor.rgb = mix(hsv2rgb(nHSV), fogColor, nieblaF * nieblaF * 0.5);
+#endif`;
+function parcheaNiebla(sh) {
+  sh.fragmentShader = sh.fragmentShader.replace('#include <fog_pars_fragment>', '#include <fog_pars_fragment>\n' + GLSL_HSV).replace('#include <fog_fragment>', GLSL_NIEBLA);
+}
+// para los materiales que no llevan otro parche
+function conNiebla(mat) {
+  mat.onBeforeCompile = (sh) => parcheaNiebla(sh);
+  mat.customProgramCacheKey = () => 'niebla';
+  return mat;
+}
 
 // Parchea un material para que el vertex shader suba cada vértice a la
 // altura del terreno bajo su posición de MUNDO (sirve con instancias).
 //   normales: la normal pasa a ser la de la colina (suelo, plazas)
 //   tinta: el suelo se aclara en lo alto y se oscurece en lo bajo
-//   nubes: sombras de nubes cruzando (suelo y hierba)
-//   viento: hierba: se mece con el tiempo, más cuanto más arriba del tallo
-function conAltura(mat, { tinta = false, viento = false, normales = false, nubes = false } = {}) {
+//   nubes: sombras de nubes cruzando (suelo y hierba): dos capas de manchas
+//          que van cada una por su lado, y solo donde coinciden hay sombra
+//   viento: hierba: se mece con el tiempo, más cuanto más arriba del tallo,
+//          y se aparta del avatar cuando pasa
+//   cesped: el verde del suelo se calcula aquí con ruido a varias escalas
+//          (dos verdes a manchas grandes, calvas más claras y matas más
+//          oscuras), como el terreno de la referencia
+function conAltura(mat, { tinta = false, viento = false, normales = false, nubes = false, cesped = false } = {}) {
   mat.onBeforeCompile = (sh) => {
     sh.uniforms.tiempo = uTiempo;
     sh.uniforms.tNubes = uNubes;
+    sh.uniforms.uAvatar = uAvatar;
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\n' + GLSL_ALTURA + '\nuniform float tiempo;\nvarying float vAltura;\nvarying vec2 vMundoXZ;')
+      .replace('#include <common>', '#include <common>\n' + GLSL_ALTURA + '\nuniform float tiempo;\nuniform vec3 uAvatar;\nvarying float vAltura;\nvarying vec2 vMundoXZ;')
       .replace(
         '#include <beginnormal_vertex>',
         `#include <beginnormal_vertex>
@@ -141,18 +209,49 @@ function conAltura(mat, { tinta = false, viento = false, normales = false, nubes
         transformed.y += hh;
         vAltura = hh;
         vMundoXZ = wpos.xz;
-        ${viento ? 'transformed.x += sin(tiempo * 1.6 + wpos.x * 0.35 + wpos.z * 0.21) * 0.16 * position.y;\n transformed.z += cos(tiempo * 1.3 + wpos.x * 0.17 - wpos.z * 0.3) * 0.08 * position.y;' : ''}`
+        ${
+          viento
+            ? `transformed.x += sin(tiempo * 1.6 + wpos.x * 0.35 + wpos.z * 0.21) * 0.16 * position.y;
+               transformed.z += cos(tiempo * 1.3 + wpos.x * 0.17 - wpos.z * 0.3) * 0.08 * position.y;
+               vec2 dAv = wpos.xz - uAvatar.xz;
+               float lAv = length(dAv);
+               transformed.xz += (dAv / max(lAv, 0.001)) * (1.0 - smoothstep(0.2, 1.5, lAv)) * 0.7 * position.y;`
+            : ''
+        }`
       );
     sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', '#include <common>\nuniform float tiempo;\nuniform sampler2D tNubes;\nvarying float vAltura;\nvarying vec2 vMundoXZ;')
+      .replace('#include <common>', '#include <common>\nuniform float tiempo;\nuniform sampler2D tNubes;\nvarying float vAltura;\nvarying vec2 vMundoXZ;' + (cesped ? GLSL_RUIDO : ''))
+      // la hierba es de doble cara y three le da la vuelta a la normal en
+      // la cara trasera: la mitad de cada mata salía a oscuras. La normal
+      // se queda mirando arriba, se vea por donde se vea.
+      .replace('#include <normal_fragment_begin>', '#include <normal_fragment_begin>' + (viento ? '\nnormal = normalize(vNormal);' : ''))
       .replace(
         '#include <color_fragment>',
         `#include <color_fragment>
+        ${
+          cesped
+            ? `float rA = ruido(vMundoXZ * 0.03);
+               float rB = ruido(vMundoXZ * 0.11 + 7.3);
+               float rC = ruido(vMundoXZ * 0.35 + 3.1);
+               float rD = ruido(vMundoXZ * 0.19 + 11.0);
+               vec3 cesped = mix(vec3(0.27, 0.55, 0.15), vec3(0.36, 0.60, 0.17), rA);
+               cesped = mix(cesped, vec3(0.47, 0.70, 0.22), smoothstep(0.55, 0.8, rC) * smoothstep(0.35, 0.7, rB));
+               cesped = mix(cesped, vec3(0.20, 0.45, 0.13), smoothstep(0.6, 0.85, rD) * 0.6);
+               diffuseColor.rgb *= cesped;`
+            : ''
+        }
         ${tinta ? 'diffuseColor.rgb *= mix(vec3(0.86, 0.93, 0.8), vec3(1.06, 1.04, 0.92), clamp((vAltura - 0.2) / 3.0, 0.0, 1.0)); diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.78, 0.72, 0.55), clamp((-0.2 - vAltura) / 2.0, 0.0, 1.0));' : ''}
-        ${nubes ? 'diffuseColor.rgb *= mix(0.74, 1.0, texture2D(tNubes, vMundoXZ / 420.0 + vec2(tiempo * 0.006, tiempo * 0.0025)).r);' : ''}`
+        ${
+          nubes
+            ? `float nb1 = texture2D(tNubes, vMundoXZ / 380.0 + vec2(tiempo * 0.0035, tiempo * 0.0018)).r;
+               float nb2 = texture2D(tNubes, vMundoXZ / 260.0 + vec2(19.3 - tiempo * 0.0021, tiempo * 0.0029)).r;
+               diffuseColor.rgb *= mix(0.7, 1.0, smoothstep(0.15, 0.85, nb1 * nb2));`
+            : ''
+        }`
       );
+    parcheaNiebla(sh);
   };
-  mat.customProgramCacheKey = () => 'altura' + (tinta ? 't' : '') + (viento ? 'v' : '') + (normales ? 'n' : '') + (nubes ? 'c' : '');
+  mat.customProgramCacheKey = () => 'altura' + (tinta ? 't' : '') + (viento ? 'v' : '') + (normales ? 'n' : '') + (nubes ? 'c' : '') + (cesped ? 'g' : '');
   return mat;
 }
 // Las copas se mecen: un vaivén lento proporcional a la altura sobre el
@@ -174,6 +273,7 @@ function conViento(mat) {
         transformed.x += sin(tiempo * 1.1 + wv.x * 0.2 + wv.z * 0.15) * 0.18 * alto;
         transformed.z += cos(tiempo * 0.9 + wv.x * 0.12 - wv.z * 0.2) * 0.12 * alto;`
       );
+    parcheaNiebla(sh);
   };
   mat.customProgramCacheKey = () => 'viento';
   return mat;
@@ -349,6 +449,17 @@ function colorDueno(id) {
   return new THREE.Color().setHSL((h % 360) / 360, 0.55, 0.62);
 }
 
+// Los verdes del Nature Kit tiran a menta y turquesa; el mundo de la
+// referencia es todo verde hierba, con el follaje en la familia del suelo.
+// Así que los verdes azulados del follaje se llevan a ese tono (los demás
+// colores, tal cual).
+function acercaVerde(c) {
+  const hsl = {};
+  c.getHSL(hsl);
+  if (hsl.h > 0.36 && hsl.h < 0.52 && hsl.s > 0.2) c.setHSL(hsl.h - 0.11, hsl.s * 0.9, hsl.l * 0.98);
+  return c;
+}
+
 function prng(seed) {
   let s = seed >>> 0 || 1;
   return () => {
@@ -464,45 +575,117 @@ export default function Mundo() {
 
     // --- escena, cielo y niebla ---
     const scene = new THREE.Scene();
-    // Degradado de cenit a horizonte melocotón, con nubes blandas pintadas
-    // sobre el horizonte (una banda: es lo que se ve con la cámara al hombro).
-    const texCielo = (() => {
+    // Una cúpula que va con la cámara, pintada en el shader como la de la
+    // referencia: degradado de horizonte a cenit, una banda de cúmulos
+    // (textura de una franja, pintada aquí) que gira muy despacio, y la
+    // calima blanquecina a ras de horizonte. Sin tone mapping: el cielo
+    // sale con los colores que se le dan.
+    const texNubesCielo = (() => {
+      const W = 1024;
+      const H = 256;
       const cv = document.createElement('canvas');
-      cv.width = 1024;
-      cv.height = 256;
+      cv.width = W;
+      cv.height = H;
       const c = cv.getContext('2d');
-      const grad = c.createLinearGradient(0, 0, 0, 256);
-      const hex = (v) => '#' + v.toString(16).padStart(6, '0');
-      grad.addColorStop(0, hex(CIELO_CENIT));
-      grad.addColorStop(0.36, '#a9d3ee');
-      grad.addColorStop(0.5, hex(CIELO_HORIZONTE));
-      grad.addColorStop(1, hex(CIELO_HORIZONTE));
-      c.fillStyle = grad;
-      c.fillRect(0, 0, 1024, 256);
+      c.fillStyle = '#000';
+      c.fillRect(0, 0, W, H);
       const rnd = prng(5);
-      for (let i = 0; i < 26; i++) {
-        const x = rnd() * 1024;
-        const y = 96 + rnd() * 26;
-        const w = 30 + rnd() * 70;
-        const g = c.createRadialGradient(x, y, 0, x, y, w);
-        g.addColorStop(0, 'rgba(255,255,255,0.85)');
-        g.addColorStop(0.6, 'rgba(255,255,255,0.35)');
-        g.addColorStop(1, 'rgba(255,255,255,0)');
-        c.fillStyle = g;
-        c.beginPath();
-        c.ellipse(x, y, w, w * 0.35, 0, 0, Math.PI * 2);
-        c.fill();
-        // y su copia al otro lado del borde, para que la costura no se note
-        c.beginPath();
-        c.ellipse(x + (x < 512 ? 1024 : -1024), y, w, w * 0.35, 0, 0, Math.PI * 2);
-        c.fill();
+      // cada cúmulo: un montón de bolas solapadas sobre una base a ras del
+      // horizonte; primero las sombras grises (más abajo), luego el blanco
+      const cumulos = [];
+      for (let i = 0; i < 9; i++) {
+        const x = rnd() * W;
+        const ancho = 70 + rnd() * 150;
+        const alto = 40 + rnd() * 70;
+        const bolas = [];
+        const n = 10 + Math.floor(rnd() * 10);
+        for (let j = 0; j < n; j++) {
+          const u = (rnd() - 0.5) * 2;
+          const r = 14 + rnd() * 26;
+          bolas.push({ x: x + u * ancho * 0.5, y: H - 8 - Math.abs(rnd() * alto * (1 - u * u * 0.6)), r });
+        }
+        cumulos.push(bolas);
       }
+      const pinta = (color, dy, esc) => {
+        for (const bolas of cumulos) {
+          for (const b of bolas) {
+            for (const ox of [0, W, -W]) {
+              const g = c.createRadialGradient(b.x + ox, b.y + dy, b.r * esc * 0.7, b.x + ox, b.y + dy, b.r * esc);
+              g.addColorStop(0, color);
+              g.addColorStop(1, 'rgba(0,0,0,0)');
+              c.fillStyle = g;
+              c.beginPath();
+              c.arc(b.x + ox, b.y + dy, b.r * esc, 0, Math.PI * 2);
+              c.fill();
+            }
+          }
+        }
+      };
+      pinta('rgba(140,140,140,1)', 6, 1.08);
+      pinta('rgba(255,255,255,1)', 0, 1);
+      // la base de todos los cúmulos se funde con la calima del horizonte
+      const base = c.createLinearGradient(0, H - 26, 0, H);
+      base.addColorStop(0, 'rgba(255,255,255,0)');
+      base.addColorStop(1, 'rgba(255,255,255,0.75)');
+      c.fillStyle = base;
+      c.fillRect(0, H - 26, W, 26);
       const tex = new THREE.CanvasTexture(cv);
-      tex.mapping = THREE.EquirectangularReflectionMapping;
-      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.wrapS = THREE.RepeatWrapping;
+      tex.wrapT = THREE.ClampToEdgeWrapping;
+      tex.generateMipmaps = false;
+      tex.minFilter = THREE.LinearFilter;
       return tex;
     })();
-    scene.background = texCielo;
+    const matCielo = new THREE.ShaderMaterial({
+      uniforms: {
+        tiempo: uTiempo,
+        tNubes: { value: texNubesCielo },
+        cCenit: { value: new THREE.Color(CIELO_CENIT) },
+        cHorizonte: { value: new THREE.Color(CIELO_HORIZONTE) },
+        cCalima: { value: new THREE.Color(CIELO_CALIMA) },
+        cNubes: { value: new THREE.Color(CIELO_NUBES) },
+      },
+      vertexShader: `
+        varying vec3 vDir;
+        void main() {
+          vDir = position; // la esfera está centrada en la cámara: la posición ES la dirección
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }`,
+      fragmentShader: `
+        uniform float tiempo;
+        uniform sampler2D tNubes;
+        uniform vec3 cCenit;
+        uniform vec3 cHorizonte;
+        uniform vec3 cCalima;
+        uniform vec3 cNubes;
+        varying vec3 vDir;
+        float ajusta(float v, float a, float b) { return clamp((v - a) / (b - a), 0.0, 1.0); }
+        void main() {
+          vec3 d = normalize(vDir);
+          float t = ajusta(d.y, -0.2, 0.35);
+          t = t < 0.5 ? 2.0 * t * t : -1.0 + (4.0 - 2.0 * t) * t;
+          vec3 color = mix(cHorizonte, cCenit, t);
+          // los cúmulos: la franja va del horizonte a unos 18 grados, y gira
+          float v = ajusta(d.y, -0.03, 0.32);
+          float u = atan(d.z, d.x) / 6.2831853 * 2.0 + tiempo * 0.0012;
+          u += sin(v * 7.0 + tiempo * 0.03) * 0.004;
+          float limites = smoothstep(0.0, 0.03, v) * smoothstep(1.0, 0.97, v);
+          float nubes = texture2D(tNubes, vec2(u, v)).r * limites;
+          float e = 1.0 - nubes;
+          nubes = 1.0 - e * e * e;
+          color = mix(color, cNubes, nubes);
+          color = mix(color, cCalima, ajusta(d.y, 0.06, -0.04));
+          gl_FragColor = vec4(color, 1.0);
+          #include <colorspace_fragment>
+        }`,
+      side: THREE.BackSide,
+      depthWrite: false,
+      fog: false,
+    });
+    const cielo = new THREE.Mesh(new THREE.SphereGeometry(1000, 40, 20), matCielo);
+    cielo.frustumCulled = false;
+    cielo.renderOrder = -1000;
+    scene.add(cielo);
     scene.fog = new THREE.Fog(NIEBLA, NIEBLA_DESDE, NIEBLA_HASTA);
 
     // --- luces: el sol y el cielo ---
@@ -523,16 +706,17 @@ export default function Mundo() {
     }
 
     // --- rampa toon: la luz cae a escalones ---
-    // Un escalón duro al entrar en la sombra y un degradado suave hacia la
-    // luz plena: la misma forma que la rampa pintada de la referencia.
+    // Como las rampas pintadas de la referencia: casi todo son DOS tonos con
+    // un corte duro justo donde la cara deja de mirar al sol (t = 0,5 es la
+    // cara de canto), y un tercer escalón, apenas más claro, en lo que mira
+    // al sol de frente. La sombra no es negra: el cielo (luz hemisférica)
+    // la rellena de azul.
     const rampa = (() => {
-      const n = 32;
+      const n = 64;
       const d = new Uint8Array(n);
       for (let i = 0; i < n; i++) {
         const t = i / (n - 1);
-        let v;
-        if (t < 0.36) v = 0.3;
-        else v = 0.45 + 0.55 * Math.min(1, (t - 0.36) / 0.5);
+        const v = t < 0.53 ? 0.16 : t < 0.9 ? 0.86 : 1.0;
         d[i] = Math.round(v * 255);
       }
       const tex = new THREE.DataTexture(d, n, 1, THREE.RedFormat);
@@ -550,10 +734,10 @@ export default function Mundo() {
       c.fillStyle = '#fff';
       c.fillRect(0, 0, S, S);
       const rnd = prng(23);
-      for (let i = 0; i < 18; i++) {
+      for (let i = 0; i < 12; i++) {
         const x = rnd() * S;
         const y = rnd() * S;
-        const r = 30 + rnd() * 50;
+        const r = 40 + rnd() * 60;
         for (const [ox, oy] of [
           [0, 0],
           [S, 0],
@@ -583,18 +767,20 @@ export default function Mundo() {
       const cv = document.createElement('canvas');
       cv.width = cv.height = S;
       const c = cv.getContext('2d');
-      c.fillStyle = '#95cc6e';
+      // blanca: el color lo pone el shader (cesped); aquí solo unas motas
+      // y la línea de la parcela
+      c.fillStyle = '#ffffff';
       c.fillRect(0, 0, S, S);
       const rnd = prng(7);
-      for (let i = 0; i < 160; i++) {
-        c.fillStyle = i % 3 ? '#86bf62' : '#a6d67c';
+      for (let i = 0; i < 120; i++) {
+        c.fillStyle = i % 3 ? 'rgba(0,0,0,0.05)' : 'rgba(255,255,255,0.0)';
         const x = rnd() * S;
         const y = rnd() * S;
         c.beginPath();
         c.ellipse(x, y, 2 + rnd() * 5, 1.2 + rnd() * 2, rnd() * 3, 0, Math.PI * 2);
         c.fill();
       }
-      c.strokeStyle = 'rgba(110, 150, 90, 0.4)';
+      c.strokeStyle = 'rgba(60, 90, 50, 0.3)';
       c.lineWidth = 2;
       c.strokeRect(0, 0, S, S);
       const tex = new THREE.CanvasTexture(cv);
@@ -608,7 +794,7 @@ export default function Mundo() {
     geoSuelo.rotateX(-Math.PI / 2);
     const suelo = new THREE.Mesh(
       geoSuelo,
-      conAltura(new THREE.MeshToonMaterial({ map: texSuelo, gradientMap: rampa }), { tinta: true, normales: true, nubes: true })
+      conAltura(new THREE.MeshToonMaterial({ map: texSuelo, gradientMap: rampa }), { tinta: true, normales: true, nubes: true, cesped: true })
     );
     suelo.frustumCulled = false;
     suelo.receiveShadow = true;
@@ -631,6 +817,7 @@ export default function Mundo() {
           // fuera de la banda del río, el agua se hunde: no hay lagos en los valles
           if (distRioG(wpa.x, -wpa.z) > ${BANDA_AGUA.toFixed(1)}) transformed.y -= 60.0;`
         );
+      parcheaNiebla(sh);
     };
     matAgua.customProgramCacheKey = () => 'agua';
     const geoAgua = new THREE.PlaneGeometry(SUELO_M, SUELO_M, 96, 96);
@@ -655,10 +842,10 @@ export default function Mundo() {
     controls.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_ROTATE };
 
     // --- materiales: toon con rampa, el color de vértice como albedo ---
-    const matFijo = new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: rampa, side: THREE.DoubleSide });
+    const matFijo = conNiebla(new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: rampa, side: THREE.DoubleSide }));
     const matFijoViento = conViento(new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: rampa, side: THREE.DoubleSide }));
     // el tinte por instancia se multiplica al color de vértice
-    const matTinte = new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: rampa, side: THREE.DoubleSide });
+    const matTinte = conNiebla(new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: rampa, side: THREE.DoubleSide }));
     const matTinteViento = conViento(new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: rampa, side: THREE.DoubleSide }));
 
     // --- piezas instanciadas: cada pieza son una o varias PARTES, y cada
@@ -729,7 +916,7 @@ export default function Mundo() {
             const col = new Float32Array(n * 3);
             // Kenney exporta los colores de material en sRGB aunque glTF los
             // pide lineales: sin esta conversión todo sale lavado y pálido
-            const c = (m.color || BLANCO).clone().convertSRGBToLinear();
+            const c = acercaVerde((m.color || BLANCO).clone()).convertSRGBToLinear();
             for (let i = 0; i < n; i++) {
               col[i * 3] = c.r;
               col[i * 3 + 1] = c.g;
@@ -745,7 +932,7 @@ export default function Mundo() {
       if (lisas.length) partes.push({ geo: mergeGeometries(lisas, false), mat: matFijo });
       for (const [tex, gs] of conTextura) {
         tex.colorSpace = THREE.SRGBColorSpace;
-        partes.push({ geo: mergeGeometries(gs, false), mat: new THREE.MeshToonMaterial({ map: tex, gradientMap: rampa }) });
+        partes.push({ geo: mergeGeometries(gs, false), mat: conNiebla(new THREE.MeshToonMaterial({ map: tex, gradientMap: rampa })) });
       }
       const caja = new THREE.Box3();
       for (const p of partes) {
@@ -797,7 +984,7 @@ export default function Mundo() {
         const x = 6 + i * 7 + rnd() * 3;
         const alto = 34 + rnd() * 28;
         const inclina = (rnd() - 0.5) * 22;
-        c.fillStyle = i % 3 === 0 ? '#5f9e4e' : i % 3 === 1 ? '#74b45c' : '#8ccb6c';
+        c.fillStyle = i % 3 === 0 ? '#6fae5a' : i % 3 === 1 ? '#84c268' : '#98d276';
         c.beginPath();
         c.moveTo(x - 4.5, 64);
         c.quadraticCurveTo(x + inclina * 0.4, 64 - alto * 0.55, x + inclina, 64 - alto);
@@ -856,6 +1043,56 @@ export default function Mundo() {
       m.frustumCulled = false;
       nubes.push({ m, ox: (rndNubes() - 0.5) * 520, oz: (rndNubes() - 0.5) * 520, h: 95 + rndNubes() * 45, v: 1.2 + rndNubes() * 1.4 });
       scene.add(m);
+    }
+
+    // --- pájaros: una bandada que da vueltas por encima, aleteando ---
+    // Cada pájaro es una V de dos triángulos; el aleteo lo pone el vertex
+    // shader (las puntas de las alas suben y bajan). Van instanciados y su
+    // vuelo se calcula en JS: un círculo lento cuyo centro deriva alrededor
+    // del avatar, cada uno a su radio y su altura.
+    const N_PAJAROS = 11;
+    const geoPajaro = (() => {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute([-1.0, 0, 0.1, 0, 0, -0.3, 0, 0, 0.35, 1.0, 0, 0.1, 0, 0, 0.35, 0, 0, -0.3], 3));
+      g.computeVertexNormals();
+      return g;
+    })();
+    const matPajaro = new THREE.MeshBasicMaterial({ color: 0x2b3440, side: THREE.DoubleSide });
+    matPajaro.onBeforeCompile = (sh) => {
+      sh.uniforms.tiempo = uTiempo;
+      sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nuniform float tiempo;').replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>
+        vec3 wp = (modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+        transformed.y += sin(tiempo * 9.0 + wp.x * 0.5 + wp.z * 0.3) * abs(position.x) * 0.6;`
+      );
+      parcheaNiebla(sh);
+    };
+    matPajaro.customProgramCacheKey = () => 'pajaro';
+    const pajaros = new THREE.InstancedMesh(geoPajaro, matPajaro, N_PAJAROS);
+    pajaros.frustumCulled = false;
+    scene.add(pajaros);
+    const rndPajaros = prng(17);
+    const vuelo = [];
+    for (let i = 0; i < N_PAJAROS; i++) vuelo.push({ r: 10 + rndPajaros() * 9, h: 14 + rndPajaros() * 8, f: rndPajaros() * Math.PI * 2, v: 0.28 + rndPajaros() * 0.1 });
+    function vuelanLosPajaros(t) {
+      const cx = yo.x + 45 * Math.sin(t * 0.021);
+      const cy = yo.y + 45 * Math.cos(t * 0.017);
+      for (let i = 0; i < N_PAJAROS; i++) {
+        const p = vuelo[i];
+        const a = t * p.v + p.f;
+        const x = cx + Math.cos(a) * p.r;
+        const y = cy + Math.sin(a) * p.r;
+        const h = p.h + Math.sin(t * 0.6 + p.f) * 1.5;
+        // velocidad tangente: hacia dónde mira (el frente es -z)
+        const vx = -Math.sin(a);
+        const vz = -Math.cos(a);
+        posI.set(x, alturaEn(x, y) + h, -y);
+        rotI.setFromAxisAngle(ejeY, Math.atan2(-vx, -vz));
+        mtx.compose(posI, rotI, escI);
+        pajaros.setMatrixAt(i, mtx);
+      }
+      pajaros.instanceMatrix.needsUpdate = true;
     }
 
     // --- parcelas: marco de dueño y suelo de plaza ---
@@ -1117,8 +1354,10 @@ export default function Mundo() {
       const dCam = parseFloat(params.get('d'));
       const polCam = parseFloat(params.get('pol'));
       const azCam = parseFloat(params.get('az'));
-      const d = dCam > 0 ? dCam : 22;
-      const pol = (Number.isFinite(polCam) ? Math.max(9, Math.min(83, polCam)) : 62) * (Math.PI / 180);
+      // por defecto, cerca y baja: como en la referencia, siempre se ve el
+      // horizonte con sus nubes
+      const d = dCam > 0 ? dCam : 18;
+      const pol = (Number.isFinite(polCam) ? Math.max(9, Math.min(83, polCam)) : 66) * (Math.PI / 180);
       const az = (Number.isFinite(azCam) ? azCam : 180) * (Math.PI / 180);
       const r = d * Math.sin(pol);
       camera.position.set(yo.x + r * Math.sin(az), yo.h + 1.2 + d * Math.cos(pol), -yo.y - r * Math.cos(az));
@@ -1817,6 +2056,7 @@ export default function Mundo() {
       controls.target.y += dh;
       colocaFigura(avatar, yo);
       sigueElSol(yo.x, yo.h, yo.y);
+      uAvatar.value.set(yo.x, yo.h, -yo.y);
 
       // --- los demás, interpolados hacia su última posición conocida ---
       for (const o of otros.values()) {
@@ -1852,6 +2092,8 @@ export default function Mundo() {
         const ox = ((((nb.ox + uTiempo.value * nb.v + 260) % 520) + 520) % 520) - 260;
         nb.m.position.set(yo.x + ox, nb.h, -yo.y + nb.oz);
       }
+      cielo.position.copy(camera.position);
+      vuelanLosPajaros(uTiempo.value);
 
       controls.update();
       renderer.render(scene, camera);
@@ -1942,7 +2184,12 @@ export default function Mundo() {
       geoAgua.dispose();
       matAgua.dispose();
       texSuelo.dispose();
-      texCielo.dispose();
+      cielo.geometry.dispose();
+      matCielo.dispose();
+      texNubesCielo.dispose();
+      pajaros.dispose();
+      geoPajaro.dispose();
+      matPajaro.dispose();
       matFijo.dispose();
       matTinte.dispose();
       controls.dispose();
