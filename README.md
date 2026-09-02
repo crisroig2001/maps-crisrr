@@ -31,10 +31,10 @@ servidor solo guarda qué hay en cada parcela y quién anda cerca.
   suma de senos escrita dos veces, en JS (para colocar piezas y avatares) y
   en GLSL (para desplazar suelo, marcos y plazas en el vertex shader y sacar
   su normal), y que nunca da más de medio metro de desnivel en una parcela.
-- **El avatar**: cuerpo redondo del color elegido, cabeza, pelo y ojos; el
-  mismo sombreado horneado que todo lo demás. Anda **tocando
-  el suelo** (o con WASD / flechas, relativo a la cámara) y la cámara, en
-  tercera persona, va con él: arrastrar gira, pellizcar acerca.
+- **El avatar**: cuerpo redondo del color elegido, cabeza, pelo y ojos. Anda
+  **tocando el suelo**, con el **joystick** de abajo a la izquierda (solo en
+  pantallas táctiles) o con WASD / flechas, todo relativo a la cámara, que va
+  con él en tercera persona: arrastrar gira, pellizcar acerca.
 - **Presencia**: cada 1,5 s el cliente manda su posición a `POST
   /api/presencia` y recibe a quien esté a menos de 400 m. Los demás se
   interpolan hacia su última posición conocida, así que se les ve andar y no
@@ -46,15 +46,28 @@ servidor solo guarda qué hay en cada parcela y quién anda cerca.
   de un solo constructor. Se puede abandonar, y vuelve a ser un solar.
   Cada parcela reclamada lleva un marco en el suelo del color de su dueño
   (derivado de su id, sin preguntarle a nadie); la tuya, en azul.
-- **Construir**: en tu parcela, «Construir» abre la paleta: casa, torre,
-  árbol, pino, arbusto, flores, camino, valla, farola, banco, fuente y
-  bandera, más borrar. Cada toque en el suelo coloca una pieza; las que
-  tienen tinte (casa, torre, flores, bandera) van del color elegido; «Girar»
-  gira la última colocada en cuartos de vuelta; camino y valla se pegan a una
-  rejilla de 4 m para que casen entre sí. Tope de 150 piezas por parcela.
-  Una pieza guardada es `{t, x, y, r, c}`: tipo, metros dentro de la parcela
-  (1 decimal), giro y color — 40 bytes que no dependen de dónde esté la
-  parcela.
+- **Construir**: en tu parcela, «Construir» abre la paleta con una treintena
+  de piezas: cuatro casas, tienda, torre, árboles (roble, pino, palmera…),
+  arbustos, flores, setas, calabazas, rocas, troncos, hoguera, camino, puente,
+  valla, cartel, banco, mesa, silla, farola, fuente y bandera. Toca el suelo
+  para colocar una pieza (se pega a medio metro; caminos, vallas y puentes a
+  una rejilla de 4 m para que casen) y **toca una pieza para seleccionarla**:
+  sale un anillo y se puede mover con las flechas paso a paso, llevarla a
+  otro sitio tocando el suelo, girarla en cuartos de vuelta o borrarla. La
+  recién colocada queda seleccionada, para ajustarla al momento. Tope de 150
+  piezas por parcela. Una pieza guardada es `{t, x, y, r, c}`: tipo, metros
+  dentro de la parcela (1 decimal), giro y color — 40 bytes que no dependen
+  de dónde esté la parcela.
+- **Modelos**: casi todas las piezas son modelos glTF de
+  [Kenney](https://kenney.nl) (Nature Kit, City Kit Suburban y Furniture Kit,
+  licencia CC0), en `public/modelos/` con sus miniaturas en
+  `public/miniaturas/`; 27 modelos, 780 KB en total. Al cargar cada uno se
+  funden sus mallas: las de color liso hornean el color en el vértice y van
+  en UNA geometría con el material toon de siempre; las que traen un atlas
+  van en otra con la textura. Luego se escala para que el lado mayor en
+  planta mida lo que dice `ancho` en el catálogo (`src/lib/piezas.js`) y se
+  deja el origen en el centro, a ras de suelo. Las cuatro piezas restantes
+  (torre, farola, fuente, bandera) son geometría generada.
 - **Render de las piezas**: cada tipo son dos geometrías, la que se tiñe y la
   fija, y cada una un **`InstancedMesh`**: un draw call por tipo y parte sean
   3 piezas o 3.000. El tinte va por instancia (`instanceColor`) multiplicado

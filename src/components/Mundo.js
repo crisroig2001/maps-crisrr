@@ -13,6 +13,8 @@
 import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { MapControls } from 'three/examples/jsm/controls/MapControls.js';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { PARCELA_M, parcelaDe, claveParcela, parseParcela, centroParcela } from '../lib/parcela';
 import { PIEZAS, COLORES, MAX_PIEZAS, MAX_NOMBRE } from '../lib/piezas';
 import { perfil, guardaPerfil } from '../lib/jugador';
@@ -273,73 +275,24 @@ function aGeo(g) {
   return geo;
 }
 
-// Cada pieza son dos geometrías: la que se TIÑE del color elegido (con el
-// color de vértice como factor de luz sobre blanco) y la fija. Origen en el
-// suelo, centrada, con el «frente» hacia el sur (+z) con giro 0. `sombra` es
-// el radio de la mancha de sombra suave que se pinta debajo.
-// Las que se mecen con el viento llevan otro material (el mismo, con el
-// parche de viento en el vertex shader).
-const CON_VIENTO = new Set(['arbol', 'pino', 'arbusto', 'flores', 'bandera']);
+// Las piezas SIN modelo glTF (torre, farola, fuente, bandera) son dos
+// geometrías generadas: la que se TIÑE del color elegido (el color de
+// vértice es blanco: solo la luz) y la fija. Origen en el suelo, centrada,
+// con el «frente» hacia el sur (+z) con giro 0.
+const CON_VIENTO = new Set(['bandera']);
 function geometriaPieza(tipo) {
   const T = nuevaGeo(); // tinte
   const F = nuevaGeo(); // fijo
-  if (tipo === 'casa') {
-    caja(T, -4, 0, -3, 4, 3.4, 3, BLANCO);
-    tejado(F, -4.5, -3.5, 4.5, 3.5, 3.3, 5.7, 2, TEJA);
-    caja(F, -0.55, 0, 2.98, 0.55, 2.2, 3.12, MADERA); // puerta
-    caja(F, -3.2, 1.1, 2.98, -1.6, 2.3, 3.08, CRISTAL); // ventanas
-    caja(F, 1.6, 1.1, 2.98, 3.2, 2.3, 3.08, CRISTAL);
-    caja(F, 2.2, 4.2, -1.6, 3.1, 6.4, -0.7, PIEDRA_C); // chimenea
-  } else if (tipo === 'torre') {
+  if (tipo === 'torre') {
     prisma(T, 12, 2.3, 0, 9, BLANCO);
     prisma(F, 12, 2.8, 9, 9.3, PIEDRA_C);
     prisma(F, 12, 2.8, 9.3, 13.5, TEJA, 0);
     caja(F, -0.5, 0, 2.15, 0.5, 2.1, 2.45, MADERA);
     caja(F, -0.45, 4, 2.2, 0.45, 5, 2.4, CRISTAL);
     caja(F, -0.45, 6.6, 2.2, 0.45, 7.6, 2.4, CRISTAL);
-  } else if (tipo === 'arbol') {
-    prisma(F, 7, 0.32, 0, 3.4, TRONCO, 0.22);
-    esfera(F, 0, 5.0, 0, 2.4, VERDE, 0.9);
-    esfera(F, 1.3, 4.2, 0.6, 1.5, VERDE_CLARO);
-    esfera(F, -1.2, 4.4, -0.7, 1.4, VERDE);
-    esfera(F, 0.2, 6.3, -0.3, 1.3, VERDE_CLARO);
-  } else if (tipo === 'pino') {
-    prisma(F, 7, 0.26, 0, 2, TRONCO, 0.2);
-    prisma(F, 9, 2.4, 1.6, 4.2, VERDE_PINO, 0.5);
-    prisma(F, 9, 1.9, 3.6, 6.0, VERDE_PINO, 0.4);
-    prisma(F, 9, 1.3, 5.4, 7.7, VERDE_PINO, 0);
-  } else if (tipo === 'arbusto') {
-    esfera(F, 0, 1.0, 0, 1.3, VERDE_ARBUSTO, 0.8);
-    esfera(F, 1.1, 0.7, 0.6, 0.9, VERDE_CLARO, 0.8);
-    esfera(F, -0.9, 0.7, -0.7, 0.9, VERDE_ARBUSTO, 0.8);
-  } else if (tipo === 'flores') {
-    const puntos = [
-      [0, 0],
-      [0.7, 0.3],
-      [-0.6, 0.5],
-      [0.3, -0.7],
-      [-0.5, -0.5],
-      [0.9, -0.2],
-    ];
-    for (const [x, z] of puntos) {
-      caja(F, x - 0.05, 0, z - 0.05, x + 0.05, 0.6, z + 0.05, VERDE);
-      esfera(T, x, 0.68, z, 0.24, BLANCO, 0.8, 6);
-    }
-  } else if (tipo === 'camino') {
-    caja(F, -2, 0, -2, 2, 0.1, 2, ARENA);
-  } else if (tipo === 'valla') {
-    caja(F, -2, 0, -0.1, -1.8, 1.2, 0.1, MADERA);
-    caja(F, 1.8, 0, -0.1, 2, 1.2, 0.1, MADERA);
-    caja(F, -2, 0.35, -0.06, 2, 0.55, 0.06, MADERA);
-    caja(F, -2, 0.85, -0.06, 2, 1.05, 0.06, MADERA);
   } else if (tipo === 'farola') {
     prisma(F, 6, 0.16, 0, 5.4, POSTE, 0.12);
     esfera(F, 0, 5.6, 0, 0.55, LUZ, 0.9, 8);
-  } else if (tipo === 'banco') {
-    caja(F, -0.95, 0, -0.28, -0.75, 0.45, 0.28, POSTE);
-    caja(F, 0.75, 0, -0.28, 0.95, 0.45, 0.28, POSTE);
-    caja(F, -1, 0.45, -0.3, 1, 0.62, 0.3, MADERA);
-    caja(F, -1, 0.62, -0.3, 1, 1.15, -0.18, MADERA); // respaldo al norte: se sienta mirando al sur
   } else if (tipo === 'fuente') {
     prisma(F, 12, 3.2, 0, 0.9, PIEDRA_C);
     prisma(F, 12, 2.9, 0.9, 1.0, AGUA);
@@ -424,6 +377,9 @@ export default function Mundo() {
   const [herr, setHerr] = useState('casa');
   const [tinte, setTinte] = useState(2);
   const [cargando, setCargando] = useState(true);
+  const [tactil, setTactil] = useState(false);
+  const joyRef = useRef(null);
+  const joyKnobRef = useRef(null);
 
   function avisa(msg) {
     setToast({ msg, on: true });
@@ -435,8 +391,46 @@ export default function Mundo() {
     const p = perfil();
     setYo({ ...p });
     setColorElegido(p.color);
+    try {
+      setTactil(window.matchMedia('(pointer: coarse)').matches);
+    } catch {}
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
   }, []);
+
+  // --- joystick táctil: se arrastra el pomo y el avatar anda hacia allí ---
+  function joyPos(e) {
+    const base = joyRef.current;
+    if (!base) return { x: 0, y: 0 };
+    const r = base.getBoundingClientRect();
+    const R = r.width / 2;
+    let dx = (e.clientX - (r.left + R)) / (R * 0.75);
+    let dy = (e.clientY - (r.top + R)) / (R * 0.75);
+    const l = Math.hypot(dx, dy);
+    if (l > 1) {
+      dx /= l;
+      dy /= l;
+    }
+    return { x: dx, y: dy };
+  }
+  function joyAplica(v) {
+    const knob = joyKnobRef.current;
+    if (knob) knob.style.transform = 'translate(' + (v.x * 34).toFixed(1) + 'px,' + (v.y * 34).toFixed(1) + 'px)';
+    engineRef.current?.joystick(v.x, -v.y); // arriba en pantalla = adelante
+  }
+  function onJoyDown(e) {
+    e.currentTarget.setPointerCapture(e.pointerId);
+    joyAplica(joyPos(e));
+  }
+  function onJoyMove(e) {
+    if (!e.currentTarget.hasPointerCapture(e.pointerId)) return;
+    joyAplica(joyPos(e));
+  }
+  function onJoyUp(e) {
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {}
+    joyAplica({ x: 0, y: 0 });
+  }
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -627,33 +621,127 @@ export default function Mundo() {
     const matTinte = new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: rampa, side: THREE.DoubleSide });
     const matTinteViento = conViento(new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: rampa, side: THREE.DoubleSide }));
 
-    // --- piezas instanciadas ---
-    const mallas = {}; // tipo → {tinte: InstancedMesh|null, fijo: InstancedMesh|null}
+    // --- piezas instanciadas: cada pieza son una o varias PARTES, y cada
+    // parte un InstancedMesh (un draw call por parte sean 3 piezas o 3.000)
+    const mallas = {}; // tipo → {partes: [{mesh, tinte}]}
     const grupoPiezas = new THREE.Group();
     scene.add(grupoPiezas);
-    for (const t of Object.keys(PIEZAS)) {
-      const g = geometriaPieza(t);
-      const par = { tinte: null, fijo: null };
-      const viento = CON_VIENTO.has(t);
-      if (g.fijo) {
-        par.fijo = new THREE.InstancedMesh(g.fijo, viento ? matFijoViento : matFijo, MAX_INST);
-        par.fijo.count = 0;
-        par.fijo.frustumCulled = false; // la esfera envolvente sería la del origen
-        par.fijo.castShadow = true;
-        par.fijo.receiveShadow = true;
-        grupoPiezas.add(par.fijo);
-      }
-      if (g.tinte) {
-        par.tinte = new THREE.InstancedMesh(g.tinte, viento ? matTinteViento : matTinte, MAX_INST);
-        par.tinte.count = 0;
-        par.tinte.frustumCulled = false;
-        par.tinte.castShadow = true;
-        par.tinte.receiveShadow = true;
-        par.tinte.setColorAt(0, BLANCO); // hace falta tocarlo una vez para que exista
-        grupoPiezas.add(par.tinte);
+    function creaInstancias(t, partes) {
+      const par = { partes: [] };
+      for (const p of partes) {
+        const m = new THREE.InstancedMesh(p.geo, p.mat, MAX_INST);
+        m.count = 0;
+        m.frustumCulled = false; // la esfera envolvente sería la del origen
+        m.castShadow = true;
+        m.receiveShadow = true;
+        if (p.tinte) m.setColorAt(0, BLANCO); // hace falta tocarlo una vez para que exista
+        m.userData.tipo = t;
+        grupoPiezas.add(m);
+        par.partes.push({ mesh: m, tinte: !!p.tinte });
       }
       mallas[t] = par;
     }
+    for (const t of Object.keys(PIEZAS)) {
+      if (PIEZAS[t].glb) continue;
+      const g = geometriaPieza(t);
+      const viento = CON_VIENTO.has(t);
+      const partes = [];
+      if (g.fijo) partes.push({ geo: g.fijo, mat: viento ? matFijoViento : matFijo });
+      if (g.tinte) partes.push({ geo: g.tinte, mat: viento ? matTinteViento : matTinte, tinte: true });
+      creaInstancias(t, partes);
+    }
+
+    // --- modelos glTF (Kenney, CC0) ---
+    // Los del Nature y Furniture Kit traen varios materiales de color liso:
+    // se hornea el color en el vértice y se funde todo en UNA geometría con
+    // el material toon de siempre. Los del City Kit traen un atlas: una
+    // geometría con UV y un material toon con esa textura. Luego se escala
+    // para que el lado mayor en planta mida `ancho` metros y se deja el
+    // origen en el centro de la planta, a ras de suelo.
+    const cargador = new GLTFLoader();
+    async function cargaModelo(def) {
+      const gltf = await cargador.loadAsync('/modelos/' + def.glb + '.glb');
+      const raiz = gltf.scene;
+      raiz.updateMatrixWorld(true);
+      const lisas = [];
+      const conTextura = new Map(); // textura → [geometrías]
+      raiz.traverse((o) => {
+        if (!o.isMesh) return;
+        const mats = Array.isArray(o.material) ? o.material : [o.material];
+        const base = o.geometry.index ? o.geometry.toNonIndexed() : o.geometry;
+        const grupos = base.groups.length ? base.groups : [{ start: 0, count: base.getAttribute('position').count, materialIndex: 0 }];
+        for (const gr of grupos) {
+          const m = mats[gr.materialIndex] || mats[0];
+          const g = new THREE.BufferGeometry();
+          for (const nombre of ['position', 'normal', 'uv']) {
+            const at = base.getAttribute(nombre);
+            if (!at) continue;
+            g.setAttribute(nombre, new THREE.BufferAttribute(at.array.slice(gr.start * at.itemSize, (gr.start + gr.count) * at.itemSize), at.itemSize));
+          }
+          if (!g.getAttribute('normal')) g.computeVertexNormals();
+          g.applyMatrix4(o.matrixWorld);
+          if (m.map) {
+            const lista = conTextura.get(m.map) || [];
+            lista.push(g);
+            conTextura.set(m.map, lista);
+          } else {
+            const n = g.getAttribute('position').count;
+            const col = new Float32Array(n * 3);
+            // Kenney exporta los colores de material en sRGB aunque glTF los
+            // pide lineales: sin esta conversión todo sale lavado y pálido
+            const c = (m.color || BLANCO).clone().convertSRGBToLinear();
+            for (let i = 0; i < n; i++) {
+              col[i * 3] = c.r;
+              col[i * 3 + 1] = c.g;
+              col[i * 3 + 2] = c.b;
+            }
+            g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+            g.deleteAttribute('uv');
+            lisas.push(g);
+          }
+        }
+      });
+      const partes = [];
+      if (lisas.length) partes.push({ geo: mergeGeometries(lisas, false), mat: matFijo });
+      for (const [tex, gs] of conTextura) {
+        tex.colorSpace = THREE.SRGBColorSpace;
+        partes.push({ geo: mergeGeometries(gs, false), mat: new THREE.MeshToonMaterial({ map: tex, gradientMap: rampa }) });
+      }
+      const caja = new THREE.Box3();
+      for (const p of partes) {
+        p.geo.computeBoundingBox();
+        caja.union(p.geo.boundingBox);
+      }
+      const tam = new THREE.Vector3();
+      caja.getSize(tam);
+      const esc = def.ancho / Math.max(tam.x, tam.z, 0.001);
+      const cx = (caja.min.x + caja.max.x) / 2;
+      const cz = (caja.min.z + caja.max.z) / 2;
+      for (const p of partes) {
+        p.geo.translate(-cx, -caja.min.y, -cz);
+        p.geo.scale(esc, esc, esc);
+        p.geo.computeBoundingSphere();
+      }
+      return partes;
+    }
+    let modelosListos = false;
+    Promise.all(
+      Object.entries(PIEZAS)
+        .filter(([, d]) => d.glb)
+        .map(([t, d]) =>
+          cargaModelo(d)
+            .then((partes) => {
+              if (vivo) creaInstancias(t, partes);
+            })
+            .catch((e) => console.warn('modelo', t, e?.message))
+        )
+    ).then(() => {
+      modelosListos = true;
+      if (!vivo) return;
+      pintaMundo();
+      compruebaListo();
+    });
+
     const coloresTinte = COLORES.map((h) => new THREE.Color(h));
 
     // --- hierba: matas que se mecen, alrededor del avatar ---
@@ -773,8 +861,8 @@ export default function Mundo() {
       const cv = document.createElement('canvas');
       cv.width = cv.height = 256;
       const c = cv.getContext('2d');
-      c.strokeStyle = 'rgba(47, 111, 237, 0.95)';
-      c.lineWidth = 8;
+      c.strokeStyle = 'rgba(47, 111, 237, 0.7)';
+      c.lineWidth = 4;
       c.setLineDash([22, 12]);
       c.strokeRect(5, 5, 246, 246);
       const tex = new THREE.CanvasTexture(cv);
@@ -791,6 +879,12 @@ export default function Mundo() {
     // --- estado del mundo ---
     const parcelas = new Map(); // "px/py" → {o, d}
     let cajaPedida = null; // la caja de parcelas que tenemos cargada
+    // listo = parcelas cargadas Y modelos cargados (el banco visual espera a esto)
+    function compruebaListo() {
+      if (window.__mundoListo || !cajaPedida || !modelosListos) return;
+      window.__mundoListo = true;
+      setCargando(false);
+    }
     let ultimoHasta = null;
     let miParcelaClave = null;
     let vivo = true;
@@ -807,9 +901,15 @@ export default function Mundo() {
 
     // Rehace TODAS las instancias: son cientos o pocos miles, y es más barato
     // que llevar la cuenta de qué instancia era de qué parcela.
+    // origen[t][i] = {clave, z}: de qué parcela y qué pieza es cada instancia,
+    // para poder tocarla y seleccionarla
+    const origen = {};
     function pintaMundo() {
       const cont = {};
-      for (const t in mallas) cont[t] = 0;
+      for (const t in mallas) {
+        cont[t] = 0;
+        origen[t] = [];
+      }
       let nMarcos = 0;
       let nPlazas = 0;
       for (const [clave, pc] of parcelas) {
@@ -849,26 +949,22 @@ export default function Mundo() {
           mtx.compose(posI, rotI, escI);
           const i = cont[z.t];
           if (i >= MAX_INST) continue;
-          if (par.fijo) par.fijo.setMatrixAt(i, mtx);
-          if (par.tinte) {
-            par.tinte.setMatrixAt(i, mtx);
-            par.tinte.setColorAt(i, coloresTinte[z.c] || coloresTinte[0]);
+          for (const p of par.partes) {
+            p.mesh.setMatrixAt(i, mtx);
+            if (p.tinte) p.mesh.setColorAt(i, coloresTinte[z.c] || coloresTinte[0]);
           }
+          origen[z.t][i] = { clave, z };
           cont[z.t] = i + 1;
         }
       }
       for (const t in mallas) {
-        const par = mallas[t];
-        if (par.fijo) {
-          par.fijo.count = cont[t];
-          par.fijo.instanceMatrix.needsUpdate = true;
-        }
-        if (par.tinte) {
-          par.tinte.count = cont[t];
-          par.tinte.instanceMatrix.needsUpdate = true;
-          par.tinte.instanceColor.needsUpdate = true;
+        for (const p of mallas[t].partes) {
+          p.mesh.count = cont[t];
+          p.mesh.instanceMatrix.needsUpdate = true;
+          if (p.tinte) p.mesh.instanceColor.needsUpdate = true;
         }
       }
+      pintaSeleccion();
       marcos.count = nMarcos;
       marcos.instanceMatrix.needsUpdate = true;
       if (marcos.instanceColor) marcos.instanceColor.needsUpdate = true;
@@ -890,7 +986,7 @@ export default function Mundo() {
       for (const [clave, pc] of parcelas) {
         const p = parseParcela(clave);
         if (!p) continue;
-        for (const z of pc.d || []) if (z.t === 'camino') caminos.push([p.px * L + z.x, p.py * L + z.y]);
+        for (const z of pc.d || []) if (PIEZAS[z.t]?.suelo) caminos.push([p.px * L + z.x, p.py * L + z.y]);
       }
       let n = 0;
       for (let i = -R; i <= R && n < MAX_HIERBA; i++) {
@@ -1070,9 +1166,45 @@ export default function Mundo() {
     let herramienta = 'casa';
     let tinteActual = 2;
     let giro = 0;
-    let ultimaPieza = null; // la última colocada, para poder girarla
     let avisaObra = null;
     let guardadoT = null;
+    // La pieza seleccionada: {clave, z}. Se selecciona tocándola, y la recién
+    // colocada queda seleccionada para poder ajustarla al momento.
+    let seleccion = null;
+    const anillo = new THREE.Mesh(
+      new THREE.RingGeometry(0.82, 1, 48),
+      new THREE.MeshBasicMaterial({ color: 0x2f6fed, transparent: true, opacity: 0.9, side: THREE.DoubleSide, depthTest: false })
+    );
+    anillo.rotation.x = -Math.PI / 2;
+    anillo.renderOrder = 3;
+    anillo.visible = false;
+    scene.add(anillo);
+    function pintaSeleccion() {
+      const lista = obraClave ? parcelas.get(obraClave)?.d : null;
+      if (!seleccion || !lista || !lista.includes(seleccion.z)) {
+        seleccion = null;
+        anillo.visible = false;
+        return;
+      }
+      const p = parseParcela(seleccion.clave);
+      const wx = p.px * L + seleccion.z.x;
+      const wy = p.py * L + seleccion.z.y;
+      const a = ((PIEZAS[seleccion.z.t]?.ancho || 3) * 0.6) + 0.4;
+      anillo.position.set(wx, alturaEn(wx, wy) + 0.25, -wy);
+      anillo.scale.set(a, a, 1);
+      anillo.visible = true;
+    }
+    // A qué posición se pega una pieza: a media metro, o a la rejilla de 4 m
+    // (caminos y vallas, para que casen entre sí)
+    function ajusta(t, x, y) {
+      if (PIEZAS[t]?.rejilla) {
+        return {
+          x: Math.min(L - 2, Math.max(2, Math.floor(x / 4) * 4 + 2)),
+          y: Math.min(L - 2, Math.max(2, Math.floor(y / 4) * 4 + 2)),
+        };
+      }
+      return { x: Math.min(L, Math.max(0, Math.round(x * 2) / 2)), y: Math.min(L, Math.max(0, Math.round(y * 2) / 2)) };
+    }
 
     async function guardaPiezas(clave) {
       const pc = parcelas.get(clave);
@@ -1106,49 +1238,76 @@ export default function Mundo() {
       guardaPiezas(obraClave);
     }
 
-    // el camino y la valla van a una rejilla de 4 m, para que casen entre sí
-    const REJILLA = new Set(['camino', 'valla']);
+    // Un toque en obras: sobre una pieza mía, la selecciona; sobre el suelo
+    // con una seleccionada, la mueve ahí; sobre el suelo sin selección,
+    // coloca una pieza nueva de la herramienta elegida (y la deja
+    // seleccionada para ajustarla con las flechas, girarla o borrarla).
     function colocaEn(sx, sy) {
       if (!obraClave) return;
+      ndc.set((sx / vpW) * 2 - 1, -(sy / vpH) * 2 + 1);
+      rayo.setFromCamera(ndc, camera);
+      for (const h of rayo.intersectObjects(grupoPiezas.children, false)) {
+        const o = origen[h.object.userData.tipo]?.[h.instanceId];
+        if (o && o.clave === obraClave) {
+          seleccion = o;
+          pintaSeleccion();
+          avisaObra?.({ seleccion: true });
+          return;
+        }
+      }
       const p = sueloEn(sx, sy);
       if (!p) return;
-      let x = p.x - obraBase.bx;
-      let y = p.y - obraBase.by;
+      const x = p.x - obraBase.bx;
+      const y = p.y - obraBase.by;
       if (x < 0 || x > L || y < 0 || y > L) {
         avisaObra?.({ fuera: true });
         return;
       }
       const pc = parcelas.get(obraClave);
       const lista = pc?.d ? pc.d.slice() : [];
-      if (herramienta === 'borrar') {
-        let mejor = -1;
-        let md = Infinity;
-        for (let i = 0; i < lista.length; i++) {
-          const d = Math.hypot(lista[i].x - x, lista[i].y - y);
-          if (d < md) {
-            md = d;
-            mejor = i;
-          }
-        }
-        if (mejor < 0 || md > 4) return;
-        lista.splice(mejor, 1);
-        ultimaPieza = null;
+      if (seleccion && lista.includes(seleccion.z)) {
+        const q = ajusta(seleccion.z.t, x, y);
+        seleccion.z.x = q.x;
+        seleccion.z.y = q.y;
       } else {
         if (lista.length >= MAX_PIEZAS) {
           avisaObra?.({ lleno: true });
           return;
         }
-        if (REJILLA.has(herramienta)) {
-          x = Math.min(L - 2, Math.max(2, Math.floor(x / 4) * 4 + 2));
-          y = Math.min(L - 2, Math.max(2, Math.floor(y / 4) * 4 + 2));
-        }
-        const z = { t: herramienta, x: Math.round(x * 10) / 10, y: Math.round(y * 10) / 10, r: giro, c: tinteActual };
+        const q = ajusta(herramienta, x, y);
+        const z = { t: herramienta, x: q.x, y: q.y, r: giro, c: tinteActual };
         lista.push(z);
-        ultimaPieza = z;
+        seleccion = { clave: obraClave, z };
       }
       parcelas.set(obraClave, { o: pc?.o || jugador.id, d: lista });
       pintaMundo();
-      avisaObra?.({ n: lista.length });
+      avisaObra?.({ n: lista.length, seleccion: !!seleccion });
+      programaGuardado(obraClave);
+    }
+    // Empuja la pieza seleccionada un paso en pantalla: ax derecha(+) /
+    // izquierda(-), ay adelante(+) / atrás(-). «Adelante» es hacia donde mira
+    // la cámara, pegado al eje del mundo más cercano.
+    function empuja(ax, ay) {
+      if (!seleccion || !obraClave) return;
+      dirCam.subVectors(controls.target, camera.position);
+      dirCam.y = 0;
+      dirCam.normalize();
+      let fe = dirCam.x;
+      let fn = -dirCam.z;
+      if (Math.abs(fe) > Math.abs(fn)) {
+        fe = Math.sign(fe);
+        fn = 0;
+      } else {
+        fn = Math.sign(fn);
+        fe = 0;
+      }
+      const z = seleccion.z;
+      const paso = PIEZAS[z.t]?.rejilla ? 4 : 0.5;
+      const dx = (fe * ay + fn * ax) * paso;
+      const dy = (fn * ay - fe * ax) * paso;
+      z.x = Math.min(L, Math.max(0, Math.round((z.x + dx) * 10) / 10));
+      z.y = Math.min(L, Math.max(0, Math.round((z.y + dy) * 10) / 10));
+      pintaMundo();
       programaGuardado(obraClave);
     }
 
@@ -1166,7 +1325,7 @@ export default function Mundo() {
       const tq = toque;
       toque = null;
       if (!tq || punteros !== 0) return;
-      if (Math.hypot(e.clientX - tq.x, e.clientY - tq.y) > 8 || performance.now() - tq.t > 600) return;
+      if (Math.hypot(e.clientX - tq.x, e.clientY - tq.y) > 12 || performance.now() - tq.t > 900) return;
       if (obraClave) colocaEn(e.clientX, e.clientY);
       else {
         const p = sueloEn(e.clientX, e.clientY);
@@ -1181,6 +1340,8 @@ export default function Mundo() {
     canvas.addEventListener('pointerup', onSube);
     canvas.addEventListener('pointercancel', onCancela);
 
+    // joystick táctil (lo pinta React): vector -1..1, adelante = +y
+    const joy = { x: 0, y: 0 };
     // teclado: WASD / flechas, relativo a la cámara
     const teclas = new Set();
     function onKeyDown(e) {
@@ -1245,10 +1406,7 @@ export default function Mundo() {
         }
         if (cambios || cambiaCaja) pintaMundo();
         actualizaDonde(true);
-        if (!window.__mundoListo) {
-          window.__mundoListo = true;
-          setCargando(false);
-        }
+        compruebaListo();
       } catch {
         /* sin red: se reintenta en el siguiente sondeo */
       } finally {
@@ -1326,6 +1484,8 @@ export default function Mundo() {
     engineRef.current = {
       construye(clave, cb) {
         vaciaGuardado();
+        seleccion = null;
+        anillo.visible = false;
         if (!clave) {
           obraClave = null;
           avisaObra = null;
@@ -1345,15 +1505,34 @@ export default function Mundo() {
         herramienta = t;
         if (Number.isInteger(c)) tinteActual = c;
       },
-      // gira la última pieza colocada, y deja ese giro para la siguiente
+      // gira la pieza seleccionada, y deja ese giro para la siguiente
       gira() {
-        giro = (giro + 1) % 4;
-        if (ultimaPieza && obraClave) {
-          ultimaPieza.r = giro;
+        if (seleccion && obraClave) {
+          seleccion.z.r = (seleccion.z.r + 1) % 4;
+          giro = seleccion.z.r;
           pintaMundo();
           programaGuardado(obraClave);
-        }
+        } else giro = (giro + 1) % 4;
         return giro;
+      },
+      empuja,
+      borra() {
+        if (!seleccion || !obraClave) return 0;
+        const pc = parcelas.get(obraClave);
+        const lista = (pc?.d || []).filter((z) => z !== seleccion.z);
+        parcelas.set(obraClave, { o: pc?.o || jugador.id, d: lista });
+        seleccion = null;
+        pintaMundo();
+        programaGuardado(obraClave);
+        return lista.length;
+      },
+      suelta() {
+        seleccion = null;
+        anillo.visible = false;
+      },
+      joystick(x, y) {
+        joy.x = x;
+        joy.y = y;
       },
       async reclama(clave) {
         try {
@@ -1440,17 +1619,24 @@ export default function Mundo() {
       // --- mover el avatar propio ---
       let mx = 0;
       let my = 0;
-      if (teclas.size) {
+      const conJoy = Math.hypot(joy.x, joy.y) > 0.12;
+      if (teclas.size || conJoy) {
         // adelante = de la cámara al avatar, sobre el suelo
         dirCam.subVectors(controls.target, camera.position);
         dirCam.y = 0;
         dirCam.normalize();
         const fe = dirCam.x;
         const fn = -dirCam.z;
-        const adel = (teclas.has('w') || teclas.has('arrowup') ? 1 : 0) - (teclas.has('s') || teclas.has('arrowdown') ? 1 : 0);
-        const lado = (teclas.has('d') || teclas.has('arrowright') ? 1 : 0) - (teclas.has('a') || teclas.has('arrowleft') ? 1 : 0);
+        const adel = (teclas.has('w') || teclas.has('arrowup') ? 1 : 0) - (teclas.has('s') || teclas.has('arrowdown') ? 1 : 0) + joy.y;
+        const lado = (teclas.has('d') || teclas.has('arrowright') ? 1 : 0) - (teclas.has('a') || teclas.has('arrowleft') ? 1 : 0) + joy.x;
         mx = fe * adel + fn * lado;
         my = fn * adel - fe * lado;
+        const l0 = Math.hypot(mx, my);
+        if (l0 > 1) {
+          mx /= l0;
+          my /= l0;
+        }
+        if (conJoy) yo.destino = null;
       } else if (yo.destino) {
         const dx = yo.destino.x - yo.x;
         const dy = yo.destino.y - yo.y;
@@ -1464,7 +1650,8 @@ export default function Mundo() {
       const l = Math.hypot(mx, my);
       yo.andando = l > 0.01;
       if (yo.andando) {
-        const paso = Math.min(VELOCIDAD * dt, yo.destino ? Math.hypot(yo.destino.x - yo.x, yo.destino.y - yo.y) : Infinity);
+        // con el joystick a medias se anda más despacio
+        const paso = Math.min(VELOCIDAD * dt * Math.min(1, l), yo.destino ? Math.hypot(yo.destino.x - yo.x, yo.destino.y - yo.y) : Infinity);
         const dx = (mx / l) * paso;
         const dy = (my / l) * paso;
         yo.x += dx;
@@ -1574,11 +1761,13 @@ export default function Mundo() {
       for (const el of nodos.values()) el.remove();
       nodos.clear();
       for (const t in mallas) {
-        for (const parte of ['fijo', 'tinte']) {
-          const m = mallas[t][parte];
-          if (!m) continue;
-          m.geometry.dispose();
-          m.dispose();
+        for (const p of mallas[t].partes) {
+          p.mesh.geometry.dispose();
+          if (p.mesh.material !== matFijo && p.mesh.material !== matTinte && p.mesh.material !== matFijoViento && p.mesh.material !== matTinteViento) {
+            p.mesh.material.map?.dispose();
+            p.mesh.material.dispose();
+          }
+          p.mesh.dispose();
         }
       }
       for (const nb of nubes) nb.m.geometry.dispose();
@@ -1597,6 +1786,8 @@ export default function Mundo() {
       plazas.material.dispose();
       geoParcela.dispose();
       marcoObra.material.dispose();
+      anillo.geometry.dispose();
+      anillo.material.dispose();
       texMarco.dispose();
       texObra.dispose();
       avatar.cuerpo.geometry.dispose();
@@ -1647,19 +1838,32 @@ export default function Mundo() {
       else if (ev.lleno) avisa('Tu parcela ya tiene ' + MAX_PIEZAS + ' piezas: borra alguna para poner otra');
       else if (ev.error === 'ajena') avisa('Esta parcela no es tuya: no se ha guardado');
       else if (ev.error) avisa('No se pudo guardar (¿sin conexión?)');
-      else if (typeof ev.n === 'number') setObra((o) => (o ? { ...o, n: ev.n } : o));
+      else setObra((o) => (o ? { ...o, n: typeof ev.n === 'number' ? ev.n : o.n, sel: !!ev.seleccion } : o));
     });
     eng.herramienta(herr, tinte);
     setInfoOpen(false);
-    setObra({ clave: donde.clave, n });
+    setObra({ clave: donde.clave, n, sel: false });
+    avisa('Toca el suelo para colocar; toca una pieza para moverla, girarla o borrarla');
   }
   function terminaObra() {
     engineRef.current?.construye(null);
     setObra(null);
   }
+  function onBorrar() {
+    const n = engineRef.current?.borra();
+    setObra((o) => (o ? { ...o, n: typeof n === 'number' ? n : o.n, sel: false } : o));
+  }
+  function onSoltar() {
+    engineRef.current?.suelta();
+    setObra((o) => (o ? { ...o, sel: false } : o));
+  }
+  // elegir una pieza de la paleta suelta la seleccionada: el siguiente toque
+  // coloca una nueva (si no, movería la seleccionada)
   function eligeHerr(t) {
     setHerr(t);
     engineRef.current?.herramienta(t, tinte);
+    engineRef.current?.suelta();
+    setObra((o) => (o ? { ...o, sel: false } : o));
   }
   function eligeTinte(c) {
     setTinte(c);
@@ -1749,13 +1953,13 @@ export default function Mundo() {
         <div className="ui hoja glass info">
           <h2>Cómo funciona</h2>
           <p>
-            <b>Anda</b> tocando el suelo (o con WASD / flechas). Arrastra para girar la cámara y pellizca para acercarla.
+            <b>Anda</b> tocando el suelo, con el joystick de abajo a la izquierda (en el móvil) o con WASD / flechas. Arrastra para girar la cámara y pellizca para acercarla.
           </p>
           <p>
             <b>Reclama una parcela</b> libre: ponte encima y pulsa «Reclamar». Es tuya para siempre (o hasta que la abandones).
           </p>
           <p>
-            <b>Construye</b> en tu parcela: casa, torre, árboles, caminos, vallas… Toca el suelo para colocar cada pieza. Lo ve todo el mundo al momento.
+            <b>Construye</b> en tu parcela: casas, árboles, rocas, caminos, vallas, muebles… Toca el suelo para colocar una pieza; toca una pieza para seleccionarla y moverla con las flechas, girarla o borrarla. Lo ve todo el mundo al momento.
           </p>
           <p>
             <b>Todo se dibuja en tu GPU.</b> El servidor solo guarda qué hay en cada parcela y quién anda cerca.
@@ -1791,36 +1995,73 @@ export default function Mundo() {
             </span>
           </div>
           <div className="ui paleta glass" role="toolbar" aria-label="Piezas">
-            <div className="fila">
+            <div className="fila piezas">
               {Object.entries(PIEZAS).map(([t, d]) => (
-                <button key={t} className={'herr' + (herr === t ? ' on' : '')} onClick={() => eligeHerr(t)} aria-label={d.nombre} aria-pressed={herr === t}>
-                  <span>{d.icono}</span>
+                <button key={t} className={'herr' + (herr === t ? ' on' : '')} onClick={() => eligeHerr(t)} aria-label={d.nombre} aria-pressed={herr === t} title={d.nombre}>
+                  {d.mini ? (
+                    <i className={'mini' + (d.zoom ? ' zoom' : '')}>
+                      <img src={'/miniaturas/' + t + '.png'} alt="" />
+                    </i>
+                  ) : (
+                    <span>{d.icono}</span>
+                  )}
                   <small>{d.nombre}</small>
                 </button>
               ))}
-              <button className={'herr' + (herr === 'borrar' ? ' on' : '')} onClick={() => eligeHerr('borrar')} aria-label="Borrar" aria-pressed={herr === 'borrar'}>
-                <span>🧹</span>
-                <small>Borrar</small>
-              </button>
             </div>
-            <div className="fila abajo">
-              <div className="colores mini" style={{ visibility: tiñe ? 'visible' : 'hidden' }}>
-                {COLORES.map((c, i) => (
-                  <button key={c} className={'color' + (tinte === i ? ' on' : '')} style={{ background: c }} onClick={() => eligeTinte(i)} aria-label={'Color ' + (i + 1)} />
-                ))}
+            {obra.sel ? (
+              <div className="fila abajo">
+                <span className="pista">Pieza seleccionada</span>
+                <div className="cruz" role="group" aria-label="Mover la pieza">
+                  <button className="btn-sec" onClick={() => engineRef.current?.empuja(0, 1)} aria-label="Mover hacia delante">▲</button>
+                  <button className="btn-sec" onClick={() => engineRef.current?.empuja(-1, 0)} aria-label="Mover a la izquierda">◀</button>
+                  <button className="btn-sec" onClick={() => engineRef.current?.empuja(0, -1)} aria-label="Mover hacia atrás">▼</button>
+                  <button className="btn-sec" onClick={() => engineRef.current?.empuja(1, 0)} aria-label="Mover a la derecha">▶</button>
+                </div>
+                <button className="btn-sec" onClick={() => engineRef.current?.gira()} title="Gira la pieza">
+                  ↻ Girar
+                </button>
+                <button className="btn-sec peligro" onClick={onBorrar} aria-label="Borrar pieza">
+                  🗑 Borrar
+                </button>
+                <button className="btn-principal" onClick={onSoltar}>
+                  ✓ Soltar
+                </button>
               </div>
-              <button className="btn-sec" onClick={() => engineRef.current?.gira()} title="Gira la última pieza">
-                ↻ Girar
-              </button>
-              <button className="btn-sec peligro" onClick={onAbandonar}>
-                Abandonar
-              </button>
-              <button className="btn-principal" onClick={terminaObra}>
-                Listo
-              </button>
-            </div>
+            ) : (
+              <div className="fila abajo">
+                <div className="colores mini" style={{ visibility: tiñe ? 'visible' : 'hidden' }}>
+                  {COLORES.map((c, i) => (
+                    <button key={c} className={'color' + (tinte === i ? ' on' : '')} style={{ background: c }} onClick={() => eligeTinte(i)} aria-label={'Color ' + (i + 1)} />
+                  ))}
+                </div>
+                <button className="btn-sec" onClick={() => engineRef.current?.gira()} title="Giro para la siguiente pieza">
+                  ↻ Girar
+                </button>
+                <button className="btn-sec peligro" onClick={onAbandonar}>
+                  Abandonar
+                </button>
+                <button className="btn-principal" onClick={terminaObra}>
+                  Listo
+                </button>
+              </div>
+            )}
           </div>
         </>
+      )}
+
+      {presentado && !obra && tactil && (
+        <div
+          className="ui joy"
+          ref={joyRef}
+          onPointerDown={onJoyDown}
+          onPointerMove={onJoyMove}
+          onPointerUp={onJoyUp}
+          onPointerCancel={onJoyUp}
+          aria-label="Joystick para andar"
+        >
+          <div className="joy-knob" ref={joyKnobRef} />
+        </div>
       )}
 
       {cargando && (
