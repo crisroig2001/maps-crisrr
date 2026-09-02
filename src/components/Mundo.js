@@ -2,12 +2,14 @@
 
 // El mundo: colinas suaves e infinitas divididas en parcelas, avatares que
 // andan por ellas y parcelas que cada jugador construye con piezas. Look de
-// tarde de verano: luz cálida, sombras frías, formas redondas, hierba que se
-// mece y nubes. Todo el renderizado ocurre en la GPU del dispositivo y SIN
-// luces: el sombreado va horneado en los colores de vértice (con un sol 3D
-// que da lados cálidos y lados fríos), y el relieve lo pone el vertex shader
-// con la misma función de altura que usa el JS para colocar cosas encima.
-// Las piezas van INSTANCIADAS: un draw call por tipo de pieza sean 3 o 3.000.
+// tarde de verano, con la misma receta que las demos de referencia: un sol
+// (luz direccional cálida con sombras proyectadas), un cielo (luz hemisférica
+// fría desde arriba y verdosa desde abajo) y materiales TOON con rampa, así
+// que la luz cae a escalones y la sombra sale azulada sin pintar nada a mano.
+// Encima, sombras de nubes que cruzan el suelo y hierba que se mece. El
+// relieve lo pone el vertex shader con la misma función de altura que usa el
+// JS para colocar cosas encima. Las piezas van INSTANCIADAS: un draw call por
+// tipo de pieza sean 3 o 3.000.
 import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { MapControls } from 'three/examples/jsm/controls/MapControls.js';
@@ -18,15 +20,16 @@ import { perfil, guardaPerfil } from '../lib/jugador';
 const L = PARCELA_M;
 
 // --- el sol y el look ---
-// Sol de tarde: bajo (48°) y del suroeste. Lo que mira al sol sale cálido y
-// lo que le da la espalda, frío y azulado: es lo que hace que un mundo sin
-// luces parezca pintado a mano en vez de plano.
-const SOL_AZ = (215 * Math.PI) / 180;
-const SOL_EL = (48 * Math.PI) / 180;
-const SOL = new THREE.Vector3(Math.sin(SOL_AZ) * Math.cos(SOL_EL), Math.sin(SOL_EL), Math.cos(SOL_AZ) * Math.cos(SOL_EL)).normalize();
-const CALIDO = [1.06, 1.0, 0.88];
-const FRIO = [0.6, 0.66, 0.84];
-const CIELO_CENIT = 0x6fb4e4;
+// Sol de tarde, bajo y del suroeste (x: este, z: sur). Las sombras caen hacia
+// el noreste. El color de la luz es cálido y el del cielo frío: es lo que
+// hace que lo iluminado salga dorado y la sombra azulada, como en un cuadro.
+const SOL = new THREE.Vector3(-0.5, 0.72, 0.55).normalize();
+const SOL_COLOR = 0xffe3bd;
+const SOL_FUERZA = 2.9;
+const CIELO_LUZ = 0xa9c6ff; // luz hemisférica: desde arriba
+const SUELO_LUZ = 0x7f8f6e; // ... y rebotada desde la hierba
+const HEMI_FUERZA = 1.55;
+const CIELO_CENIT = 0x5eaee6;
 const CIELO_HORIZONTE = 0xfbe7c8;
 const NIEBLA = 0xf1e2cc;
 const NIEBLA_DESDE = 150;
@@ -73,23 +76,52 @@ function alturaEn(x, y) {
   for (const [a, kx, ky, f] of ONDAS) h += a * Math.sin(x * kx + y * ky + f);
   return h;
 }
-// p = xz del mundo (z = -norte)
+// p = xz del mundo (z = -norte). dAltura da la pendiente (dh/dx, dh/dz) para
+// sacar la normal del terreno en el shader, que es lo que la luz necesita.
 const GLSL_ALTURA = `
 float altura(vec2 p) {
   float y = -p.y;
   return 1.0 * sin(p.x * 0.021 + y * 0.013) + 0.7 * sin(p.x * 0.009 - y * 0.027 + 1.3) + 0.35 * sin(p.x * 0.047 + y * 0.041 + 2.1);
+}
+vec2 dAltura(vec2 p) {
+  float y = -p.y;
+  float c1 = cos(p.x * 0.021 + y * 0.013);
+  float c2 = cos(p.x * 0.009 - y * 0.027 + 1.3);
+  float c3 = cos(p.x * 0.047 + y * 0.041 + 2.1);
+  float dx = 1.0 * 0.021 * c1 + 0.7 * 0.009 * c2 + 0.35 * 0.047 * c3;
+  float dy = 1.0 * 0.013 * c1 + 0.7 * -0.027 * c2 + 0.35 * 0.041 * c3;
+  return vec2(dx, -dy);
 }`;
 const uTiempo = { value: 0 };
+const uNubes = { value: null }; // textura de sombras de nubes (se crea en el efecto)
 
-// Parchea un MeshBasicMaterial para que el vertex shader suba cada vértice a
-// la altura del terreno bajo su posición de MUNDO (sirve con instancias).
+// Parchea un material para que el vertex shader suba cada vértice a la
+// altura del terreno bajo su posición de MUNDO (sirve con instancias).
+//   normales: la normal pasa a ser la de la colina (suelo, plazas)
 //   tinta: el suelo se aclara en lo alto y se oscurece en lo bajo
+//   nubes: sombras de nubes cruzando (suelo y hierba)
 //   viento: hierba: se mece con el tiempo, más cuanto más arriba del tallo
-function conAltura(mat, { tinta = false, viento = false } = {}) {
+function conAltura(mat, { tinta = false, viento = false, normales = false, nubes = false } = {}) {
   mat.onBeforeCompile = (sh) => {
     sh.uniforms.tiempo = uTiempo;
+    sh.uniforms.tNubes = uNubes;
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\n' + GLSL_ALTURA + '\nuniform float tiempo;\nvarying float vAltura;')
+      .replace('#include <common>', '#include <common>\n' + GLSL_ALTURA + '\nuniform float tiempo;\nvarying float vAltura;\nvarying vec2 vMundoXZ;')
+      .replace(
+        '#include <beginnormal_vertex>',
+        `#include <beginnormal_vertex>
+        ${
+          normales
+            ? `#ifdef USE_INSTANCING
+                 vec4 wposN = modelMatrix * instanceMatrix * vec4(position, 1.0);
+               #else
+                 vec4 wposN = modelMatrix * vec4(position, 1.0);
+               #endif
+               vec2 dN = dAltura(wposN.xz);
+               objectNormal = normalize(vec3(-dN.x, 1.0, -dN.y));`
+            : ''
+        }`
+      )
       .replace(
         '#include <begin_vertex>',
         `#include <begin_vertex>
@@ -101,55 +133,74 @@ function conAltura(mat, { tinta = false, viento = false } = {}) {
         float hh = altura(wpos.xz);
         transformed.y += hh;
         vAltura = hh;
+        vMundoXZ = wpos.xz;
         ${viento ? 'transformed.x += sin(tiempo * 1.6 + wpos.x * 0.35 + wpos.z * 0.21) * 0.16 * position.y;\n transformed.z += cos(tiempo * 1.3 + wpos.x * 0.17 - wpos.z * 0.3) * 0.08 * position.y;' : ''}`
       );
-    if (tinta) {
-      sh.fragmentShader = sh.fragmentShader
-        .replace('#include <common>', '#include <common>\nvarying float vAltura;')
-        .replace(
-          '#include <color_fragment>',
-          `#include <color_fragment>
-          diffuseColor.rgb *= mix(vec3(0.84, 0.92, 0.78), vec3(1.07, 1.04, 0.9), clamp((vAltura + 2.0) / 4.0, 0.0, 1.0));`
-        );
-    }
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nuniform float tiempo;\nuniform sampler2D tNubes;\nvarying float vAltura;\nvarying vec2 vMundoXZ;')
+      .replace(
+        '#include <color_fragment>',
+        `#include <color_fragment>
+        ${tinta ? 'diffuseColor.rgb *= mix(vec3(0.86, 0.93, 0.8), vec3(1.06, 1.04, 0.92), clamp((vAltura + 2.0) / 4.0, 0.0, 1.0));' : ''}
+        ${nubes ? 'diffuseColor.rgb *= mix(0.74, 1.0, texture2D(tNubes, vMundoXZ / 420.0 + vec2(tiempo * 0.006, tiempo * 0.0025)).r);' : ''}`
+      );
   };
-  mat.customProgramCacheKey = () => 'altura' + (tinta ? 't' : '') + (viento ? 'v' : '');
+  mat.customProgramCacheKey = () => 'altura' + (tinta ? 't' : '') + (viento ? 'v' : '') + (normales ? 'n' : '') + (nubes ? 'c' : '');
+  return mat;
+}
+// Las copas se mecen: un vaivén lento proporcional a la altura sobre el
+// suelo, en el espacio de la pieza (así gira con ella).
+function conViento(mat) {
+  mat.onBeforeCompile = (sh) => {
+    sh.uniforms.tiempo = uTiempo;
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nuniform float tiempo;')
+      .replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>
+        #ifdef USE_INSTANCING
+          vec3 wv = (modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+        #else
+          vec3 wv = (modelMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+        #endif
+        float alto = smoothstep(1.5, 6.0, position.y);
+        transformed.x += sin(tiempo * 1.1 + wv.x * 0.2 + wv.z * 0.15) * 0.18 * alto;
+        transformed.z += cos(tiempo * 0.9 + wv.x * 0.12 - wv.z * 0.2) * 0.12 * alto;`
+      );
+  };
+  mat.customProgramCacheKey = () => 'viento';
   return mat;
 }
 
-// --- geometría con el sol horneado ---
-// Color de un vértice según su normal (en coordenadas de escena: z = sur).
-// Cálido de cara al sol, frío de espaldas, con una transición suave: es el
-// sombreado «pintado» de todo el mundo.
-function tono(col, color, nx, ny, nz) {
-  const d = nx * SOL.x + ny * SOL.y + nz * SOL.z;
-  let t = d * 0.5 + 0.5;
-  t = Math.max(0, Math.min(1, (t - 0.18) / 0.64));
-  t = t * t * (3 - 2 * t);
-  col.push(
-    color.r * (FRIO[0] + (CALIDO[0] - FRIO[0]) * t),
-    color.g * (FRIO[1] + (CALIDO[1] - FRIO[1]) * t),
-    color.b * (FRIO[2] + (CALIDO[2] - FRIO[2]) * t)
-  );
+// --- geometría low-poly con normales ---
+// Cada vértice lleva su color (albedo) y su normal; la luz la ponen las
+// luces de la escena y la rampa toon, no el JS. Las cajas y prismas llevan
+// la normal de la cara (planos duros); las esferas, la de la esfera (suave).
+function nuevaGeo() {
+  return { pos: [], col: [], nor: [] };
+}
+function vert(g, color, nx, ny, nz) {
+  g.col.push(color.r, color.g, color.b);
+  g.nor.push(nx, ny, nz);
 }
 // caja alineada a los ejes (x: este, z: sur), con tapa y sin fondo
 function caja(g, x0, y0, z0, x1, y1, z1, color) {
-  const { pos, col } = g;
+  const { pos } = g;
   const lado = (ax, az, bx, bz, nx, nz) => {
     pos.push(ax, y0, az, bx, y0, bz, bx, y1, bz, ax, y0, az, bx, y1, bz, ax, y1, az);
-    for (let q = 0; q < 6; q++) tono(col, color, nx, 0, nz);
+    for (let q = 0; q < 6; q++) vert(g, color, nx, 0, nz);
   };
   lado(x0, z1, x1, z1, 0, 1); // sur
   lado(x1, z1, x1, z0, 1, 0); // este
   lado(x1, z0, x0, z0, 0, -1); // norte
   lado(x0, z0, x0, z1, -1, 0); // oeste
   pos.push(x0, y1, z0, x1, y1, z0, x1, y1, z1, x0, y1, z0, x1, y1, z1, x0, y1, z1);
-  for (let q = 0; q < 6; q++) tono(col, color, 0, 1, 0);
+  for (let q = 0; q < 6; q++) vert(g, color, 0, 1, 0);
 }
 // prisma regular de n lados con tapa; r1 permite que el remate sea más
 // estrecho que la base (r1 = 0 es un cono)
 function prisma(g, n, r, y0, y1, color, r1 = r, cx = 0, cz = 0) {
-  const { pos, col } = g;
+  const { pos } = g;
   const inclina = Math.atan2(r - r1, y1 - y0); // hacia arriba si se estrecha
   for (let i = 0; i < n; i++) {
     const a0 = (i / n) * Math.PI * 2;
@@ -167,10 +218,10 @@ function prisma(g, n, r, y0, y1, color, r1 = r, cx = 0, cz = 0) {
     const X1 = cx + Math.cos(a1) * r1;
     const Z1 = cz - Math.sin(a1) * r1;
     pos.push(x0, y0, z0, x1, y0, z1, X1, y1, Z1, x0, y0, z0, X1, y1, Z1, X0, y1, Z0);
-    for (let q = 0; q < 6; q++) tono(col, color, nx, ny, nz);
+    for (let q = 0; q < 6; q++) vert(g, color, nx, ny, nz);
     if (r1 > 0) {
       pos.push(cx, y1, cz, X0, y1, Z0, X1, y1, Z1);
-      for (let q = 0; q < 3; q++) tono(col, color, 0, 1, 0);
+      for (let q = 0; q < 3; q++) vert(g, color, 0, 1, 0);
     }
   }
 }
@@ -189,16 +240,16 @@ function esfera(g, cx, cy, cz, r, color, sy = 1, detalle = 10) {
   const n = base.getAttribute('normal').array;
   for (let i = 0; i < p.length; i += 3) {
     g.pos.push(cx + p[i] * r, cy + p[i + 1] * r * sy, cz + p[i + 2] * r);
-    tono(g.col, color, n[i], n[i + 1], n[i + 2]);
+    vert(g, color, n[i], n[i + 1], n[i + 2]);
   }
 }
 // tejado a cuatro aguas sobre un rectángulo: alero en y0, cumbrera (paralela
 // a x, de -cr a cr) en y1
 function tejado(g, x0, z0, x1, z1, y0, y1, cr, color) {
-  const { pos, col } = g;
+  const { pos } = g;
   const tri = (a, b, c, nx, nz) => {
     pos.push(...a, ...b, ...c);
-    for (let q = 0; q < 3; q++) tono(col, color, nx * 0.7, 0.7, nz * 0.7);
+    for (let q = 0; q < 3; q++) vert(g, color, nx * 0.7, 0.7, nz * 0.7);
   };
   const A = [x0, y0, z0];
   const B = [x1, y0, z0];
@@ -218,6 +269,7 @@ function aGeo(g) {
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.Float32BufferAttribute(g.pos, 3));
   geo.setAttribute('color', new THREE.Float32BufferAttribute(g.col, 3));
+  geo.setAttribute('normal', new THREE.Float32BufferAttribute(g.nor, 3));
   return geo;
 }
 
@@ -225,10 +277,12 @@ function aGeo(g) {
 // color de vértice como factor de luz sobre blanco) y la fija. Origen en el
 // suelo, centrada, con el «frente» hacia el sur (+z) con giro 0. `sombra` es
 // el radio de la mancha de sombra suave que se pinta debajo.
-const SOMBRA_DE = { casa: 6.2, torre: 4.2, arbol: 3.4, pino: 3, arbusto: 2, flores: 1.3, farola: 0.9, banco: 1.5, fuente: 4.2, bandera: 0.7 };
+// Las que se mecen con el viento llevan otro material (el mismo, con el
+// parche de viento en el vertex shader).
+const CON_VIENTO = new Set(['arbol', 'pino', 'arbusto', 'flores', 'bandera']);
 function geometriaPieza(tipo) {
-  const T = { pos: [], col: [] }; // tinte
-  const F = { pos: [], col: [] }; // fijo
+  const T = nuevaGeo(); // tinte
+  const F = nuevaGeo(); // fijo
   if (tipo === 'casa') {
     caja(T, -4, 0, -3, 4, 3.4, 3, BLANCO);
     tejado(F, -4.5, -3.5, 4.5, 3.5, 3.3, 5.7, 2, TEJA);
@@ -268,7 +322,7 @@ function geometriaPieza(tipo) {
       [0.9, -0.2],
     ];
     for (const [x, z] of puntos) {
-      caja(F, x - 0.04, 0, z - 0.04, x + 0.04, 0.6, z + 0.04, VERDE);
+      caja(F, x - 0.05, 0, z - 0.05, x + 0.05, 0.6, z + 0.05, VERDE);
       esfera(T, x, 0.68, z, 0.24, BLANCO, 0.8, 6);
     }
   } else if (tipo === 'camino') {
@@ -295,7 +349,7 @@ function geometriaPieza(tipo) {
   } else if (tipo === 'bandera') {
     prisma(F, 6, 0.1, 0, 7.5, MASTIL, 0.07);
     T.pos.push(0.1, 7.4, 0, 0.1, 6.2, 0, 2.6, 6.8, 0);
-    for (let q = 0; q < 3; q++) tono(T.col, BLANCO, 0, 0, 1);
+    for (let q = 0; q < 3; q++) vert(T, BLANCO, 0, 0, 1);
   }
   return { tinte: aGeo(T), fijo: aGeo(F) };
 }
@@ -303,7 +357,7 @@ function geometriaPieza(tipo) {
 // El avatar: cuerpo redondo del color del jugador, cabeza, pelo y ojos
 // mirando al frente (+z). Las piernas van aparte para poder moverlas.
 function geometriaAvatar(color) {
-  const g = { pos: [], col: [] };
+  const g = nuevaGeo();
   esfera(g, 0, 1.5, 0, 0.38, color, 1.4); // cuerpo
   esfera(g, -0.5, 1.5, 0, 0.15, color, 1.9); // brazos
   esfera(g, 0.5, 1.5, 0, 0.15, color, 1.9);
@@ -314,13 +368,13 @@ function geometriaAvatar(color) {
   return aGeo(g);
 }
 function geometriaPierna() {
-  const g = { pos: [], col: [] };
+  const g = nuevaGeo();
   esfera(g, 0, -0.45, 0, 0.19, PANTALON, 2.6, 6);
   return aGeo(g);
 }
 // una nube: varias esferas aplastadas, blancas arriba y lavanda abajo
 function geometriaNube(rnd) {
-  const g = { pos: [], col: [] };
+  const g = nuevaGeo();
   const n = 4 + Math.floor(rnd() * 3);
   for (let i = 0; i < n; i++) {
     const r = 6 + rnd() * 7;
@@ -394,14 +448,20 @@ export default function Mundo() {
       return undefined;
     }
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.06;
     const params = new URLSearchParams(window.location.search);
     const jugador = perfil();
 
     // --- escena, cielo y niebla ---
     const scene = new THREE.Scene();
+    // Degradado de cenit a horizonte melocotón, con nubes blandas pintadas
+    // sobre el horizonte (una banda: es lo que se ve con la cámara al hombro).
     const texCielo = (() => {
       const cv = document.createElement('canvas');
-      cv.width = 4;
+      cv.width = 1024;
       cv.height = 256;
       const c = cv.getContext('2d');
       const grad = c.createLinearGradient(0, 0, 0, 256);
@@ -411,7 +471,25 @@ export default function Mundo() {
       grad.addColorStop(0.5, hex(CIELO_HORIZONTE));
       grad.addColorStop(1, hex(CIELO_HORIZONTE));
       c.fillStyle = grad;
-      c.fillRect(0, 0, 4, 256);
+      c.fillRect(0, 0, 1024, 256);
+      const rnd = prng(5);
+      for (let i = 0; i < 26; i++) {
+        const x = rnd() * 1024;
+        const y = 96 + rnd() * 26;
+        const w = 30 + rnd() * 70;
+        const g = c.createRadialGradient(x, y, 0, x, y, w);
+        g.addColorStop(0, 'rgba(255,255,255,0.85)');
+        g.addColorStop(0.6, 'rgba(255,255,255,0.35)');
+        g.addColorStop(1, 'rgba(255,255,255,0)');
+        c.fillStyle = g;
+        c.beginPath();
+        c.ellipse(x, y, w, w * 0.35, 0, 0, Math.PI * 2);
+        c.fill();
+        // y su copia al otro lado del borde, para que la costura no se note
+        c.beginPath();
+        c.ellipse(x + (x < 512 ? 1024 : -1024), y, w, w * 0.35, 0, 0, Math.PI * 2);
+        c.fill();
+      }
       const tex = new THREE.CanvasTexture(cv);
       tex.mapping = THREE.EquirectangularReflectionMapping;
       tex.colorSpace = THREE.SRGBColorSpace;
@@ -419,6 +497,76 @@ export default function Mundo() {
     })();
     scene.background = texCielo;
     scene.fog = new THREE.Fog(NIEBLA, NIEBLA_DESDE, NIEBLA_HASTA);
+
+    // --- luces: el sol y el cielo ---
+    scene.add(new THREE.HemisphereLight(CIELO_LUZ, SUELO_LUZ, HEMI_FUERZA));
+    // El sol sigue al avatar: su cámara de sombras es una caja de 150 m
+    // alrededor de él, con 2048 px → 7 cm por téxel, y sombras nítidas.
+    const sol = new THREE.DirectionalLight(SOL_COLOR, SOL_FUERZA);
+    sol.castShadow = true;
+    sol.shadow.mapSize.set(2048, 2048);
+    Object.assign(sol.shadow.camera, { left: -75, right: 75, top: 75, bottom: -75, near: 20, far: 420 });
+    sol.shadow.bias = -0.0003;
+    sol.shadow.normalBias = 0.5;
+    scene.add(sol);
+    scene.add(sol.target);
+    function sigueElSol(x, h, y) {
+      sol.target.position.set(x, h, -y);
+      sol.position.copy(sol.target.position).addScaledVector(SOL, 200);
+    }
+
+    // --- rampa toon: la luz cae a escalones ---
+    // Un escalón duro al entrar en la sombra y un degradado suave hacia la
+    // luz plena: la misma forma que la rampa pintada de la referencia.
+    const rampa = (() => {
+      const n = 32;
+      const d = new Uint8Array(n);
+      for (let i = 0; i < n; i++) {
+        const t = i / (n - 1);
+        let v;
+        if (t < 0.36) v = 0.3;
+        else v = 0.45 + 0.55 * Math.min(1, (t - 0.36) / 0.5);
+        d[i] = Math.round(v * 255);
+      }
+      const tex = new THREE.DataTexture(d, n, 1, THREE.RedFormat);
+      tex.minFilter = tex.magFilter = THREE.LinearFilter;
+      tex.needsUpdate = true;
+      return tex;
+    })();
+
+    // --- sombras de nubes: una textura de manchas blandas que cruza el suelo ---
+    const texNubes = (() => {
+      const S = 256;
+      const cv = document.createElement('canvas');
+      cv.width = cv.height = S;
+      const c = cv.getContext('2d');
+      c.fillStyle = '#fff';
+      c.fillRect(0, 0, S, S);
+      const rnd = prng(23);
+      for (let i = 0; i < 18; i++) {
+        const x = rnd() * S;
+        const y = rnd() * S;
+        const r = 30 + rnd() * 50;
+        for (const [ox, oy] of [
+          [0, 0],
+          [S, 0],
+          [-S, 0],
+          [0, S],
+          [0, -S],
+        ]) {
+          const g = c.createRadialGradient(x + ox, y + oy, 0, x + ox, y + oy, r);
+          g.addColorStop(0, 'rgba(0,0,0,0.85)');
+          g.addColorStop(0.5, 'rgba(0,0,0,0.45)');
+          g.addColorStop(1, 'rgba(0,0,0,0)');
+          c.fillStyle = g;
+          c.fillRect(x + ox - r, y + oy - r, r * 2, r * 2);
+        }
+      }
+      const tex = new THREE.CanvasTexture(cv);
+      tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+      return tex;
+    })();
+    uNubes.value = texNubes;
 
     // --- suelo: colinas de hierba con la trama de parcelas, que siguen al avatar ---
     // Una textura de UNA parcela repetida; el relieve lo pone el shader. El
@@ -428,11 +576,11 @@ export default function Mundo() {
       const cv = document.createElement('canvas');
       cv.width = cv.height = S;
       const c = cv.getContext('2d');
-      c.fillStyle = '#a4d47c';
+      c.fillStyle = '#95cc6e';
       c.fillRect(0, 0, S, S);
       const rnd = prng(7);
       for (let i = 0; i < 160; i++) {
-        c.fillStyle = i % 3 ? '#96c86f' : '#b3dd86';
+        c.fillStyle = i % 3 ? '#86bf62' : '#a6d67c';
         const x = rnd() * S;
         const y = rnd() * S;
         c.beginPath();
@@ -451,8 +599,12 @@ export default function Mundo() {
     })();
     const geoSuelo = new THREE.PlaneGeometry(SUELO_M, SUELO_M, 160, 160);
     geoSuelo.rotateX(-Math.PI / 2);
-    const suelo = new THREE.Mesh(geoSuelo, conAltura(new THREE.MeshBasicMaterial({ map: texSuelo }), { tinta: true }));
+    const suelo = new THREE.Mesh(
+      geoSuelo,
+      conAltura(new THREE.MeshToonMaterial({ map: texSuelo, gradientMap: rampa }), { tinta: true, normales: true, nubes: true })
+    );
     suelo.frustumCulled = false;
+    suelo.receiveShadow = true;
     scene.add(suelo);
 
     // --- cámara: tercera persona alrededor del avatar ---
@@ -468,10 +620,12 @@ export default function Mundo() {
     controls.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE };
     controls.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_ROTATE };
 
-    // --- materiales ---
-    const matFijo = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide });
-    // el tinte por instancia se multiplica al color de vértice (que es la luz)
-    const matTinte = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide });
+    // --- materiales: toon con rampa, el color de vértice como albedo ---
+    const matFijo = new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: rampa, side: THREE.DoubleSide });
+    const matFijoViento = conViento(new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: rampa, side: THREE.DoubleSide }));
+    // el tinte por instancia se multiplica al color de vértice
+    const matTinte = new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: rampa, side: THREE.DoubleSide });
+    const matTinteViento = conViento(new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: rampa, side: THREE.DoubleSide }));
 
     // --- piezas instanciadas ---
     const mallas = {}; // tipo → {tinte: InstancedMesh|null, fijo: InstancedMesh|null}
@@ -480,45 +634,27 @@ export default function Mundo() {
     for (const t of Object.keys(PIEZAS)) {
       const g = geometriaPieza(t);
       const par = { tinte: null, fijo: null };
+      const viento = CON_VIENTO.has(t);
       if (g.fijo) {
-        par.fijo = new THREE.InstancedMesh(g.fijo, matFijo, MAX_INST);
+        par.fijo = new THREE.InstancedMesh(g.fijo, viento ? matFijoViento : matFijo, MAX_INST);
         par.fijo.count = 0;
         par.fijo.frustumCulled = false; // la esfera envolvente sería la del origen
+        par.fijo.castShadow = true;
+        par.fijo.receiveShadow = true;
         grupoPiezas.add(par.fijo);
       }
       if (g.tinte) {
-        par.tinte = new THREE.InstancedMesh(g.tinte, matTinte, MAX_INST);
+        par.tinte = new THREE.InstancedMesh(g.tinte, viento ? matTinteViento : matTinte, MAX_INST);
         par.tinte.count = 0;
         par.tinte.frustumCulled = false;
+        par.tinte.castShadow = true;
+        par.tinte.receiveShadow = true;
         par.tinte.setColorAt(0, BLANCO); // hace falta tocarlo una vez para que exista
         grupoPiezas.add(par.tinte);
       }
       mallas[t] = par;
     }
     const coloresTinte = COLORES.map((h) => new THREE.Color(h));
-
-    // --- sombras suaves: una mancha bajo cada pieza y cada avatar ---
-    const texSombra = (() => {
-      const cv = document.createElement('canvas');
-      cv.width = cv.height = 128;
-      const c = cv.getContext('2d');
-      const g = c.createRadialGradient(64, 64, 6, 64, 64, 64);
-      g.addColorStop(0, 'rgba(40, 50, 80, 0.34)');
-      g.addColorStop(0.55, 'rgba(40, 50, 80, 0.18)');
-      g.addColorStop(1, 'rgba(40, 50, 80, 0)');
-      c.fillStyle = g;
-      c.fillRect(0, 0, 128, 128);
-      return new THREE.CanvasTexture(cv);
-    })();
-    const geoSombra = new THREE.PlaneGeometry(2, 2, 6, 6);
-    geoSombra.rotateX(-Math.PI / 2);
-    const matSombra = conAltura(new THREE.MeshBasicMaterial({ map: texSombra, transparent: true, depthWrite: false }));
-    const sombras = new THREE.InstancedMesh(geoSombra, matSombra, MAX_INST);
-    sombras.count = 0;
-    sombras.frustumCulled = false;
-    sombras.renderOrder = 1;
-    scene.add(sombras);
-    const matSombraAvatar = new THREE.MeshBasicMaterial({ map: texSombra, transparent: true, depthWrite: false });
 
     // --- hierba: matas que se mecen, alrededor del avatar ---
     const texHierba = (() => {
@@ -557,18 +693,27 @@ export default function Mundo() {
       const geo = new THREE.BufferGeometry();
       geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
       geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+      // normal hacia ARRIBA en todos los vértices: una mata se ilumina como
+      // el trozo de suelo en el que está, no como una pared (que de canto
+      // saldría negra)
+      const nor = [];
+      for (let i = 0; i < pos.length; i += 3) nor.push(0, 1, 0);
+      geo.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
       geo.setIndex(ia.concat(ib));
       a.dispose();
       b.dispose();
       return geo;
     })();
+    // la hierba recibe sombra (de árboles y casas) pero no la proyecta: son
+    // miles de planos y su sombra no se echa de menos
     const matHierba = conAltura(
-      new THREE.MeshBasicMaterial({ map: texHierba, alphaTest: 0.5, side: THREE.DoubleSide }),
-      { viento: true }
+      new THREE.MeshToonMaterial({ map: texHierba, alphaTest: 0.5, side: THREE.DoubleSide, gradientMap: rampa }),
+      { viento: true, nubes: true }
     );
     const hierba = new THREE.InstancedMesh(geoHierba, matHierba, MAX_HIERBA);
     hierba.count = 0;
     hierba.frustumCulled = false;
+    hierba.receiveShadow = true;
     scene.add(hierba);
     let hierbaCentro = null;
     const CELDA_HIERBA = 1.9;
@@ -613,9 +758,14 @@ export default function Mundo() {
     marcos.setColorAt(0, BLANCO);
     marcos.renderOrder = 1;
     scene.add(marcos);
-    const plazas = new THREE.InstancedMesh(geoParcela, conAltura(new THREE.MeshBasicMaterial({ color: 0xe9dfc8 })), MAX_PARC);
+    const plazas = new THREE.InstancedMesh(
+      geoParcela,
+      conAltura(new THREE.MeshToonMaterial({ color: 0xdfd0b2, gradientMap: rampa }), { normales: true, nubes: true }),
+      MAX_PARC
+    );
     plazas.count = 0;
     plazas.frustumCulled = false;
+    plazas.receiveShadow = true;
     scene.add(plazas);
 
     // marco de la parcela en obras
@@ -654,7 +804,6 @@ export default function Mundo() {
     const ejeY = new THREE.Vector3(0, 1, 0);
     const colorMio = new THREE.Color(0x7fb0ff);
     const cacheColorDueno = new Map();
-    const sinGiro = new THREE.Quaternion();
 
     // Rehace TODAS las instancias: son cientos o pocos miles, y es más barato
     // que llevar la cuenta de qué instancia era de qué parcela.
@@ -663,7 +812,6 @@ export default function Mundo() {
       for (const t in mallas) cont[t] = 0;
       let nMarcos = 0;
       let nPlazas = 0;
-      let nSombras = 0;
       for (const [clave, pc] of parcelas) {
         const p = parseParcela(clave);
         if (!p) continue;
@@ -707,14 +855,6 @@ export default function Mundo() {
             par.tinte.setColorAt(i, coloresTinte[z.c] || coloresTinte[0]);
           }
           cont[z.t] = i + 1;
-          const rs = SOMBRA_DE[z.t];
-          if (rs && nSombras < MAX_INST) {
-            // corrida un poco al noreste: el sol viene del suroeste
-            posI.set(wx + rs * 0.12, 0.1, -wy - rs * 0.1);
-            escS.set(rs, 1, rs);
-            mtx.compose(posI, sinGiro, escS);
-            sombras.setMatrixAt(nSombras++, mtx);
-          }
         }
       }
       for (const t in mallas) {
@@ -734,8 +874,6 @@ export default function Mundo() {
       if (marcos.instanceColor) marcos.instanceColor.needsUpdate = true;
       plazas.count = nPlazas;
       plazas.instanceMatrix.needsUpdate = true;
-      sombras.count = nSombras;
-      sombras.instanceMatrix.needsUpdate = true;
       hierbaCentro = null; // la hierba esquiva plazas y caminos: se replanta
     }
 
@@ -799,15 +937,16 @@ export default function Mundo() {
       const pd = new THREE.Mesh(geoPierna, matFijo);
       pi.position.set(-0.19, 1.0, 0);
       pd.position.set(0.19, 1.0, 0);
-      const sombra = new THREE.Mesh(geoSombra, matSombraAvatar);
-      sombra.scale.set(0.9, 1, 0.9);
-      sombra.position.y = 0.08;
-      sombra.renderOrder = 1;
-      grupo.add(cuerpo, pi, pd, sombra);
-      return { grupo, cuerpo, pi, pd, sombra };
+      for (const m of [cuerpo, pi, pd]) {
+        m.castShadow = true;
+        m.receiveShadow = true;
+      }
+      grupo.add(cuerpo, pi, pd);
+      return { grupo, cuerpo, pi, pd };
     }
     const avatar = creaFigura(coloresTinte[jugador.color]);
     scene.add(avatar.grupo);
+    sigueElSol(0, 0, 0);
     // posición en metros del mundo (y hacia el norte); rumbo en radianes
     const yo = { x: L / 2, y: L / 2 - 12, h: 0, rumbo: 0, destino: null, fase: 0, andando: false };
     const px0 = parseFloat(params.get('x'));
@@ -824,7 +963,6 @@ export default function Mundo() {
       const a = o.andando ? Math.sin(o.fase) * 0.65 : 0;
       f.pi.rotation.x = a;
       f.pd.rotation.x = -a;
-      f.sombra.position.y = 0.08 - salto;
     }
 
     // Cámara inicial: al sur del avatar, mirando al norte. Reproducible desde
@@ -1349,6 +1487,7 @@ export default function Mundo() {
       camera.position.y += dh;
       controls.target.y += dh;
       colocaFigura(avatar, yo);
+      sigueElSol(yo.x, yo.h, yo.y);
 
       // --- los demás, interpolados hacia su última posición conocida ---
       for (const o of otros.values()) {
@@ -1448,11 +1587,10 @@ export default function Mundo() {
       geoHierba.dispose();
       matHierba.dispose();
       texHierba.dispose();
-      sombras.dispose();
-      geoSombra.dispose();
-      matSombra.dispose();
-      matSombraAvatar.dispose();
-      texSombra.dispose();
+      texNubes.dispose();
+      rampa.dispose();
+      matFijoViento.dispose();
+      matTinteViento.dispose();
       marcos.dispose();
       marcos.material.dispose();
       plazas.dispose();

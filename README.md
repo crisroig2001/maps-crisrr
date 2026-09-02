@@ -15,18 +15,22 @@ servidor solo guarda qué hay en cada parcela y quién anda cerca.
   parcela 0/0 es la **plaza de llegada**, pública, donde aparece quien entra;
   la 1/0 es una **casa de muestra** para que se vea qué se puede hacer.
   Las dos son del «mundo»: nadie las reclama ni las cambia.
-- **El look, tarde de verano**: no hay luces. Cada vértice lleva su color ya
-  sombreado por un sol 3D bajo y del suroeste: lo que le da la cara sale
-  cálido y lo que le da la espalda, frío y azulado, con transición suave; es
-  lo que hace que parezca pintado a mano. Las formas son redondas (copas de
-  árbol, arbustos, nubes y cabezas son esferas con el degradado por normal),
-  cada pieza lleva una **mancha de sombra suave** debajo, hay **hierba** que
-  se mece (un vertex shader con el tiempo, instanciada en una rejilla fija
-  del mundo alrededor del avatar), nubes que derivan y una viñeta cálida en
-  CSS. El **relieve** son colinas suaves: una suma de senos que está
-  escrita dos veces, en JS (para colocar piezas y avatares) y en GLSL (para
-  desplazar el suelo, los marcos de parcela y las sombras en el vertex
-  shader), y que nunca da más de medio metro de desnivel en una parcela.
+- **El look, tarde de verano**, con la misma receta que las demos de
+  referencia: un **sol** (luz direccional cálida, baja y del suroeste, con
+  sombras proyectadas de 2048 px que siguen al avatar), un **cielo** (luz
+  hemisférica fría desde arriba y verdosa rebotada desde abajo) y materiales
+  **toon con rampa**: la luz cae a escalones, con un corte duro al entrar en
+  la sombra y un degradado suave hacia la luz plena, y como la luz es dorada
+  y el cielo azul, lo iluminado sale cálido y la sombra azulada sin pintar
+  nada a mano. Las formas son redondas (copas, arbustos, nubes y cabezas son
+  esferas con normales suaves), hay **sombras de nubes** cruzando el suelo
+  (una textura de manchas que se desplaza con el tiempo), **hierba** que se
+  mece (vertex shader, instanciada a rodales en una rejilla fija del mundo
+  alrededor del avatar), copas que se mecen, nubes en el cielo, tone mapping
+  ACES y una viñeta cálida en CSS. El **relieve** son colinas suaves: una
+  suma de senos escrita dos veces, en JS (para colocar piezas y avatares) y
+  en GLSL (para desplazar suelo, marcos y plazas en el vertex shader y sacar
+  su normal), y que nunca da más de medio metro de desnivel en una parcela.
 - **El avatar**: cuerpo redondo del color elegido, cabeza, pelo y ojos; el
   mismo sombreado horneado que todo lo demás. Anda **tocando
   el suelo** (o con WASD / flechas, relativo a la cámara) y la cámara, en
