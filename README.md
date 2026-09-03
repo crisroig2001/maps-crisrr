@@ -61,16 +61,19 @@ servidor solo guarda qué hay en cada parcela y quién anda cerca.
   **tocando el suelo**, con el **joystick** de abajo a la izquierda (solo en
   pantallas táctiles) o con WASD / flechas, todo relativo a la cámara, que va
   con él en tercera persona.
-- **La cámara**: con **un dedo** (o el ratón) se gira alrededor del avatar y
-  se cambia el ángulo con que se ve el mundo; pellizcar o la rueda acercan.
-  Con **dos dedos** se lleva el mapa a donde se quiera, **salvo si se posan
-  en horizontal**, uno al lado del otro: entonces siguen girando y cambiando
-  el ángulo, como antes. El modo se decide por la inclinación de la línea
-  que une los dos dedos al posar el segundo (hasta 35 grados de la
-  horizontal es girar) y no cambia hasta soltar, así un gesto no se
-  convierte en otro a mitad de camino. El mapa nunca se aleja más de 120 m
-  del avatar y vuelve a centrarlo en cuanto se anda: se puede mirar
-  alrededor sin perderse.
+- **La cámara y los gestos**, los mismos que en los mapas del iPhone: **un
+  dedo** lleva el mapa a donde se quiera, y **dos dedos** hacen tres cosas a
+  la vez y sin modos: separarlos o juntarlos acerca y aleja, girarlos gira el
+  mundo, y subirlos o bajarlos cambia el ángulo con que se ve (arriba, de
+  canto; abajo, desde el cielo). Cada una espera a su umbral para empezar
+  (8 grados de giro, 14 px de subida, un 6% de separación), así un pellizco
+  recto no gira solo ni un giro acerca solo; a partir de ahí van fotograma a
+  fotograma, y al pasar el umbral no dan tirones. De los dos dedos se encarga
+  el propio código y no `OrbitControls`, que no sabe girar con el GIRO de los
+  dedos (lo suyo es arrastrarlos): a la cámara se le deja el caso de un dedo
+  y el de dos se le apaga. Con **ratón**, arrastrar gira y cambia el ángulo y
+  la rueda acerca. El mapa nunca se aleja más de 120 m del avatar y vuelve a
+  centrarlo en cuanto se anda: se puede mirar alrededor sin perderse.
 - **Presencia**: cada 1,5 s el cliente manda su posición a `POST
   /api/presencia` y recibe a quien esté a menos de 400 m. Los demás se
   interpolan hacia su última posición conocida, así que se les ve andar y no

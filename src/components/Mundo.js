@@ -841,7 +841,11 @@ export default function Mundo() {
     controls.maxPolarAngle = 1.45;
     // El ratón no arrastra el mapa: ninguno de sus botones va a PAN
     controls.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE };
-    controls.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_ROTATE };
+    // Un dedo mueve el mapa; de los dos dedos se encarga `apuntaDedo`, así que
+    // a la cámara se le da para ese caso un valor que no es ninguno de los
+    // TOUCH.* de three y que por tanto ignora.
+    const DOS_DEDOS_APARTE = -1;
+    controls.touches = { ONE: THREE.TOUCH.PAN, TWO: DOS_DEDOS_APARTE };
 
     // --- materiales: toon con rampa, el color de vértice como albedo ---
     const matFijo = conNiebla(new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: rampa, side: THREE.DoubleSide }));
@@ -1680,34 +1684,84 @@ export default function Mundo() {
     canvas.addEventListener('pointerup', onSube);
     canvas.addEventListener('pointercancel', onCancela);
 
-    // --- GESTOS de dos dedos: arrastrar el mapa o girarlo ---
-    // Con dos dedos se lleva el mapa a donde se quiera, SALVO si los dedos se
-    // posan en horizontal (uno al lado del otro): entonces siguen haciendo lo
-    // de antes, girar alrededor del avatar y, subiendo o bajando, cambiar el
-    // ángulo con que se ve el mundo. Pellizcar acerca y aleja en ambos casos.
+    // --- GESTOS, como en los mapas del iPhone ---
+    // Un dedo lleva el mapa a donde se quiera. Dos dedos hacen tres cosas a la
+    // vez, sin modos ni esquinas: separarlos o juntarlos acerca y aleja,
+    // girarlos gira el mundo, y subirlos o bajarlos a la vez cambia el ángulo
+    // con que se ve (arriba, de canto; abajo, desde el cielo).
     //
-    // Se mira la inclinación de la línea que une los dos dedos al posar el
-    // segundo, y el modo no cambia hasta que se sueltan: así un gesto no se
-    // convierte en otro a mitad de camino. El oyente va en `window` y en fase
-    // de captura porque el de la cámara está en el lienzo: hay que decidir el
-    // modo ANTES de que ella vea el mismo evento.
-    const GRADOS_HORIZONTAL = 35; // margen a cada lado de la horizontal
+    // De los dos dedos se encarga este código y no la cámara, porque
+    // OrbitControls no sabe girar con el GIRO de los dedos: lo suyo es
+    // arrastrarlos. Cada cosa espera a su umbral para empezar (un pellizco
+    // recto no gira solo, ni un giro acerca solo), y a partir de ahí va
+    // fotograma a fotograma, así que al soltarse el umbral no da tirones.
+    const GIRO_MINIMO = 0.14; // rad (8°) de giro antes de que el mundo gire
+    const ALTO_MINIMO = 14; // px de subida antes de cambiar el ángulo
+    const ZOOM_MINIMO = 0.06; // 6% de separación antes de acercar
+
     const dedos = new Map(); // pointerId → {x, y}, solo dedos sobre el lienzo
+    let pinza = null; // la medida del fotograma anterior, y qué ha arrancado ya
+    const esfCam = new THREE.Spherical();
+    const vecCam = new THREE.Vector3();
+
+    function midePinza() {
+      const [a, b] = [...dedos.values()];
+      return { d: Math.hypot(b.x - a.x, b.y - a.y), g: Math.atan2(b.y - a.y, b.x - a.x), y: (a.y + b.y) / 2 };
+    }
+    function abrePinza() {
+      if (dedos.size !== 2) {
+        pinza = null;
+        return;
+      }
+      const m = midePinza();
+      pinza = { ...m, d0: m.d, g0: m.g, y0: m.y, gira: false, alza: false, zoom: false };
+    }
     function apuntaDedo(e) {
       if (e.pointerType !== 'touch') return;
       if (e.type === 'pointerdown') {
         if (e.target !== canvas) return;
         dedos.set(e.pointerId, { x: e.clientX, y: e.clientY });
-        if (dedos.size !== 2) return;
-        const [a, b] = [...dedos.values()];
-        const g = Math.abs((Math.atan2(b.y - a.y, b.x - a.x) * 180) / Math.PI);
-        const horizontal = Math.min(g, 180 - g) <= GRADOS_HORIZONTAL;
-        controls.touches.TWO = horizontal ? THREE.TOUCH.DOLLY_ROTATE : THREE.TOUCH.DOLLY_PAN;
+        abrePinza();
+      } else if (e.type === 'pointermove') {
+        const p = dedos.get(e.pointerId);
+        if (!p) return;
+        p.x = e.clientX;
+        p.y = e.clientY;
+        if (pinza && dedos.size === 2) muevePinza();
       } else {
         dedos.delete(e.pointerId);
+        abrePinza();
       }
     }
+    function muevePinza() {
+      const m = midePinza();
+      // el giro da la vuelta en ±π: se compara por el camino corto
+      let dg = m.g - pinza.g;
+      if (dg > Math.PI) dg -= 2 * Math.PI;
+      else if (dg < -Math.PI) dg += 2 * Math.PI;
+      let g0 = m.g - pinza.g0;
+      if (g0 > Math.PI) g0 -= 2 * Math.PI;
+      else if (g0 < -Math.PI) g0 += 2 * Math.PI;
+      if (!pinza.gira && Math.abs(g0) > GIRO_MINIMO) pinza.gira = true;
+      if (!pinza.alza && Math.abs(m.y - pinza.y0) > ALTO_MINIMO) pinza.alza = true;
+      if (!pinza.zoom && Math.abs(Math.log(m.d / pinza.d0)) > ZOOM_MINIMO) pinza.zoom = true;
+
+      vecCam.copy(camera.position).sub(controls.target);
+      esfCam.setFromVector3(vecCam);
+      // girar los dedos gira el mundo con ellos: la cámara da la vuelta al revés
+      if (pinza.gira) esfCam.theta += dg;
+      // subirlos pone el mundo de canto; bajarlos, visto desde el cielo
+      if (pinza.alza) esfCam.phi = Math.max(controls.minPolarAngle, Math.min(controls.maxPolarAngle, esfCam.phi + ((pinza.y - m.y) * Math.PI) / vpH));
+      // separarlos acerca, juntarlos aleja
+      if (pinza.zoom) esfCam.radius = Math.max(controls.minDistance, Math.min(controls.maxDistance, esfCam.radius * (pinza.d / m.d)));
+      camera.position.copy(controls.target).add(vecCam.setFromSpherical(esfCam));
+
+      pinza.d = m.d;
+      pinza.g = m.g;
+      pinza.y = m.y;
+    }
     window.addEventListener('pointerdown', apuntaDedo, true);
+    window.addEventListener('pointermove', apuntaDedo, true);
     window.addEventListener('pointerup', apuntaDedo, true);
     window.addEventListener('pointercancel', apuntaDedo, true);
 
@@ -1879,6 +1933,11 @@ export default function Mundo() {
         return { d: e.radius, pol: e.phi, az: e.theta, ox: controls.target.x - yo.x, oz: controls.target.z + yo.y };
       },
       recentra: () => centraMapa(10, true),
+      // dónde cae en pantalla un punto del mundo (diagnóstico)
+      proyecta: (x, y) => {
+        const v = new THREE.Vector3(x, alturaEn(x, y), -y).project(camera);
+        return { sx: (v.x * 0.5 + 0.5) * vpW, sy: (-v.y * 0.5 + 0.5) * vpH };
+      },
       seleccion: () => (seleccion ? { ...seleccion.z } : null),
       // qué piezas hay bajo un punto de pantalla (diagnóstico)
       bajo: (sx, sy) => {
@@ -2203,6 +2262,7 @@ export default function Mundo() {
       canvas.removeEventListener('pointerup', onSube);
       canvas.removeEventListener('pointercancel', onCancela);
       window.removeEventListener('pointerdown', apuntaDedo, true);
+      window.removeEventListener('pointermove', apuntaDedo, true);
       window.removeEventListener('pointerup', apuntaDedo, true);
       window.removeEventListener('pointercancel', apuntaDedo, true);
       for (const id of [...otros.keys()]) quitaOtro(id);
@@ -2414,7 +2474,7 @@ export default function Mundo() {
         <div className="ui hoja glass info">
           <h2>Cómo funciona</h2>
           <p>
-            <b>Anda</b> tocando el suelo, con el joystick de abajo a la izquierda (en el móvil) o con WASD / flechas. Arrastra con un dedo para girar la cámara y pellizca para acercarla. Con <b>dos dedos</b> llevas el mapa a donde quieras; si los pones en horizontal, uno al lado del otro, giras el mundo y cambias el ángulo con que se ve. En cuanto andas, el mapa vuelve al avatar.
+            <b>Anda</b> tocando el suelo, con el joystick de abajo a la izquierda (en el móvil) o con WASD / flechas. Los gestos son los de los mapas del iPhone: <b>un dedo</b> lleva el mapa a donde quieras y <b>dos dedos</b> lo acercan al separarlos, lo giran al girarlos y cambian el ángulo con que se ve al subirlos o bajarlos. En cuanto andas, el mapa vuelve al avatar. Con ratón, arrastra para girar y usa la rueda para acercar.
           </p>
           <p>
             <b>Reclama una parcela</b> libre de la zona residencial (alrededor de la plaza, los paseos y los parques): ponte encima y pulsa «Reclamar». Es tuya para siempre (o hasta que la abandones).
