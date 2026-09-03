@@ -60,7 +60,17 @@ servidor solo guarda qué hay en cada parcela y quién anda cerca.
 - **El avatar**: cuerpo redondo del color elegido, cabeza, pelo y ojos. Anda
   **tocando el suelo**, con el **joystick** de abajo a la izquierda (solo en
   pantallas táctiles) o con WASD / flechas, todo relativo a la cámara, que va
-  con él en tercera persona: arrastrar gira, pellizcar acerca.
+  con él en tercera persona.
+- **La cámara**: con **un dedo** (o el ratón) se gira alrededor del avatar y
+  se cambia el ángulo con que se ve el mundo; pellizcar o la rueda acercan.
+  Con **dos dedos** se lleva el mapa a donde se quiera, **salvo si se posan
+  en horizontal**, uno al lado del otro: entonces siguen girando y cambiando
+  el ángulo, como antes. El modo se decide por la inclinación de la línea
+  que une los dos dedos al posar el segundo (hasta 35 grados de la
+  horizontal es girar) y no cambia hasta soltar, así un gesto no se
+  convierte en otro a mitad de camino. El mapa nunca se aleja más de 120 m
+  del avatar y vuelve a centrarlo en cuanto se anda: se puede mirar
+  alrededor sin perderse.
 - **Presencia**: cada 1,5 s el cliente manda su posición a `POST
   /api/presencia` y recibe a quien esté a menos de 400 m. Los demás se
   interpolan hacia su última posición conocida, así que se les ve andar y no

@@ -833,11 +833,13 @@ export default function Mundo() {
     const controls = new MapControls(camera, canvas);
     controls.enableDamping = true;
     controls.dampingFactor = 0.1;
-    controls.enablePan = false; // la cámara va donde va el avatar
+    controls.enablePan = true; // con dos dedos se arrastra el mapa (ver GESTOS)
+    controls.screenSpacePanning = false; // arrastrar mueve por el suelo, no por el aire
     controls.minDistance = 6;
     controls.maxDistance = 140;
     controls.minPolarAngle = 0.15;
     controls.maxPolarAngle = 1.45;
+    // El ratón no arrastra el mapa: ninguno de sus botones va a PAN
     controls.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE };
     controls.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_ROTATE };
 
@@ -1678,6 +1680,55 @@ export default function Mundo() {
     canvas.addEventListener('pointerup', onSube);
     canvas.addEventListener('pointercancel', onCancela);
 
+    // --- GESTOS de dos dedos: arrastrar el mapa o girarlo ---
+    // Con dos dedos se lleva el mapa a donde se quiera, SALVO si los dedos se
+    // posan en horizontal (uno al lado del otro): entonces siguen haciendo lo
+    // de antes, girar alrededor del avatar y, subiendo o bajando, cambiar el
+    // ángulo con que se ve el mundo. Pellizcar acerca y aleja en ambos casos.
+    //
+    // Se mira la inclinación de la línea que une los dos dedos al posar el
+    // segundo, y el modo no cambia hasta que se sueltan: así un gesto no se
+    // convierte en otro a mitad de camino. El oyente va en `window` y en fase
+    // de captura porque el de la cámara está en el lienzo: hay que decidir el
+    // modo ANTES de que ella vea el mismo evento.
+    const GRADOS_HORIZONTAL = 35; // margen a cada lado de la horizontal
+    const dedos = new Map(); // pointerId → {x, y}, solo dedos sobre el lienzo
+    function apuntaDedo(e) {
+      if (e.pointerType !== 'touch') return;
+      if (e.type === 'pointerdown') {
+        if (e.target !== canvas) return;
+        dedos.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (dedos.size !== 2) return;
+        const [a, b] = [...dedos.values()];
+        const g = Math.abs((Math.atan2(b.y - a.y, b.x - a.x) * 180) / Math.PI);
+        const horizontal = Math.min(g, 180 - g) <= GRADOS_HORIZONTAL;
+        controls.touches.TWO = horizontal ? THREE.TOUCH.DOLLY_ROTATE : THREE.TOUCH.DOLLY_PAN;
+      } else {
+        dedos.delete(e.pointerId);
+      }
+    }
+    window.addEventListener('pointerdown', apuntaDedo, true);
+    window.addEventListener('pointerup', apuntaDedo, true);
+    window.addEventListener('pointercancel', apuntaDedo, true);
+
+    // Lo arrastrado se mide contra el avatar: nunca se aleja más de MAX_PAN
+    // metros de él, y en cuanto se anda el mapa vuelve solo a centrarlo. Así
+    // se puede mirar alrededor sin perder de vista quién eres.
+    const MAX_PAN = 120;
+    function centraMapa(dt, andando) {
+      const ox = controls.target.x - yo.x;
+      const oz = controls.target.z + yo.y;
+      const d = Math.hypot(ox, oz);
+      if (d < 0.001) return;
+      let k = d > MAX_PAN ? (d - MAX_PAN) / d : 0;
+      if (andando) k = Math.max(k, 1 - Math.exp(-dt * 2.2));
+      if (k <= 0) return;
+      controls.target.x -= ox * k;
+      controls.target.z -= oz * k;
+      camera.position.x -= ox * k;
+      camera.position.z -= oz * k;
+    }
+
     // joystick táctil (lo pinta React): vector -1..1, adelante = +y
     const joy = { x: 0, y: 0 };
     // teclado: WASD / flechas, relativo a la cámara
@@ -1822,6 +1873,12 @@ export default function Mundo() {
     window.__mundo = {
       mueve: mueveA,
       pos: () => ({ x: yo.x, y: yo.y }),
+      // dónde está la cámara y cuánto se ha arrastrado el mapa (diagnóstico)
+      camara: () => {
+        const e = new THREE.Spherical().setFromVector3(camera.position.clone().sub(controls.target));
+        return { d: e.radius, pol: e.phi, az: e.theta, ox: controls.target.x - yo.x, oz: controls.target.z + yo.y };
+      },
+      recentra: () => centraMapa(10, true),
       seleccion: () => (seleccion ? { ...seleccion.z } : null),
       // qué piezas hay bajo un punto de pantalla (diagnóstico)
       bajo: (sx, sy) => {
@@ -2095,6 +2152,7 @@ export default function Mundo() {
       cielo.position.copy(camera.position);
       vuelanLosPajaros(uTiempo.value);
 
+      centraMapa(dt, yo.andando);
       controls.update();
       renderer.render(scene, camera);
       pintaNombres();
@@ -2144,6 +2202,9 @@ export default function Mundo() {
       canvas.removeEventListener('pointermove', onMueve);
       canvas.removeEventListener('pointerup', onSube);
       canvas.removeEventListener('pointercancel', onCancela);
+      window.removeEventListener('pointerdown', apuntaDedo, true);
+      window.removeEventListener('pointerup', apuntaDedo, true);
+      window.removeEventListener('pointercancel', apuntaDedo, true);
       for (const id of [...otros.keys()]) quitaOtro(id);
       for (const el of nodos.values()) el.remove();
       nodos.clear();
@@ -2353,7 +2414,7 @@ export default function Mundo() {
         <div className="ui hoja glass info">
           <h2>Cómo funciona</h2>
           <p>
-            <b>Anda</b> tocando el suelo, con el joystick de abajo a la izquierda (en el móvil) o con WASD / flechas. Arrastra para girar la cámara y pellizca para acercarla.
+            <b>Anda</b> tocando el suelo, con el joystick de abajo a la izquierda (en el móvil) o con WASD / flechas. Arrastra con un dedo para girar la cámara y pellizca para acercarla. Con <b>dos dedos</b> llevas el mapa a donde quieras; si los pones en horizontal, uno al lado del otro, giras el mundo y cambias el ángulo con que se ve. En cuanto andas, el mapa vuelve al avatar.
           </p>
           <p>
             <b>Reclama una parcela</b> libre de la zona residencial (alrededor de la plaza, los paseos y los parques): ponte encima y pulsa «Reclamar». Es tuya para siempre (o hasta que la abandones).
