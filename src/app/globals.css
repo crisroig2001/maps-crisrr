@@ -101,6 +101,30 @@ body {
   border-radius: 0 0 3px 0;
   transform: translateX(-50%) rotate(45deg);
 }
+/* cartel de parcela: de quién es esa casa y a cuánta gente le gusta, flotando
+   sobre ella. El punto lleva el color del marco que la parcela tiene pintado
+   en el suelo, así el cartel y el suelo dicen lo mismo. */
+.cartel {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px 4px 7px;
+  border-radius: 99px;
+  white-space: nowrap;
+  font-size: 11.5px;
+  font-weight: 800;
+  color: var(--ink-2);
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 3px 12px rgba(43, 52, 64, 0.2);
+  will-change: transform;
+}
+.cartel i { display: block; width: 9px; height: 9px; border-radius: 50%; }
+.cartel b { color: var(--ink); font-weight: 800; }
+.cartel.mia b { color: var(--accent); }
+
 /* un gesto: el emoji sube y se desvanece. El JS lleva el .gesto pegado a la
    cabeza (que anda) y el CSS anima la subida dentro. */
 .gesto {
@@ -279,6 +303,14 @@ body {
   gap: 10px;
   max-width: calc(100vw - 28px);
 }
+/* me gusta: el botón principal cuando estás en casa de otro, y en rosa
+   cuando ya lo has dado */
+.acciones .gusta.on {
+  background: #ffe9ee;
+  color: #d6336c;
+  box-shadow: 0 6px 18px rgba(214, 51, 108, 0.28);
+}
+.etiqueta.gustada { color: #d6336c; }
 .etiqueta {
   padding: 11px 16px;
   border-radius: 99px;

@@ -104,6 +104,22 @@ servidor solo guarda qué hay en cada parcela y quién anda cerca.
   de un solo constructor. Se puede abandonar, y vuelve a ser un solar.
   Cada parcela reclamada lleva un marco en el suelo del color de su dueño
   (derivado de su id, sin preguntarle a nadie); la tuya, en azul.
+- **De quién es cada casa**: sobre cada parcela reclamada flota un **cartel**
+  con el nombre de su dueño y un punto del color de su marco, así que el
+  cartel y el suelo dicen lo mismo. Es lo que hace que el mundo se note
+  habitado **aunque no haya nadie conectado**, que es casi siempre: sin él se
+  anda entre casas de nadie. El nombre viaja con la parcela (`GET /api/mundo`
+  lo saca de `jugadores[dueño].n`, y `reclama` lo guarda al vuelo para que una
+  casa recién hecha no diga «Alguien»); los carteles son de las parcelas a dos
+  de distancia y se apagan a 130 m.
+- **Me gusta**: en la parcela de otro, un botón deja un ❤️, uno por jugador y
+  se puede quitar. Se ve en el cartel y **se guarda** (a diferencia de lo que
+  se dice, que se desvanece): es el bucle que cierra construir cuando no
+  coincides con nadie, porque al volver se te cuenta cuánta gente ha pasado
+  por tu casa. Los ids de quién lo ha dado no salen del servidor: sale la
+  cuenta y, para ti, si tú eras uno. Tope de `MAX_GUSTA` por parcela, que es
+  lo que impide que una parcela famosa se coma el fichero. El «cuántos había
+  la última vez» vive en tu dispositivo: es un aviso, no un dato del mundo.
 - **Construir**: en tu parcela, «Construir» abre la paleta con una treintena
   de piezas: cuatro casas, tienda, torre, árboles (roble, pino, palmera…),
   arbustos, flores, setas, calabazas, rocas, troncos, hoguera, camino, puente,
@@ -190,7 +206,8 @@ npm run vistas -- --solo casa-de-muestra  # una sola vista
 `npm run prueba` es la otra mitad: dos jugadores de verdad en dos pestañas
 (Ana y Bea) que se presentan, andan, se ven, **se hablan** (Ana dice algo y
 hace un gesto, y se comprueba que a Bea le llegan), reclaman un solar,
-construyen y comprueban que el otro lo ve y que el servidor lo guardó. Deja capturas de
+construyen, comprueban que el otro lo ve y que el servidor lo guardó, y Bea
+entra en la parcela de Ana, ve de quién es y le da a me gusta. Deja capturas de
 cada paso en `OUT` (por defecto, el directorio actual).
 
 Las vistas están en `scripts/vistas.config.mjs`. Si aparece un fallo nuevo,

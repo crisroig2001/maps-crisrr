@@ -1,7 +1,7 @@
 // Prueba de extremo a extremo con dos jugadores (npm run prueba, con la app
 // servida en npm run dev): presentación, andar, ver al
-// otro, hablar y que el otro lo lea, reclamar una parcela, construir y que el
-// otro lo vea.
+// otro, hablar y que el otro lo lea, reclamar una parcela, construir, que el
+// otro lo vea, y que pueda saber de quién es y darle a me gusta.
 import { chromium } from 'playwright';
 import path from 'node:path';
 
@@ -144,6 +144,24 @@ for (let i = 0; i < 3 && !guardada; i++) {
   if (!guardada) await ana.waitForTimeout(1500);
 }
 console.log('servidor parcela -2/1:', guardada ? guardada.d.length + ' piezas, dueño ' + guardada.o : 'NO GUARDADA');
+
+// Bea entra en la parcela de Ana: tiene que ver de quién es y poder darle a
+// me gusta. A Ana le llega en su sondeo: el cartel sube la cuenta y se lo
+// cuentan por el aviso de abajo.
+await bea.evaluate(() => window.__mundo.mueve(-2 * 48 + 24, 48 + 12));
+await bea.waitForSelector('.acciones .gusta', { state: 'attached', timeout: 20000 });
+console.log('Bea, en casa de Ana:', (await bea.textContent('.acciones')).trim());
+await pulsa(bea, '.acciones .gusta');
+await bea.waitForTimeout(700);
+console.log('tras darle a me gusta:', (await bea.textContent('.acciones')).trim());
+await bea.screenshot({ path: path.join(OUT, 'm5b-bea-en-casa-de-ana.png') });
+const conGusta = await bea.evaluate(async () => (await fetch('/api/mundo?px0=-2&py0=1&px1=-2&py1=1', { cache: 'no-store' })).json());
+console.log('servidor me gusta:', conGusta.parcelas?.find((p) => p.k === '-2/1')?.g ?? 'NINGUNO');
+// el sondeo de parcelas de Ana es cada 6 s
+await ana.waitForTimeout(8000);
+const carteles = await ana.$$eval('#rotulos .cartel', (els) => els.filter((e) => e.style.display !== 'none').map((e) => e.textContent));
+console.log('cartel que ve Ana:', carteles.length ? carteles : 'NINGUNO', '| aviso:', (await ana.textContent('.toast')).trim());
+await ana.screenshot({ path: path.join(OUT, 'm5c-ana-ve-su-cartel.png') });
 // Móvil: con pantalla táctil sale el joystick, y arrastrarlo mueve el avatar.
 // Las otras dos pestañas se cierran antes: tres mundos con sombras a la vez
 // dejan sin frames al render por software.

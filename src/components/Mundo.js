@@ -17,7 +17,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { PARCELA_M, parcelaDe, claveParcela, parseParcela, centroParcela } from '../lib/parcela';
 import { PIEZAS, CATEGORIAS, COLORES, MAX_PIEZAS, MAX_NOMBRE, MAX_MENSAJE, MENSAJE_MS, EMOTES, limpiaMensaje } from '../lib/piezas';
-import { perfil, guardaPerfil } from '../lib/jugador';
+import { perfil, guardaPerfil, gustaVisto, guardaGustaVisto } from '../lib/jugador';
 import { tipoParcela, conSuelo, cauce, distRio, rioEsteX as rioEsteXEnEscena, rioSurY as rioSurYEnEscena, GLSL_CAUCE, RIO_ANCHO, NIVEL_AGUA, LECHO, BANDA_AGUA } from '../lib/paisaje';
 const LECHO_G = LECHO.toFixed(1);
 
@@ -1423,11 +1423,11 @@ export default function Mundo() {
     let vpH = 1;
     // Coloca un nodo sobre un punto del mundo. Devuelve la distancia a la
     // cámara, o null si queda detrás o demasiado lejos para leerse.
-    function sitúa(el, x, y, h, alto) {
+    function sitúa(el, x, y, h, alto, lejos = 160) {
       pv.set(x, h + alto, -y);
       const dist = pv.distanceTo(camera.position);
       pv.project(camera);
-      if (pv.z > 1 || dist > 160 || Math.abs(pv.x) > 1.1 || Math.abs(pv.y) > 1.1) {
+      if (pv.z > 1 || dist > lejos || Math.abs(pv.x) > 1.1 || Math.abs(pv.y) > 1.1) {
         el.style.display = 'none';
         return null;
       }
@@ -1457,6 +1457,69 @@ export default function Mundo() {
         if (k >= 0) gestos.splice(k, 1);
       }, 1700);
     }
+    // --- carteles: de quién es cada parcela ---
+    // El mundo se construye entre todos, pero conectados hay poca gente a la
+    // vez, así que casi siempre se anda entre casas de nadie. El cartel dice
+    // de quién es cada una y a cuánta gente le gusta: el trabajo de alguien se
+    // ve aunque no coincidáis. Se rehacen al cambiar de parcela o al llegar
+    // datos, y se colocan en cada fotograma como los nombres.
+    const carteles = new Map(); // clave de parcela → <div>
+    const CARTELES_RADIO = 2; // parcelas a la redonda
+    const CARTEL_LEJOS = 130; // m: más allá no se lee y estorba
+    const CARTEL_ALTO = 4; // m sobre el suelo: con la cámara de serie, más alto se sale por arriba
+    function sincronizaCarteles() {
+      const cont = rotulosRef.current;
+      if (!cont) return;
+      const p = parcelaDe(yo.x, yo.y);
+      const quedan = new Set();
+      for (let dx = -CARTELES_RADIO; dx <= CARTELES_RADIO; dx++) {
+        for (let dy = -CARTELES_RADIO; dy <= CARTELES_RADIO; dy++) {
+          const clave = claveParcela(p.px + dx, p.py + dy);
+          const pc = parcelas.get(clave);
+          if (!pc?.o || pc.o === 'mundo' || !pc.n) continue;
+          quedan.add(clave);
+          let el = carteles.get(clave);
+          if (!el) {
+            el = document.createElement('div');
+            el.className = 'cartel';
+            const i = document.createElement('i');
+            const b = document.createElement('b');
+            const g = document.createElement('span');
+            g.className = 'gusta';
+            el.append(i, b, g);
+            el._i = i;
+            el._b = b;
+            el._g = g;
+            cont.appendChild(el);
+            carteles.set(clave, el);
+          }
+          const mia = pc.o === jugador.id;
+          // el punto del color del marco que la parcela lleva en el suelo:
+          // el cartel y el suelo dicen lo mismo
+          const col = '#' + (mia ? colorMio : cacheColorDueno.get(pc.o) || colorDueno(pc.o)).getHexString();
+          if (el._col !== col) {
+            el._i.style.background = col;
+            el._col = col;
+          }
+          if (el._txt !== pc.n) {
+            el._b.textContent = pc.n;
+            el._txt = pc.n;
+          }
+          if (el._g._n !== pc.g) {
+            el._g.textContent = pc.g ? '❤️ ' + pc.g : '';
+            el._g.hidden = !pc.g;
+            el._g._n = pc.g;
+          }
+          el.classList.toggle('mia', mia);
+        }
+      }
+      for (const [clave, el] of carteles) {
+        if (quedan.has(clave)) continue;
+        el.remove();
+        carteles.delete(clave);
+      }
+    }
+
     function pintaNombres() {
       const cont = rotulosRef.current;
       if (!cont) return;
@@ -1500,6 +1563,11 @@ export default function Mundo() {
           continue;
         }
         sitúa(g.el, o.x, o.y, o.h, ALTO_AVATAR + 0.5);
+      }
+      for (const [clave, el] of carteles) {
+        const q = parseParcela(clave);
+        const c = centroParcela(q.px, q.py);
+        sitúa(el, c.x, c.y, alturaEn(c.x, c.y), CARTEL_ALTO, CARTEL_LEJOS);
       }
     }
 
@@ -1640,7 +1708,7 @@ export default function Mundo() {
         lista.push(z);
         seleccion = { clave: obraClave, z };
       }
-      parcelas.set(obraClave, { o: pc?.o || jugador.id, d: lista });
+      parcelas.set(obraClave, { ...pc, o: pc?.o || jugador.id, d: lista });
       pintaMundo();
       avisaObra?.({ n: lista.length, seleccion: !!seleccion });
       programaGuardado(obraClave);
@@ -1888,7 +1956,9 @@ export default function Mundo() {
         for (const k of ['px0', 'py0', 'px1', 'py1']) q.set(k, String(caja[k]));
         // el delta solo vale con la misma caja: si cambia, lo nuevo es viejo
         if (ultimoHasta != null && !cambiaCaja) q.set('desde', String(ultimoHasta));
-        else q.set('jugador', jugador.id);
+        // el jugador va siempre: con él vienen los «me gusta» que ha dado y
+        // cuánto gusta la suya, que es lo que se le cuenta al volver
+        q.set('jugador', jugador.id);
         const r = await fetch('/api/mundo?' + q.toString());
         if (r.status === 304) return;
         const j = await r.json();
@@ -1906,17 +1976,19 @@ export default function Mundo() {
         for (const it of j.parcelas || []) {
           if (it.k === obraClave) continue; // lo local aún no se ha guardado
           const prev = parcelas.get(it.k);
-          if (!prev || prev.o !== it.o || JSON.stringify(prev.d) !== JSON.stringify(it.d)) {
-            parcelas.set(it.k, { o: it.o, d: it.d || [] });
-            cambios = true;
-          }
+          // el dueño y las piezas son lo que hay que volver a dibujar en 3D;
+          // el nombre y los me gusta solo cambian el cartel, que se pinta
+          // por su cuenta en cada fotograma
+          if (!prev || prev.o !== it.o || JSON.stringify(prev.d) !== JSON.stringify(it.d)) cambios = true;
+          parcelas.set(it.k, { o: it.o, d: it.d || [], n: it.n || null, g: it.g || 0, mg: !!it.mg });
         }
         if (j.yo) {
           miParcelaClave = j.yo.p || null;
           setMiParcela(miParcelaClave);
+          cuentaGusta(j.yo.g || 0);
         }
         if (cambios || cambiaCaja) pintaMundo();
-        actualizaDonde(true);
+        actualizaDonde(true); // ... que además sincroniza los carteles
         compruebaListo();
       } catch {
         /* sin red: se reintenta en el siguiente sondeo */
@@ -1938,10 +2010,25 @@ export default function Mundo() {
         clave,
         tipo,
         dueno: pc?.o || null,
+        nombre: pc?.n || null,
         mia: pc?.o === jugador.id,
         libre: !pc?.o && tipo === 'residencial',
+        g: pc?.g || 0,
+        mg: !!pc?.mg,
         n: pc?.d?.length || 0,
       });
+      sincronizaCarteles();
+    }
+
+    // Al volver, si a tu parcela le ha gustado a más gente, se te cuenta: es
+    // lo único que devuelve haber construido cuando no coincides con nadie.
+    // El «cuántos había» es de este dispositivo (localStorage), no del mundo.
+    let gustaPrevio = null;
+    function cuentaGusta(n) {
+      const antes = gustaPrevio === null ? gustaVisto() : gustaPrevio;
+      gustaPrevio = n;
+      if (n > antes) avisa(n === 1 ? '❤️ A alguien le gusta tu parcela' : '❤️ Le gusta tu parcela a ' + n + ' personas');
+      if (n !== gustaVisto()) guardaGustaVisto(n);
     }
 
     // --- presencia ---
@@ -2078,7 +2165,7 @@ export default function Mundo() {
         if (!seleccion || !obraClave) return 0;
         const pc = parcelas.get(obraClave);
         const lista = (pc?.d || []).filter((z) => z !== seleccion.z);
-        parcelas.set(obraClave, { o: pc?.o || jugador.id, d: lista });
+        parcelas.set(obraClave, { ...pc, o: pc?.o || jugador.id, d: lista });
         seleccion = null;
         pintaMundo();
         programaGuardado(obraClave);
@@ -2097,11 +2184,11 @@ export default function Mundo() {
           const r = await fetch('/api/parcela', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ accion: 'reclama', parcela: clave, jugador: jugador.id }),
+            body: JSON.stringify({ accion: 'reclama', parcela: clave, jugador: jugador.id, nombre: perfil().nombre }),
           });
           const j = await r.json().catch(() => ({}));
           if (!r.ok) return j.error || 'red';
-          parcelas.set(clave, { o: jugador.id, d: [] });
+          parcelas.set(clave, { o: jugador.id, n: perfil().nombre, g: 0, mg: false, d: [] });
           miParcelaClave = clave;
           setMiParcela(clave);
           ultimoHasta = null;
@@ -2121,7 +2208,7 @@ export default function Mundo() {
           });
           const j = await r.json().catch(() => ({}));
           if (!r.ok) return j.error || 'red';
-          parcelas.set(clave, { o: null, d: [] });
+          parcelas.set(clave, { o: null, n: null, g: 0, mg: false, d: [] });
           miParcelaClave = null;
           setMiParcela(null);
           ultimoHasta = null;
@@ -2131,6 +2218,33 @@ export default function Mundo() {
         } catch {
           return 'red';
         }
+      },
+      // Me gusta la parcela donde estás. El corazón responde al toque y no al
+      // servidor; si la petición falla, se deshace.
+      async daGusta() {
+        const clave = dondeClave;
+        const pc = parcelas.get(clave);
+        if (!pc?.o || pc.o === 'mundo' || pc.o === jugador.id) return 'propia';
+        const quiero = !pc.mg;
+        const aplica = (v) => {
+          pc.mg = v;
+          pc.g = Math.max(0, (pc.g || 0) + (v ? 1 : -1));
+          sincronizaCarteles();
+          actualizaDonde(true);
+        };
+        aplica(quiero);
+        try {
+          const r = await fetch('/api/parcela', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ accion: 'gusta', parcela: clave, jugador: jugador.id }),
+          });
+          if (!r.ok) throw new Error('no');
+        } catch {
+          aplica(!quiero);
+          return 'red';
+        }
+        return null;
       },
       // teletransporte a una parcela (la plaza, la tuya)
       vaA(clave) {
@@ -2506,6 +2620,10 @@ export default function Mundo() {
     }
   }
 
+  async function onGusta() {
+    if ((await engineRef.current?.daGusta()) === 'red') avisa('No se ha podido guardar; inténtalo otra vez');
+  }
+
   // --- hablar ---
   function onDecir(e) {
     e.preventDefault();
@@ -2614,27 +2732,43 @@ export default function Mundo() {
               🛠️ Construir
             </button>
           )}
+          {donde.mia && donde.g > 0 && (
+            <span className="etiqueta glass gustada" title="A cuánta gente le gusta tu parcela">
+              ❤️ {donde.g}
+            </span>
+          )}
           {donde.libre && !miParcela && (
             <button className="btn-principal" onClick={onReclamar}>
               📍 Reclamar esta parcela
             </button>
           )}
           {donde.libre && miParcela && <span className="etiqueta glass">Solar libre</span>}
-          {!donde.libre && !donde.mia && (
+          {!donde.libre && !donde.mia && donde.dueno && donde.dueno !== 'mundo' && (
+            <>
+              <span className="etiqueta glass">Aquí vive {donde.nombre || 'alguien'}</span>
+              <button
+                className={'btn-principal gusta' + (donde.mg ? ' on' : '')}
+                onClick={onGusta}
+                aria-pressed={donde.mg}
+                aria-label={donde.mg ? 'Quitar el me gusta' : 'Me gusta esta parcela'}
+              >
+                {donde.mg ? '❤️' : '🤍'} {donde.g > 0 ? donde.g : 'Me gusta'}
+              </button>
+            </>
+          )}
+          {!donde.libre && !donde.mia && !(donde.dueno && donde.dueno !== 'mundo') && (
             <span className="etiqueta glass">
-              {donde.dueno && donde.dueno !== 'mundo'
-                ? 'Parcela de otra persona'
-                : donde.tipo === 'plaza'
-                  ? 'Plaza pública'
-                  : donde.tipo === 'paseo'
-                    ? 'Paseo público'
-                    : donde.tipo === 'parque'
-                      ? 'Parque público'
-                      : donde.tipo === 'rio'
-                        ? 'Río: aquí no se construye'
-                        : donde.tipo === 'muestra'
-                          ? 'Casa de muestra'
-                          : 'Campo: se construye cerca de la plaza'}
+              {donde.tipo === 'plaza'
+                ? 'Plaza pública'
+                : donde.tipo === 'paseo'
+                  ? 'Paseo público'
+                  : donde.tipo === 'parque'
+                    ? 'Parque público'
+                    : donde.tipo === 'rio'
+                      ? 'Río: aquí no se construye'
+                      : donde.tipo === 'muestra'
+                        ? 'Casa de muestra'
+                        : 'Campo: se construye cerca de la plaza'}
             </span>
           )}
         </div>
