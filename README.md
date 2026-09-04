@@ -200,7 +200,15 @@ servidor solo guarda qué hay en cada parcela y quién anda cerca.
   `localStorage` (`src/lib/jugador.js`). **No es una cuenta** y se puede
   falsificar; las cuentas son el siguiente paso, esto es la mecánica de juego
   que las necesita.
-- **Despliegue**: Dockerfile multi-stage → Next.js `standalone`, en Coolify.
+- **Despliegue**: Dockerfile multi-stage → Next.js `standalone`, en Coolify
+  (aplicación `maps`, uuid `pldgqjztsx5bfm2rbjnipmgh`). Empujar a `main` no
+  despliega solo: se lanza con `POST $COOLIFY_BASE_URL/api/v1/deploy?uuid=…`
+  y **con `&force=true`**, porque sin eso reusa la imagen cacheada, termina en
+  quince segundos y deja la web como estaba. Para saber si lo desplegado es lo
+  nuevo, el hash de `page-*.js` NO sirve (es una envoltura de 3 KB que casi
+  nunca cambia): o se mira una respuesta de la API que solo dé el código nuevo,
+  o se busca una cadena nueva en el trozo del mundo (`97.*.js`, que sale del
+  mapa de trozos de `webpack-*.js`).
 
 ## Desarrollo
 
@@ -264,12 +272,31 @@ se baje otro.
 ## Hoja de ruta
 
 1. ✅ Mundo, avatar, presencia por sondeo, parcelas y construcción con piezas
-2. Cuentas de usuario: la propiedad de las parcelas de verdad, y lo que
-   convierte silenciar y bloquear en moderación de verdad (hoy el id es del
-   dispositivo y se puede falsificar)
-3. WebSockets para la presencia (hablar ya va por el sondeo), y con ellos
-   silenciar y reportar, que es lo que pide el texto libre cuando hay gente
-4. Más piezas, piezas apilables (plantas), interiores
+2. ✅ Que el mundo se note habitado: el avatar a escala de persona, hablar con
+   burbujas y gestos, el cartel de quién es cada casa y el me gusta, pelo y
+   piel propios con perfil que se puede cambiar, y silenciar y reportar
+3. **Cuentas de usuario** ← lo siguiente. Hoy el id es del dispositivo y se
+   puede falsificar, y de ahí cuelga todo lo demás: la propiedad de una parcela
+   es «quien tenga ese localStorage», bloquear a alguien cuesta lo que vaciarlo
+   y volver, y un reporte señala a un id que puede no volver a existir. Es lo
+   que convierte silenciar y bloquear en moderación de verdad.
+4. WebSockets para la presencia (hablar y los gestos ya van por el sondeo, que
+   para eso sobra; lo que se nota es el retardo al ver andar a los demás)
+5. Más piezas, piezas apilables (plantas), interiores
+
+### Cabos sueltos
+
+- En el `mundo.json` de **producción** hay un jugador inerte `0000…0001`
+  llamado «Sonda», en 900000/900000, de comprobar la API en vivo. No tiene
+  parcela ni vuelve a aparecer; se quita a mano en el volumen si molesta.
+- `BLOQUEADOS` se lee al arrancar: bloquear a alguien pide reiniciar el
+  contenedor. Con cuentas esto debería ser un dato del mundo, no del entorno.
+- Las referencias del banco visual no están en el repo (`capturas/` está en
+  `.gitignore`), así que la primera `npm run vistas` en una máquina nueva las
+  crea en vez de comparar.
+- Un vecino con la pestaña de fondo se queda sin fotogramas y desaparece del
+  mundo a los 12 s (la presencia va con el bucle de dibujo). Es defendible
+  —no está—, pero si un día molesta, el sondeo tendría que ir por su cuenta.
 
 ## Historia
 
