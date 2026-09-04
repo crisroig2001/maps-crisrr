@@ -13,7 +13,11 @@
 //   nombre, icono   lo que ve el jugador en la paleta (mini = miniatura PNG)
 //   glb             modelo en /modelos/<glb>.glb (Kenney, CC0); sin glb, la
 //                   pieza es geometría generada en el visor
-//   ancho           a cuánto se escala el modelo: su lado mayor en metros
+//   ancho           a cuánto se escala el modelo: su lado mayor EN PLANTA, en
+//                   metros. Ojo: quien manda es la altura que sale de ahí,
+//                   porque es lo que se compara con el avatar (1,8 m). Un
+//                   modelo alto y estrecho necesita un `ancho` pequeño:
+//                   `node scripts/medidas.mjs` lista lo que mide cada pieza.
 //   zoom            la miniatura deja mucho aire: se recorta al centro
 //   tinte           se pinta del color elegido (solo piezas generadas)
 //   rejilla         se pega a una rejilla de 4 m (caminos, vallas, puentes)
@@ -38,26 +42,26 @@ export const PIEZAS = {
   pino: { nombre: 'Pino', icono: '🌲', glb: 'pino', mini: true, zoom: true, ancho: 2.6, cat: 'naturaleza', solido: 0.5 },
   palmera: { nombre: 'Palmera', icono: '🌴', glb: 'palmera', mini: true, zoom: true, ancho: 6, cat: 'naturaleza', solido: 0.5 },
   arbusto: { nombre: 'Arbusto', icono: '🌿', glb: 'arbusto', mini: true, zoom: true, ancho: 2.4, cat: 'naturaleza' },
-  flores: { nombre: 'Flores rojas', icono: '🌷', glb: 'flores-rojas', mini: true, zoom: true, ancho: 1.1, cat: 'naturaleza' },
-  'flores-amarillas': { nombre: 'Flores amarillas', icono: '🌼', glb: 'flores-amarillas', mini: true, zoom: true, ancho: 1.3, cat: 'naturaleza' },
-  'flores-moradas': { nombre: 'Flores moradas', icono: '💐', glb: 'flores-moradas', mini: true, zoom: true, ancho: 1.1, cat: 'naturaleza' },
-  setas: { nombre: 'Setas', icono: '🍄', glb: 'setas', mini: true, zoom: true, ancho: 1.2, cat: 'naturaleza' },
-  calabaza: { nombre: 'Calabaza', icono: '🎃', glb: 'calabaza', mini: true, zoom: true, ancho: 1.4, cat: 'naturaleza' },
-  maceta: { nombre: 'Maceta', icono: '🪴', glb: 'maceta', mini: true, ancho: 0.9, cat: 'jardin', solido: 0.4 },
+  flores: { nombre: 'Flores rojas', icono: '🌷', glb: 'flores-rojas', mini: true, zoom: true, ancho: 0.5, cat: 'naturaleza' }, // 0,8 m de alto
+  'flores-amarillas': { nombre: 'Flores amarillas', icono: '🌼', glb: 'flores-amarillas', mini: true, zoom: true, ancho: 0.9, cat: 'naturaleza' },
+  'flores-moradas': { nombre: 'Flores moradas', icono: '💐', glb: 'flores-moradas', mini: true, zoom: true, ancho: 0.7, cat: 'naturaleza' },
+  setas: { nombre: 'Setas', icono: '🍄', glb: 'setas', mini: true, zoom: true, ancho: 0.8, cat: 'naturaleza' },
+  calabaza: { nombre: 'Calabaza', icono: '🎃', glb: 'calabaza', mini: true, zoom: true, ancho: 0.7, cat: 'naturaleza' },
+  maceta: { nombre: 'Maceta', icono: '🪴', glb: 'maceta', mini: true, ancho: 0.4, cat: 'jardin', solido: 0.2 }, // 1,1 m con la planta
   // rocas y madera
   roca: { nombre: 'Roca', icono: '🪨', glb: 'roca', mini: true, zoom: true, ancho: 3.4, cat: 'naturaleza', solido: 1.5 },
   rocas: { nombre: 'Piedras', icono: '🪨', glb: 'rocas', mini: true, zoom: true, ancho: 1.6, cat: 'naturaleza', solido: 0.7 },
-  tronco: { nombre: 'Troncos', icono: '🪵', glb: 'tronco', mini: true, zoom: true, ancho: 3, cat: 'naturaleza', solido: 1.2 },
-  hoguera: { nombre: 'Hoguera', icono: '🔥', glb: 'hoguera', mini: true, zoom: true, ancho: 1.8, cat: 'jardin', solido: 0.9 },
+  tronco: { nombre: 'Troncos', icono: '🪵', glb: 'tronco', mini: true, zoom: true, ancho: 2.2, cat: 'naturaleza', solido: 0.9 },
+  hoguera: { nombre: 'Hoguera', icono: '🔥', glb: 'hoguera', mini: true, zoom: true, ancho: 1.4, cat: 'jardin', solido: 0.7 },
   // suelo y cierres
   camino: { nombre: 'Camino', icono: '🟫', glb: 'camino', mini: true, zoom: true, ancho: 4, rejilla: true, suelo: true, cat: 'suelo' },
   puente: { nombre: 'Puente', icono: '🌉', glb: 'puente', mini: true, zoom: true, ancho: 6, rejilla: true, suelo: true, cat: 'suelo' },
   valla: { nombre: 'Valla', icono: '🪵', glb: 'valla', mini: true, zoom: true, ancho: 4, rejilla: true, cat: 'suelo' },
-  cartel: { nombre: 'Cartel', icono: '🪧', glb: 'cartel', mini: true, zoom: true, ancho: 1.6, cat: 'jardin', solido: 0.3 },
+  cartel: { nombre: 'Cartel', icono: '🪧', glb: 'cartel', mini: true, zoom: true, ancho: 1.2, cat: 'jardin', solido: 0.3 }, // 1,7 m: se lee de pie
   // mobiliario (Furniture Kit) y piezas generadas
-  banco: { nombre: 'Banco', icono: '🪑', glb: 'banco', mini: true, ancho: 1.8, cat: 'jardin', solido: 0.8 },
-  mesa: { nombre: 'Mesa', icono: '🍽️', glb: 'mesa', mini: true, ancho: 1.6, cat: 'jardin', solido: 0.8 },
-  silla: { nombre: 'Silla', icono: '💺', glb: 'silla', mini: true, ancho: 0.8, cat: 'jardin' },
+  banco: { nombre: 'Banco', icono: '🪑', glb: 'banco', mini: true, ancho: 0.95, cat: 'jardin', solido: 0.5 }, // 1,1 m con respaldo
+  mesa: { nombre: 'Mesa', icono: '🍽️', glb: 'mesa', mini: true, ancho: 1.6, cat: 'jardin', solido: 0.8 }, // 0,7 m: ya estaba bien
+  silla: { nombre: 'Silla', icono: '💺', glb: 'silla', mini: true, ancho: 0.45, cat: 'jardin' }, // 1,05 m de respaldo
   farola: { nombre: 'Farola', icono: '💡', ancho: 1.2, cat: 'jardin', solido: 0.3 },
   fuente: { nombre: 'Fuente', icono: '⛲', ancho: 6.4, cat: 'jardin', solido: 3.4 },
   bandera: { nombre: 'Bandera', icono: '🚩', tinte: true, ancho: 2.6, cat: 'jardin' },

@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start",
     "vistas": "node scripts/capturas.mjs",
+    "medidas": "node scripts/medidas.mjs",
     "prueba": "node scripts/prueba.mjs"
   },
   "dependencies": {

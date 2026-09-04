@@ -57,10 +57,17 @@ servidor solo guarda qué hay en cada parcela y quién anda cerca.
   avatares) y en GLSL (para desplazar suelo, marcos y plazas en el vertex
   shader y sacar su normal), y que nunca da más de medio metro de desnivel
   en una parcela.
-- **El avatar**: cuerpo redondo del color elegido, cabeza, pelo y ojos. Anda
-  **tocando el suelo**, con el **joystick** de abajo a la izquierda (solo en
-  pantallas táctiles) o con WASD / flechas, todo relativo a la cámara, que va
-  con él en tercera persona.
+- **El avatar**: cuerpo redondo del color elegido, cabeza, pelo y ojos. Mide
+  **1,8 m**, lo que mide una persona, y ese número es la vara de medir del
+  mundo: las casas son de 6,4 a 8,8 m de alto, los árboles de 8 a 10 y la
+  puerta de una casa 2, así que un avatar más alto las convertía en casitas de
+  juguete. `npm run medidas` dice lo que mide cada pieza ya colocada y cuántas
+  veces el avatar: el catálogo escala cada modelo por su lado mayor **en
+  planta**, así que un modelo alto y estrecho (una silla, una maceta, una
+  flor) se va de alto sin que se note en el número. Anda **tocando el suelo**,
+  con el **joystick** de abajo a la izquierda (solo en pantallas táctiles) o
+  con WASD / flechas, todo relativo a la cámara, que va con él en tercera
+  persona.
 - **La cámara y los gestos**, los mismos que en los mapas del iPhone: **un
   dedo** lleva el mapa a donde se quiera, y **dos dedos** hacen tres cosas a
   la vez y sin modos: separarlos o juntarlos acerca y aleja, girarlos gira el
@@ -152,6 +159,10 @@ npx playwright install chromium   # una vez
 npm run dev                       # en otra terminal, con el almacén de semilla
 npm run vistas                    # captura y compara
 ```
+
+Hay una vista, `a-escala`, que existe solo para juzgar el **tamaño**: el
+avatar pegado a la casa de muestra y a su jardín, donde se ve enseguida si una
+persona mide lo que mide al lado de una puerta, un banco o una valla.
 
 Deja `capturas/index.html`: cada vista con su referencia al lado, el
 porcentaje de píxeles que han cambiado y, si han cambiado, una imagen que los

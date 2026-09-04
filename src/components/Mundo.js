@@ -72,7 +72,8 @@ const NUBE_SOMBRA = new THREE.Color(0xdfe3f5);
 
 const MAX_INST = 3000; // instancias por parte de pieza en el mundo cargado
 const MAX_HIERBA = 3000;
-const VELOCIDAD = 4.6; // m/s del avatar
+const VELOCIDAD = 3.8; // m/s del avatar
+const CADENCIA = 12.5; // rad/s de la zancada: con VELOCIDAD da un paso de ~0,95 m
 
 // --- terreno: colinas suaves, la MISMA función en JS y en GLSL ---
 // Amplitud pequeña y ondas largas: una parcela de 48 m nunca tiene más de
@@ -215,7 +216,7 @@ function conAltura(mat, { tinta = false, viento = false, normales = false, nubes
                transformed.z += cos(tiempo * 1.3 + wpos.x * 0.17 - wpos.z * 0.3) * 0.08 * position.y;
                vec2 dAv = wpos.xz - uAvatar.xz;
                float lAv = length(dAv);
-               transformed.xz += (dAv / max(lAv, 0.001)) * (1.0 - smoothstep(0.2, 1.5, lAv)) * 0.7 * position.y;`
+               transformed.xz += (dAv / max(lAv, 0.001)) * (1.0 - smoothstep(0.15, 1.0, lAv)) * 0.45 * position.y;`
             : ''
         }`
       );
@@ -414,20 +415,29 @@ function geometriaPieza(tipo) {
 
 // El avatar: cuerpo redondo del color del jugador, cabeza, pelo y ojos
 // mirando al frente (+z). Las piernas van aparte para poder moverlas.
+//
+// Mide ALTO_AVATAR de la planta al pelo. Las piezas están a escala de verdad
+// (las casas miden de 6,4 a 8,8 m de alto, los árboles de 8 a 10, la puerta
+// de una casa 2), así que un avatar de 2,8 m las encogía: parecían casitas de
+// juguete. Las proporciones del muñeco no cambian —sigue siendo cabezón, de
+// dibujo—, solo su tamaño. Todo lo que va con él (el salto al andar, la
+// altura a la que mira la cámara, el rótulo del nombre, el radio con que
+// choca) sale de aquí.
+const ALTO_AVATAR = 1.8;
 function geometriaAvatar(color) {
   const g = nuevaGeo();
-  esfera(g, 0, 1.5, 0, 0.38, color, 1.4); // cuerpo
-  esfera(g, -0.5, 1.5, 0, 0.15, color, 1.9); // brazos
-  esfera(g, 0.5, 1.5, 0, 0.15, color, 1.9);
-  esfera(g, 0, 2.35, 0, 0.42, PIEL); // cabeza
-  esfera(g, 0, 2.5, -0.06, 0.44, PELO, 0.75); // pelo
-  esfera(g, -0.15, 2.36, 0.36, 0.06, OJO, 1, 6); // ojos
-  esfera(g, 0.15, 2.36, 0.36, 0.06, OJO, 1, 6);
+  esfera(g, 0, 0.96, 0, 0.24, color, 1.4); // cuerpo
+  esfera(g, -0.32, 0.96, 0, 0.1, color, 1.9); // brazos
+  esfera(g, 0.32, 0.96, 0, 0.1, color, 1.9);
+  esfera(g, 0, 1.5, 0, 0.27, PIEL); // cabeza
+  esfera(g, 0, 1.6, -0.04, 0.28, PELO, 0.75); // pelo
+  esfera(g, -0.1, 1.51, 0.23, 0.04, OJO, 1, 6); // ojos
+  esfera(g, 0.1, 1.51, 0.23, 0.04, OJO, 1, 6);
   return aGeo(g);
 }
 function geometriaPierna() {
   const g = nuevaGeo();
-  esfera(g, 0, -0.45, 0, 0.19, PANTALON, 2.6, 6);
+  esfera(g, 0, -0.29, 0, 0.12, PANTALON, 2.6, 6);
   return aGeo(g);
 }
 // una nube: varias esferas aplastadas, blancas arriba y lavanda abajo
@@ -835,7 +845,7 @@ export default function Mundo() {
     controls.dampingFactor = 0.1;
     controls.enablePan = true; // con dos dedos se arrastra el mapa (ver GESTOS)
     controls.screenSpacePanning = false; // arrastrar mueve por el suelo, no por el aire
-    controls.minDistance = 6;
+    controls.minDistance = 4;
     controls.maxDistance = 140;
     controls.minPolarAngle = 0.15;
     controls.maxPolarAngle = 1.45;
@@ -1303,7 +1313,7 @@ export default function Mundo() {
             }
           }
           if (tapada) continue;
-          const s = 0.45 + h * 1.3; // como mucho a la rodilla del avatar
+          const s = 0.3 + h * 0.85; // como mucho, al muslo del avatar
           posI.set(wx, 0, -wy);
           rotI.setFromAxisAngle(ejeY, h * 9);
           escS.set(s, s * (0.9 + hash2(gy, gx) * 0.7), s);
@@ -1322,8 +1332,8 @@ export default function Mundo() {
       const cuerpo = new THREE.Mesh(geometriaAvatar(color), matFijo);
       const pi = new THREE.Mesh(geoPierna, matFijo);
       const pd = new THREE.Mesh(geoPierna, matFijo);
-      pi.position.set(-0.19, 1.0, 0);
-      pd.position.set(0.19, 1.0, 0);
+      pi.position.set(-0.12, 0.64, 0);
+      pd.position.set(0.12, 0.64, 0);
       for (const m of [cuerpo, pi, pd]) {
         m.castShadow = true;
         m.receiveShadow = true;
@@ -1344,7 +1354,7 @@ export default function Mundo() {
     }
     yo.h = alturaEn(yo.x, yo.y);
     function colocaFigura(f, o) {
-      const salto = o.andando ? Math.abs(Math.sin(o.fase)) * 0.09 : 0;
+      const salto = o.andando ? Math.abs(Math.sin(o.fase)) * 0.06 : 0;
       f.grupo.position.set(o.x, o.h + salto, -o.y);
       f.grupo.rotation.y = o.rumbo;
       const a = o.andando ? Math.sin(o.fase) * 0.65 : 0;
@@ -1355,18 +1365,18 @@ export default function Mundo() {
     // Cámara inicial: al sur del avatar, mirando al norte. Reproducible desde
     // la URL (?d=&pol=&az=) para el banco visual: az es el rumbo desde el
     // avatar hacia la cámara (180 = la cámara está al sur).
-    controls.target.set(yo.x, yo.h + 1.2, -yo.y);
+    controls.target.set(yo.x, yo.h + ALTO_AVATAR * 0.5, -yo.y);
     {
       const dCam = parseFloat(params.get('d'));
       const polCam = parseFloat(params.get('pol'));
       const azCam = parseFloat(params.get('az'));
       // por defecto, cerca y baja: como en la referencia, siempre se ve el
       // horizonte con sus nubes
-      const d = dCam > 0 ? dCam : 18;
+      const d = dCam > 0 ? dCam : 14;
       const pol = (Number.isFinite(polCam) ? Math.max(9, Math.min(83, polCam)) : 66) * (Math.PI / 180);
       const az = (Number.isFinite(azCam) ? azCam : 180) * (Math.PI / 180);
       const r = d * Math.sin(pol);
-      camera.position.set(yo.x + r * Math.sin(az), yo.h + 1.2 + d * Math.cos(pol), -yo.y - r * Math.cos(az));
+      camera.position.set(yo.x + r * Math.sin(az), yo.h + ALTO_AVATAR * 0.5 + d * Math.cos(pol), -yo.y - r * Math.cos(az));
     }
 
     // --- otros jugadores ---
@@ -1418,7 +1428,7 @@ export default function Mundo() {
           el.textContent = nombre;
           el._txt = nombre;
         }
-        pv.set(x, h + 3.2, -y);
+        pv.set(x, h + ALTO_AVATAR + 0.3, -y);
         const dist = pv.distanceTo(camera.position);
         pv.project(camera);
         if (pv.z > 1 || dist > 160 || Math.abs(pv.x) > 1.1 || Math.abs(pv.y) > 1.1) {
@@ -2135,7 +2145,7 @@ export default function Mundo() {
           const ex = yo.x - so.x;
           const ey = yo.y - so.y;
           const d = Math.hypot(ex, ey);
-          const r = so.r + 0.45;
+          const r = so.r + 0.3;
           if (d < r && d > 0.001) {
             yo.x = so.x + (ex / d) * r;
             yo.y = so.y + (ey / d) * r;
@@ -2153,7 +2163,7 @@ export default function Mundo() {
           }
         }
         yo.rumbo = Math.atan2(dx, -dy); // el frente del avatar es +z (sur)
-        yo.fase += dt * 11;
+        yo.fase += dt * CADENCIA;
         // la cámara va con él
         camera.position.x += yo.x - x0;
         camera.position.z -= yo.y - y0;
@@ -2186,7 +2196,7 @@ export default function Mundo() {
           s.y += (dy / d) * paso;
           s.rumbo = Math.atan2(dx, -dy);
           s.andando = true;
-          s.fase += dt * 11;
+          s.fase += dt * CADENCIA;
         } else {
           s.andando = false;
           s.fase = 0;
