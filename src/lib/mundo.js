@@ -13,6 +13,7 @@ import path from 'node:path';
 import { PARCELA_M, claveParcela } from './parcela';
 import { validaPiezas, limpiaNombre, limpiaMensaje, COLORES, PELOS, PIELES, MAX_NOMBRE, EMOTES, MENSAJE_MS, EMOTE_MS, RE_JUGADOR } from './piezas';
 import { tipoParcela, esPublica, piezasPublicas, RADIO_RESIDENCIAL } from './paisaje';
+import { CORRO_MAX, CORRO_CERCA_M, CORRO_RADIO_M, INVITACION_MS, ACCIONES_CORRO, RE_CORRO } from './corro';
 
 const DIR = process.env.DATA_DIR || path.join(process.cwd(), '.data');
 const FILE = path.join(DIR, 'mundo.json');
@@ -289,12 +290,201 @@ function reporta(de, a) {
   return null;
 }
 
+// --- corros: quién habla con quién, ahora mismo (memoria) ---
+// Un corro es un grupo de gente hablando en un sitio (ver src/lib/corro.js).
+// Vive AQUÍ y solo aquí, como lo que se dice: en memoria, y se deshace solo.
+// No se persiste ni se lleva registro de quién habló con quién.
+//
+// El estado son tres mapas y no uno: el corro por su id, en qué corro está
+// cada jugador (para resolver en O(1) al repartir lo que se dice, que es lo
+// que se hace en cada sondeo de cada uno) y quién espera en la puerta.
+const corros = new Map(); // k → {k, anfitrion, m: [ids], abierto, t}
+const deQuien = new Map(); // jugador → k
+const invitados = new Map(); // jugador invitado → Map(quien invita → cuándo)
+const alaPuerta = new Map(); // k → Map(quien llama → cuándo)
+
+function nuevoCorro(anfitrion) {
+  let k;
+  do {
+    k = Math.random().toString(36).slice(2, 10);
+  } while (corros.has(k));
+  const c = { k, anfitrion, m: [anfitrion], abierto: false, t: Date.now() };
+  corros.set(k, c);
+  deQuien.set(anfitrion, k);
+  return c;
+}
+
+// El corro de alguien, o null. De paso limpia el apunte si el corro ya no
+// existe: así nadie se queda «en» un corro deshecho.
+function miCorro(id) {
+  const k = deQuien.get(id);
+  const c = k ? corros.get(k) : null;
+  if (!c) {
+    if (k) deQuien.delete(id);
+    return null;
+  }
+  return c;
+}
+
+function deshaceCorro(c) {
+  for (const x of c.m) deQuien.delete(x);
+  corros.delete(c.k);
+  alaPuerta.delete(c.k);
+}
+
+// Salir es salir: si el que se va era el anfitrión, la puerta pasa al que
+// lleva más tiempo dentro (el corro no se queda sin nadie que la abra), y un
+// corro de uno se deshace, que ya no es un corro.
+function saleDeCorro(id) {
+  const c = miCorro(id);
+  if (!c) return;
+  c.m = c.m.filter((x) => x !== id);
+  deQuien.delete(id);
+  alaPuerta.get(c.k)?.delete(id);
+  if (c.anfitrion === id) c.anfitrion = c.m[0] || null;
+  if (c.m.length < 2) deshaceCorro(c);
+}
+
+function entraEnCorro(c, id) {
+  if (c.m.includes(id)) return 'ya';
+  if (c.m.length >= CORRO_MAX) return 'lleno';
+  saleDeCorro(id); // solo se puede estar en un corro: en dos conversaciones no se está
+  c.m.push(id);
+  deQuien.set(id, c.k);
+  alaPuerta.get(c.k)?.delete(id);
+  invitados.get(id)?.clear();
+  return null;
+}
+
+// A cuánto estás del corro: al centro de LOS DEMÁS, no al del grupo contigo
+// dentro. Con dos personas eso es la distancia entre ellas, que es lo que uno
+// nota; midiendo al centro del grupo, dos podrían acabar a 40 m «juntas».
+function lejosDelCorro(c, id, x, y) {
+  let sx = 0;
+  let sy = 0;
+  let n = 0;
+  for (const o of c.m) {
+    if (o === id) continue;
+    const v = vivos.get(o);
+    if (!v) continue;
+    sx += v.x;
+    sy += v.y;
+    n++;
+  }
+  if (!n) return false;
+  return Math.hypot(sx / n - x, sy / n - y) > CORRO_RADIO_M;
+}
+
+// Lo que pide el cliente, montado en el sondeo de presencia (como reportar):
+// se resuelve aquí, que es donde está viva la presencia y se sabe quién está
+// al lado de quién. Devuelve null si va bien, o el motivo.
+function accionCorro(id, acc) {
+  const a = acc?.a;
+  if (typeof a !== 'string' || !ACCIONES_CORRO.has(a)) return 'bad_accion';
+  const yo = vivos.get(id);
+  if (!yo) return 'no_estas';
+  const q = typeof acc.q === 'string' ? acc.q : null;
+  const alLado = (otro) => {
+    const v = vivos.get(otro);
+    return !!v && Math.hypot(v.x - yo.x, v.y - yo.y) <= CORRO_CERCA_M;
+  };
+  const mio = miCorro(id);
+
+  if (a === 'sale') {
+    if (!mio) return 'no_estas';
+    saleDeCorro(id);
+    return null;
+  }
+  if (a === 'abre') {
+    if (!mio) return 'no_estas';
+    if (mio.anfitrion !== id) return 'no_anfitrion';
+    mio.abierto = !!acc.v;
+    return null;
+  }
+  if (a === 'llama') {
+    const c = q && RE_CORRO.test(q) ? corros.get(q) : null;
+    if (!c) return 'no_hay';
+    if (c.m.includes(id)) return 'ya';
+    if (c.m.length >= CORRO_MAX) return 'lleno';
+    // hay que estar al lado de alguien del corro: se llama a una puerta que
+    // se ve, no a un grupo del otro extremo del mundo
+    if (!c.m.some(alLado)) return 'lejos';
+    if (c.abierto) return entraEnCorro(c, id); // un corro abierto no tiene puerta
+    const p = alaPuerta.get(c.k) || alaPuerta.set(c.k, new Map()).get(c.k);
+    p.set(id, Date.now());
+    return 'llamando';
+  }
+  if (!q || q === id || !RE_JUGADOR.test(q) || BLOQUEADOS.has(q)) return 'no_esta';
+  if (a === 'invita') {
+    if (!vivos.get(q)) return 'no_esta';
+    if (!alLado(q)) return 'lejos';
+    if (mio) {
+      if (mio.m.includes(q)) return 'ya';
+      if (mio.m.length >= CORRO_MAX) return 'lleno';
+      // en un corro cerrado, la puerta es del anfitrión; abierto, invita
+      // cualquiera de dentro
+      if (!mio.abierto && mio.anfitrion !== id) return 'no_anfitrion';
+    }
+    const inv = invitados.get(q) || invitados.set(q, new Map()).get(q);
+    inv.set(id, Date.now());
+    return null;
+  }
+  if (a === 'acepta') {
+    const inv = invitados.get(id);
+    const cuando = inv?.get(q);
+    if (!cuando || Date.now() - cuando > INVITACION_MS) {
+      inv?.delete(q);
+      return 'sin_invitacion';
+    }
+    inv.delete(q);
+    if (!vivos.get(q)) return 'no_esta';
+    // el corro se crea AQUÍ y no al invitar: hasta que el otro dice que sí,
+    // no hay conversación, y un corro de uno esperando no lo ve nadie
+    const suyo = miCorro(q);
+    if (suyo) return entraEnCorro(suyo, id);
+    const c = nuevoCorro(q);
+    const e = entraEnCorro(c, id);
+    if (e) deshaceCorro(c);
+    return e;
+  }
+  if (a === 'no') {
+    invitados.get(id)?.delete(q);
+    return null;
+  }
+  if (a === 'admite' || a === 'echa') {
+    if (!mio) return 'no_estas';
+    if (mio.anfitrion !== id) return 'no_anfitrion';
+    if (a === 'echa') {
+      if (!mio.m.includes(q)) return 'no_esta';
+      saleDeCorro(q);
+      return null;
+    }
+    const p = alaPuerta.get(mio.k);
+    if (!p?.has(q)) return 'no_llama';
+    p.delete(q);
+    if (!vivos.get(q)) return 'no_esta';
+    return entraEnCorro(mio, q);
+  }
+  return 'bad_accion';
+}
+
+// Las invitaciones y las llamadas caducan solas. Se limpian al leerlas, que
+// es cuando importa: no hace falta un temporizador para algo que solo se ve
+// cuando alguien sondea.
+function vigentes(mapa, now) {
+  if (!mapa) return [];
+  for (const [de, t] of mapa) if (now - t > INVITACION_MS || !vivos.has(de)) mapa.delete(de);
+  return [...mapa.keys()];
+}
+
 // --- presencia: quién está dónde ahora mismo (memoria, una instancia) ---
 // El perfil (nombre, color, última posición) sí se persiste, con poca
 // frecuencia, para que al volver aparezcas donde lo dejaste.
 // Lo que se dice (m: mensaje, e: gesto) vive AQUÍ y solo aquí: en memoria,
 // con su instante, y caduca solo. No se persiste ni se lleva registro; una
 // burbuja que ya no se ve no ha dejado rastro en ningún sitio.
+// A quién LLEGA lo dicho depende del corro: quien está en uno solo habla
+// para los suyos, y el resto ve que habla pero no lo que dice.
 const vivos = new Map(); // id → {n, c, p, s, x, y, r, t, m, mt, e, et}
 const PRESENCIA_VIVA_MS = 12_000;
 const RADIO_VECINOS_M = 400;
@@ -336,20 +526,43 @@ export function presencia(id, datos) {
   }
   vivos.set(id, mio);
 
+  // El corro se resuelve ANTES de repartir a los vecinos: lo que se pida en
+  // este sondeo (entrar, salir, dejar entrar) tiene que valer ya para lo que
+  // se conteste, o el cliente vería un sondeo entero con el corro viejo.
+  const corroR = datos.corro ? accionCorro(id, datos.corro) || 'ok' : null;
+  // Un corro está en un sitio: si te has alejado del resto, sales solo. Lo
+  // comprueba el servidor, que es quien sabe dónde está cada uno; el cliente
+  // avisa antes (CORRO_AVISO_M) para que nadie se caiga sin enterarse.
+  const antesDeIrse = miCorro(id);
+  if (antesDeIrse && lejosDelCorro(antesDeIrse, id, x, y)) saleDeCorro(id);
+
   const cerca = [];
+  const miK = deQuien.get(id) || null;
+  const ksCerca = new Set(miK ? [miK] : []);
   for (const [k, v] of vivos) {
     if (now - v.t > PRESENCIA_VIVA_MS) {
       vivos.delete(k);
+      saleDeCorro(k); // quien ya no está tampoco está en el corro
       continue;
     }
     if (k === id) continue;
     if (Math.hypot(v.x - x, v.y - y) > RADIO_VECINOS_M) continue;
     const d = { id: k, n: v.n, c: v.c, p: v.p, s: v.s, x: v.x, y: v.y, r: v.r };
+    const suK = deQuien.get(k) || null;
+    if (suK) {
+      d.k = suK; // en qué corro anda: el cliente le pinta su aro
+      ksCerca.add(suK);
+    }
     // el instante va con el dato: es lo que deja al cliente distinguir un
     // gesto nuevo de el mismo gesto repetido en tres sondeos seguidos
     if (v.m && now - v.mt < MENSAJE_MS) {
-      d.m = v.m;
-      d.mt = v.mt;
+      // lo que se dice en un corro solo sale para los de dentro. Los de
+      // fuera reciben que HABLA, no lo que dice: se ve el «…» sobre su
+      // cabeza, como al pasar al lado de dos que charlan.
+      if (!suK || suK === miK) {
+        d.m = v.m;
+        d.mt = v.mt;
+      } else d.h = 1;
     }
     if (v.e && now - v.et < EMOTE_MS) {
       d.e = v.e;
@@ -374,6 +587,34 @@ export function presencia(id, datos) {
     save();
   }
   const salida = { cerca, conectados: vivos.size };
+  if (corroR) salida.corroR = corroR;
+  const mic = miCorro(id);
+  if (mic) {
+    salida.corro = {
+      k: mic.k,
+      a: mic.anfitrion,
+      ab: mic.abierto ? 1 : 0,
+      m: mic.m.map((q) => ({ id: q, n: vivos.get(q)?.n || 'Alguien' })),
+    };
+    // quién llama a la puerta solo se lo cuenta al anfitrión: la puerta es
+    // suya, y al resto no le hace falta saber quién se ha quedado fuera
+    if (mic.anfitrion === id) {
+      const llaman = vigentes(alaPuerta.get(mic.k), now);
+      if (llaman.length) salida.llaman = llaman.map((q) => ({ de: q, n: vivos.get(q)?.n || 'Alguien' }));
+    }
+  }
+  const inv = vigentes(invitados.get(id), now);
+  if (inv.length) salida.invita = inv.map((q) => ({ de: q, n: vivos.get(q)?.n || 'Alguien' }));
+  // los corros que se ven desde aquí: con esto el cliente dibuja el círculo
+  // en el suelo y sabe si tiene puerta antes de acercarse
+  if (ksCerca.size) {
+    salida.corros = [];
+    for (const k of ksCerca) {
+      const c = corros.get(k);
+      if (!c) continue;
+      salida.corros.push({ k, a: c.anfitrion, n: vivos.get(c.anfitrion)?.n || 'Alguien', ab: c.abierto ? 1 : 0, c: c.m.length });
+    }
+  }
   // Reportar viaja montado en el sondeo, como lo que se dice: se resuelve
   // aquí, donde está la presencia viva, y así el reporte puede llevar lo que
   // el reportado estaba diciendo según el servidor.
