@@ -90,6 +90,47 @@ export function guardaGustaVisto(n) {
   }
 }
 
+// A quién has silenciado, en este dispositivo. Es lo primero que protege a
+// alguien y no necesita servidor ni cuentas: es TU decisión sobre TU pantalla,
+// no un castigo para el otro (eso es reportar). Se guarda {id: nombre} para
+// poder enseñar a quién silenciaste aunque no esté cerca.
+const CLAVE_SILENCIO = 'crisrr_silenciados';
+const MAX_SILENCIADOS = 200;
+
+export function silenciados() {
+  try {
+    const v = JSON.parse(localStorage.getItem(CLAVE_SILENCIO));
+    return v && typeof v === 'object' && !Array.isArray(v) ? v : {};
+  } catch {
+    return {};
+  }
+}
+
+export function silencia(id, nombre) {
+  const v = silenciados();
+  v[id] = limpiaNombre(nombre) || 'Alguien';
+  const ids = Object.keys(v);
+  // los más viejos se caen: la lista no puede crecer sin techo
+  for (const k of ids.slice(0, Math.max(0, ids.length - MAX_SILENCIADOS))) delete v[k];
+  try {
+    localStorage.setItem(CLAVE_SILENCIO, JSON.stringify(v));
+  } catch {
+    /* sin storage: el silencio dura lo que la pestaña */
+  }
+  return v;
+}
+
+export function quitaSilencio(id) {
+  const v = silenciados();
+  delete v[id];
+  try {
+    localStorage.setItem(CLAVE_SILENCIO, JSON.stringify(v));
+  } catch {
+    /* sin storage */
+  }
+  return v;
+}
+
 export function guardaPerfil(nombre, color, pelo, piel) {
   const p = perfil();
   p.nombre = limpiaNombre(nombre);
