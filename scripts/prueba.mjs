@@ -61,11 +61,46 @@ await bea.screenshot({ path: path.join(OUT, 'm3-bea-ve-a-ana.png') });
 await pulsa(ana, '.chat .btn-cuad');
 await ana.$eval('.chat .decir input', (i) => (i.value = '¡Hola, Bea!'));
 await pulsa(ana, '.chat .decir button[type=submit]');
-await pulsa(ana, '.chat .emote[aria-label="Hola"]');
+// El gesto es del CUERPO: Ana saluda y a Bea le tiene que salir el saludo en
+// el avatar de Ana, no solo el emoji flotando. Se mira el GESTO y no el
+// ángulo del brazo: el gesto se pone en cuanto llega por la red, mientras que
+// la postura hay que pintarla, y con render por software salen menos de dos
+// fotogramas por segundo, así que un saludo de segundo y medio puede pasar
+// entero sin que se dibuje. El ángulo se enseña, pero no se juzga.
+const esperaGesto = (pg, quien) =>
+  pg.evaluate(
+    (q) =>
+      new Promise((res) => {
+        const t0 = Date.now();
+        let brazo = 0;
+        const tic = () => {
+          const g = window.__mundo.gestos();
+          brazo = Math.max(brazo, (q ? window.__mundo.brazos().otros[q] : window.__mundo.brazos().yo) ?? 0);
+          const v = q ? g.otros[q] : g.yo;
+          if (v) return res({ gesto: v, brazo: Math.round(brazo * 100) / 100 });
+          if (Date.now() - t0 > 8000) return res({ gesto: null, brazo: Math.round(brazo * 100) / 100 });
+          setTimeout(tic, 50);
+        };
+        tic();
+      }),
+    quien
+  );
 let gesto = true;
-await bea.waitForSelector('#rotulos .gesto', { state: 'attached', timeout: 10000 }).catch(() => (gesto = false));
+await pulsa(ana, '.chat .emote[aria-label="Hola"]');
+const [enAna, enBea] = await Promise.all([
+  esperaGesto(ana, null),
+  esperaGesto(bea, 'Ana'),
+  bea.waitForSelector('#rotulos .gesto', { state: 'attached', timeout: 10000 }).catch(() => (gesto = false)),
+]);
 const dice = await bea.$$eval('#rotulos .rotulo .dice', (els) => els.filter((e) => !e.hidden).map((e) => e.textContent));
-console.log('Bea lee la burbuja:', dice.length ? dice : 'NINGUNA', '| gesto:', gesto ? 'sí' : 'NO LLEGA');
+console.log('Bea lee la burbuja:', dice.length ? dice : 'NINGUNA', '| emoji:', gesto ? 'sí' : 'NO LLEGA');
+console.log('Ana saluda:', enAna.gesto || 'NO SE MUEVE', '(brazo', enAna.brazo + ')', '| Bea lo ve:', enBea.gesto || 'NO LO VE', '(brazo', enBea.brazo + ')');
+const aspectos = {};
+for (const [n, pg] of [['Ana', ana], ['Bea', bea]]) {
+  const v = await pg.evaluate(() => JSON.parse(localStorage.getItem('crisrr_jugador')));
+  aspectos[n] = 'ropa ' + v.color + ', pelo ' + v.pelo + ', piel ' + v.piel;
+}
+console.log('aspecto:', aspectos);
 await bea.screenshot({ path: path.join(OUT, 'm3b-bea-lee-a-ana.png') });
 await pulsa(ana, '.chat .decir button[aria-label="Cerrar"]');
 

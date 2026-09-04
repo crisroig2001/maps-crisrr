@@ -67,7 +67,14 @@ servidor solo guarda qué hay en cada parcela y quién anda cerca.
   flor) se va de alto sin que se note en el número. Anda **tocando el suelo**,
   con el **joystick** de abajo a la izquierda (solo en pantallas táctiles) o
   con WASD / flechas, todo relativo a la cámara, que va con él en tercera
-  persona.
+  persona. Cada vecino tiene además su **pelo** y su **piel**: de serie salen
+  del id (como el color del marco de la parcela, sin preguntar nada), así que
+  desde el primer día no hay dos iguales, y el índice viaja con la presencia
+  para que se le vea igual en su pantalla y en la tuya. Tocando tu nombre en
+  la cabecera se abre la hoja del **perfil** —nombre, ropa, pelo y piel—, que
+  antes solo se podía rellenar una vez, al entrar. Los **brazos** van aparte
+  del cuerpo, como las piernas: se balancean al andar y son los que hacen los
+  gestos.
 - **La cámara y los gestos**, los mismos que en los mapas del iPhone: **un
   dedo** lleva el mapa a donde se quiera, y **dos dedos** hacen tres cosas a
   la vez y sin modos: separarlos o juntarlos acerca y aleja, girarlos gira el
@@ -83,7 +90,11 @@ servidor solo guarda qué hay en cada parcela y quién anda cerca.
   centrarlo en cuanto se anda: se puede mirar alrededor sin perderse.
 - **Hablar**: con el botón 💬 sale un anillo de **gestos** (👋 😄 ❤️ 🎉 🙏 😮)
   y una caja de texto. Lo que dices sale en una **burbuja sobre tu cabeza** y
-  lo lee quien esté cerca; un gesto es un emoji que sube y se desvanece. Viaja
+  lo lee quien esté cerca. Un gesto no es solo un emoji que sube: **mueve el
+  cuerpo**, que es lo que hace que dos personas en el mismo sitio se noten.
+  Saludar levanta un brazo y lo agita, la risa y la fiesta levantan los dos y
+  dan un brinco, y el resto lleva los brazos al frente; qué hace cada uno lo
+  dice el propio catálogo (`cuerpo` en `EMOTES`). Viaja
   **por el mismo sondeo que la presencia**, sin infraestructura nueva: el
   mensaje va montado en el POST (que se adelanta al hablar, así que se ve casi
   al momento), el servidor lo mantiene vivo en memoria los segundos que dura
@@ -209,6 +220,14 @@ hace un gesto, y se comprueba que a Bea le llegan), reclaman un solar,
 construyen, comprueban que el otro lo ve y que el servidor lo guardó, y Bea
 entra en la parcela de Ana, ve de quién es y le da a me gusta. Deja capturas de
 cada paso en `OUT` (por defecto, el directorio actual).
+
+Reclama una parcela, así que para volver a pasarla hay que **borrar `.data/` y
+reiniciar `npm run dev`**: el mundo vive en memoria y borrar el fichero no
+basta; el solar sigue ocupado y la prueba se queda esperando el botón de
+«Reclamar». Y lo que juzga de los gestos es el GESTO, no la postura del brazo:
+el gesto se pone en cuanto llega por la red, mientras que la postura hay que
+pintarla, y con render por software salen menos de dos fotogramas por segundo,
+así que un saludo de segundo y medio puede pasar entero sin dibujarse.
 
 Las vistas están en `scripts/vistas.config.mjs`. Si aparece un fallo nuevo,
 añade la vista que lo enseña antes de arreglarlo. Si ya tienes un Chromium

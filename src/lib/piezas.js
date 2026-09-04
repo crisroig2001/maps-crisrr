@@ -83,6 +83,20 @@ export const COLORES = [
   '#f2f2f2', // blanco
 ];
 
+// El pelo y la piel del avatar. Están aquí, con los tintes, porque el
+// servidor valida el índice que llega con la presencia igual que valida el
+// color de la ropa. El orden NO se cambia: es lo que se guarda.
+export const PELOS = [
+  '#553d2c', // castaño
+  '#2b2320', // negro
+  '#8a5a34', // avellana
+  '#c9a227', // rubio
+  '#a8442a', // pelirrojo
+  '#6f7a86', // canoso
+  '#e8dcc8', // platino
+];
+export const PIELES = ['#f7d6b8', '#f0c39a', '#d9a173', '#b87a4e', '#8d5a34', '#5f3a22'];
+
 // tope por parcela: 48×48 m con 150 piezas ya es una parcela llena
 export const MAX_PIEZAS = 150;
 
@@ -103,14 +117,16 @@ export const EMOTE_MS = 3000; // lo que un gesto sigue disponible para quien son
 
 // Los gestos son una lista cerrada: el cliente manda la CLAVE, no el emoji,
 // así que por aquí no entra texto arbitrario. El orden es el del anillo de
-// botones.
+// botones. `cuerpo` es lo que hace el avatar además de soltar el emoji: un
+// emoji flotando lo hace cualquier chat, pero que el muñeco levante el brazo
+// es lo que hace que dos personas en el mismo sitio se noten.
 export const EMOTES = {
-  hola: { emoji: '👋', nombre: 'Hola' },
-  risa: { emoji: '😄', nombre: 'Risa' },
-  corazon: { emoji: '❤️', nombre: 'Me gusta' },
-  fiesta: { emoji: '🎉', nombre: 'Fiesta' },
-  gracias: { emoji: '🙏', nombre: 'Gracias' },
-  vaya: { emoji: '😮', nombre: 'Vaya' },
+  hola: { emoji: '👋', nombre: 'Hola', cuerpo: 'saluda' },
+  risa: { emoji: '😄', nombre: 'Risa', cuerpo: 'salta' },
+  corazon: { emoji: '❤️', nombre: 'Me gusta', cuerpo: 'abraza' },
+  fiesta: { emoji: '🎉', nombre: 'Fiesta', cuerpo: 'salta' },
+  gracias: { emoji: '🙏', nombre: 'Gracias', cuerpo: 'abraza' },
+  vaya: { emoji: '😮', nombre: 'Vaya', cuerpo: 'abraza' },
 };
 
 // Un mensaje que viene del navegador: sin caracteres de control (que
