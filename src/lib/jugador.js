@@ -2,7 +2,7 @@
 // localStorage. Solo cliente. NO es una cuenta (eso viene después): identifica
 // un dispositivo para que la parcela que reclamas sea tuya y tu avatar tenga
 // nombre.
-import { COLORES, limpiaNombre } from './piezas';
+import { COLORES, PELOS, PIELES, limpiaNombre } from './piezas';
 
 const CLAVE = 'crisrr_jugador';
 let cache = null;
@@ -16,6 +16,19 @@ function aleatorio() {
   return s;
 }
 
+// Un número estable a partir del id, para el pelo y la piel de serie: como el
+// color del marco de la parcela, sale del id y no hay que preguntar nada. Así
+// dos vecinos no se parecen desde el primer día, y quien quiera lo cambia.
+// Cada rasgo lleva su sufijo: si no, el pelo y la piel irían siempre a juego.
+function delId(id, sufijo, n) {
+  const s = id + sufijo;
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return h % n;
+}
+
+const indice = (v, n, sino) => (Number.isInteger(v) && v >= 0 && v < n ? v : sino);
+
 function guarda(p) {
   try {
     localStorage.setItem(CLAVE, JSON.stringify(p));
@@ -24,7 +37,10 @@ function guarda(p) {
   }
 }
 
-// {id, nombre (o null si aún no lo ha dicho), color (índice en COLORES)}
+// {id, nombre (o null si aún no lo ha dicho), color de la ropa (índice en
+//  COLORES), pelo (en PELOS), piel (en PIELES)}
+// Un perfil viejo no llevaba pelo ni piel: le salen del id, así que al volver
+// el avatar de siempre tiene cara propia sin haber tocado nada.
 export function perfil() {
   if (cache) return cache;
   try {
@@ -33,12 +49,21 @@ export function perfil() {
       cache = {
         id: v.id,
         nombre: limpiaNombre(v.nombre),
-        color: Number.isInteger(v.color) && v.color >= 0 && v.color < COLORES.length ? v.color : 0,
+        color: indice(v.color, COLORES.length, 0),
+        pelo: indice(v.pelo, PELOS.length, delId(v.id, 'pelo', PELOS.length)),
+        piel: indice(v.piel, PIELES.length, delId(v.id, 'piel', PIELES.length)),
       };
       return cache;
     }
   } catch {}
-  cache = { id: aleatorio(), nombre: null, color: Math.floor(Math.random() * COLORES.length) };
+  const id = aleatorio();
+  cache = {
+    id,
+    nombre: null,
+    color: Math.floor(Math.random() * COLORES.length),
+    pelo: delId(id, 'pelo', PELOS.length),
+    piel: delId(id, 'piel', PIELES.length),
+  };
   guarda(cache);
   return cache;
 }
@@ -65,10 +90,12 @@ export function guardaGustaVisto(n) {
   }
 }
 
-export function guardaPerfil(nombre, color) {
+export function guardaPerfil(nombre, color, pelo, piel) {
   const p = perfil();
   p.nombre = limpiaNombre(nombre);
-  if (Number.isInteger(color) && color >= 0 && color < COLORES.length) p.color = color;
+  p.color = indice(color, COLORES.length, p.color);
+  p.pelo = indice(pelo, PELOS.length, p.pelo);
+  p.piel = indice(piel, PIELES.length, p.piel);
   guarda(p);
   return p;
 }

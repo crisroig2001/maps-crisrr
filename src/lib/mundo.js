@@ -11,7 +11,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { PARCELA_M, claveParcela } from './parcela';
-import { validaPiezas, limpiaNombre, limpiaMensaje, COLORES, MAX_NOMBRE, EMOTES, MENSAJE_MS, EMOTE_MS } from './piezas';
+import { validaPiezas, limpiaNombre, limpiaMensaje, COLORES, PELOS, PIELES, MAX_NOMBRE, EMOTES, MENSAJE_MS, EMOTE_MS } from './piezas';
 import { tipoParcela, esPublica, piezasPublicas, RADIO_RESIDENCIAL } from './paisaje';
 
 const DIR = process.env.DATA_DIR || path.join(process.cwd(), '.data');
@@ -209,7 +209,7 @@ export function gusta(clave, jugador) {
 // Lo que se dice (m: mensaje, e: gesto) vive AQUÍ y solo aquí: en memoria,
 // con su instante, y caduca solo. No se persiste ni se lleva registro; una
 // burbuja que ya no se ve no ha dejado rastro en ningún sitio.
-const vivos = new Map(); // id → {n, c, x, y, r, t, m, mt, e, et}
+const vivos = new Map(); // id → {n, c, p, s, x, y, r, t, m, mt, e, et}
 const PRESENCIA_VIVA_MS = 12_000;
 const RADIO_VECINOS_M = 400;
 let ultimaPersistencia = 0;
@@ -217,7 +217,10 @@ let ultimaPersistencia = 0;
 export function presencia(id, datos) {
   const now = Date.now();
   const nombre = limpiaNombre(datos.nombre) || 'Alguien';
-  const color = Number.isInteger(datos.color) && datos.color >= 0 && datos.color < COLORES.length ? datos.color : 0;
+  const indice = (v, n) => (Number.isInteger(v) && v >= 0 && v < n ? v : 0);
+  const color = indice(datos.color, COLORES.length);
+  const pelo = indice(datos.p, PELOS.length);
+  const piel = indice(datos.s, PIELES.length);
   const x = Number(datos.x);
   const y = Number(datos.y);
   const r = Number(datos.r) || 0;
@@ -227,7 +230,7 @@ export function presencia(id, datos) {
   const antes = vivos.get(id);
   const dicho = limpiaMensaje(datos.m);
   const gesto = typeof datos.e === 'string' && EMOTES[datos.e] ? datos.e : null;
-  const mio = { n: nombre.slice(0, MAX_NOMBRE), c: color, x, y, r, t: now };
+  const mio = { n: nombre.slice(0, MAX_NOMBRE), c: color, p: pelo, s: piel, x, y, r, t: now };
   if (dicho) {
     mio.m = dicho;
     mio.mt = now;
@@ -252,7 +255,7 @@ export function presencia(id, datos) {
     }
     if (k === id) continue;
     if (Math.hypot(v.x - x, v.y - y) > RADIO_VECINOS_M) continue;
-    const d = { id: k, n: v.n, c: v.c, x: v.x, y: v.y, r: v.r };
+    const d = { id: k, n: v.n, c: v.c, p: v.p, s: v.s, x: v.x, y: v.y, r: v.r };
     // el instante va con el dato: es lo que deja al cliente distinguir un
     // gesto nuevo de el mismo gesto repetido en tres sondeos seguidos
     if (v.m && now - v.mt < MENSAJE_MS) {

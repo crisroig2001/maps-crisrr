@@ -16,7 +16,7 @@ import { MapControls } from 'three/examples/jsm/controls/MapControls.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { PARCELA_M, parcelaDe, claveParcela, parseParcela, centroParcela } from '../lib/parcela';
-import { PIEZAS, CATEGORIAS, COLORES, MAX_PIEZAS, MAX_NOMBRE, MAX_MENSAJE, MENSAJE_MS, EMOTES, limpiaMensaje } from '../lib/piezas';
+import { PIEZAS, CATEGORIAS, COLORES, PELOS, PIELES, MAX_PIEZAS, MAX_NOMBRE, MAX_MENSAJE, MENSAJE_MS, EMOTES, limpiaMensaje } from '../lib/piezas';
 import { perfil, guardaPerfil, gustaVisto, guardaGustaVisto } from '../lib/jugador';
 import { tipoParcela, conSuelo, cauce, distRio, rioEsteX as rioEsteXEnEscena, rioSurY as rioSurYEnEscena, GLSL_CAUCE, RIO_ANCHO, NIVEL_AGUA, LECHO, BANDA_AGUA } from '../lib/paisaje';
 const LECHO_G = LECHO.toFixed(1);
@@ -63,8 +63,11 @@ const LUZ = new THREE.Color(0xffe38f);
 const MASTIL = new THREE.Color(0xefe9dc);
 const ARENA = new THREE.Color(0xeadcb9);
 const CRISTAL = new THREE.Color(0xc6e5f3);
-const PIEL = new THREE.Color(0xf3cba8);
-const PELO = new THREE.Color(0x553d2c);
+// pelo y piel: la variedad de los vecinos. El índice viene del perfil (y de
+// la presencia, para los demás); el color, de la paleta compartida.
+const PELOS_3D = PELOS.map((h) => new THREE.Color(h));
+const PIELES_3D = PIELES.map((h) => new THREE.Color(h));
+const dePaleta = (paleta, i) => paleta[Number.isInteger(i) && i >= 0 && i < paleta.length ? i : 0];
 const OJO = new THREE.Color(0x2b3440);
 const PANTALON = new THREE.Color(0x56637a);
 const NUBE = new THREE.Color(0xffffff);
@@ -424,15 +427,20 @@ function geometriaPieza(tipo) {
 // altura a la que mira la cámara, el rótulo del nombre, el radio con que
 // choca) sale de aquí.
 const ALTO_AVATAR = 1.8;
-function geometriaAvatar(color) {
+function geometriaAvatar(color, pelo, piel) {
   const g = nuevaGeo();
   esfera(g, 0, 0.96, 0, 0.24, color, 1.4); // cuerpo
-  esfera(g, -0.32, 0.96, 0, 0.1, color, 1.9); // brazos
-  esfera(g, 0.32, 0.96, 0, 0.1, color, 1.9);
-  esfera(g, 0, 1.5, 0, 0.27, PIEL); // cabeza
-  esfera(g, 0, 1.6, -0.04, 0.28, PELO, 0.75); // pelo
+  esfera(g, 0, 1.5, 0, 0.27, piel); // cabeza
+  esfera(g, 0, 1.6, -0.04, 0.28, pelo, 0.75); // pelo
   esfera(g, -0.1, 1.51, 0.23, 0.04, OJO, 1, 6); // ojos
   esfera(g, 0.1, 1.51, 0.23, 0.04, OJO, 1, 6);
+  return aGeo(g);
+}
+// Los brazos van aparte, como las piernas: así se mueven al andar y al
+// saludar sin rehacer la geometría del cuerpo.
+function geometriaBrazo(color) {
+  const g = nuevaGeo();
+  esfera(g, 0, -0.16, 0, 0.1, color, 1.9);
   return aGeo(g);
 }
 function geometriaPierna() {
@@ -495,8 +503,11 @@ export default function Mundo() {
   const [sinGL, setSinGL] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
-  const [yo, setYo] = useState(null); // {id, nombre, color}
+  const [yo, setYo] = useState(null); // {id, nombre, color, pelo, piel}
   const [colorElegido, setColorElegido] = useState(0);
+  const [peloElegido, setPeloElegido] = useState(0);
+  const [pielElegido, setPielElegido] = useState(0);
+  const [editando, setEditando] = useState(false); // la misma hoja, ya presentado
   const [conectados, setConectados] = useState(1);
   // dónde está el avatar: {clave, dueno, mia, libre, n}
   const [donde, setDonde] = useState(null);
@@ -524,6 +535,8 @@ export default function Mundo() {
     const p = perfil();
     setYo({ ...p });
     setColorElegido(p.color);
+    setPeloElegido(p.pelo);
+    setPielElegido(p.piel);
     try {
       setTactil(window.matchMedia('(pointer: coarse)').matches);
     } catch {}
@@ -1330,21 +1343,29 @@ export default function Mundo() {
 
     // --- el avatar propio ---
     const geoPierna = geometriaPierna();
-    function creaFigura(color) {
+    // c, p, s: los índices del perfil (ropa, pelo, piel); los mismos que
+    // viajan con la presencia, así que un vecino se ve igual en su pantalla y
+    // en la tuya.
+    function creaFigura(c, p, s) {
       const grupo = new THREE.Group();
-      const cuerpo = new THREE.Mesh(geometriaAvatar(color), matFijo);
+      const cuerpo = new THREE.Mesh(geometriaAvatar(dePaleta(coloresTinte, c), dePaleta(PELOS_3D, p), dePaleta(PIELES_3D, s)), matFijo);
+      const geoBrazo = geometriaBrazo(dePaleta(coloresTinte, c));
       const pi = new THREE.Mesh(geoPierna, matFijo);
       const pd = new THREE.Mesh(geoPierna, matFijo);
+      const bi = new THREE.Mesh(geoBrazo, matFijo);
+      const bd = new THREE.Mesh(geoBrazo, matFijo);
       pi.position.set(-0.12, 0.64, 0);
       pd.position.set(0.12, 0.64, 0);
-      for (const m of [cuerpo, pi, pd]) {
+      bi.position.set(-0.32, 1.14, 0);
+      bd.position.set(0.32, 1.14, 0);
+      for (const m of [cuerpo, pi, pd, bi, bd]) {
         m.castShadow = true;
         m.receiveShadow = true;
       }
-      grupo.add(cuerpo, pi, pd);
-      return { grupo, cuerpo, pi, pd };
+      grupo.add(cuerpo, pi, pd, bi, bd);
+      return { grupo, cuerpo, pi, pd, bi, bd };
     }
-    const avatar = creaFigura(coloresTinte[jugador.color]);
+    const avatar = creaFigura(jugador.color, jugador.pelo, jugador.piel);
     scene.add(avatar.grupo);
     sigueElSol(0, 0, 0);
     // posición en metros del mundo (y hacia el norte); rumbo en radianes
@@ -1356,13 +1377,49 @@ export default function Mundo() {
       yo.y = py0;
     }
     yo.h = alturaEn(yo.x, yo.y);
+    // Un gesto dura lo que el emoji que sube: entra rápido, se sostiene y
+    // sale suave. Los brazos giran desde el hombro (que es donde está su
+    // origen), así que basta con un ángulo por brazo.
+    const GESTO_MS = 1500;
     function colocaFigura(f, o) {
       const salto = o.andando ? Math.abs(Math.sin(o.fase)) * 0.06 : 0;
-      f.grupo.position.set(o.x, o.h + salto, -o.y);
-      f.grupo.rotation.y = o.rumbo;
       const a = o.andando ? Math.sin(o.fase) * 0.65 : 0;
       f.pi.rotation.x = a;
       f.pd.rotation.x = -a;
+      // los brazos van al contrario que las piernas, como al andar de verdad
+      let bix = -a * 0.55;
+      let bdx = a * 0.55;
+      let biz = 0;
+      let bdz = 0;
+      let brinco = 0;
+      if (o.gesto) {
+        const u = (performance.now() - o.gesto.t) / GESTO_MS;
+        if (u >= 1) o.gesto = null;
+        else {
+          // k sube de golpe y baja al final: sin esto el brazo aparece y
+          // desaparece de un fotograma a otro
+          const k = Math.sin(Math.min(1, u * 4) * Math.PI * 0.5) * (u > 0.78 ? (1 - u) / 0.22 : 1);
+          if (o.gesto.tipo === 'saluda') {
+            bdx = 0;
+            bdz = (2.5 + Math.sin(u * Math.PI * 7) * 0.28) * k; // el brazo derecho arriba, saludando
+          } else if (o.gesto.tipo === 'salta') {
+            bix = 0;
+            bdx = 0;
+            biz = -2.6 * k;
+            bdz = 2.6 * k;
+            brinco = Math.abs(Math.sin(u * Math.PI * 2)) * 0.26 * k;
+          } else {
+            bix = -1.5 * k; // los dos brazos al frente
+            bdx = -1.5 * k;
+            biz = 0.55 * k;
+            bdz = -0.55 * k;
+          }
+        }
+      }
+      f.bi.rotation.set(bix, 0, biz);
+      f.bd.rotation.set(bdx, 0, bdz);
+      f.grupo.position.set(o.x, o.h + salto + brinco, -o.y);
+      f.grupo.rotation.y = o.rumbo;
     }
 
     // Cámara inicial: al sur del avatar, mirando al norte. Reproducible desde
@@ -1386,11 +1443,13 @@ export default function Mundo() {
     const otros = new Map(); // id → {figura, o: {x, y, h, rumbo, ...}, objetivo, nombre, color, visto}
     const nodos = new Map(); // id → <div> del nombre
     function creaOtro(id, datos) {
-      const figura = creaFigura(coloresTinte[datos.c] || coloresTinte[0]);
+      const figura = creaFigura(datos.c, datos.p, datos.s);
       scene.add(figura.grupo);
       const o = {
         figura,
         color: datos.c,
+        pelo: datos.p,
+        piel: datos.s,
         nombre: datos.n,
         visto: Date.now(),
         dice: null, // lo que dice ahora mismo, si dice algo
@@ -1407,6 +1466,7 @@ export default function Mundo() {
       if (!o) return;
       scene.remove(o.figura.grupo);
       o.figura.cuerpo.geometry.dispose();
+      o.figura.bi.geometry.dispose(); // los dos brazos comparten geometría
       otros.delete(id);
       const el = nodos.get(id);
       if (el) {
@@ -1443,6 +1503,9 @@ export default function Mundo() {
       const cont = rotulosRef.current;
       const e = EMOTES[clave];
       if (!cont || !e) return;
+      // lo primero, el cuerpo: el emoji es el adorno
+      const quien = id === 'yo' ? yo : otros.get(id)?.o;
+      if (quien && e.cuerpo) quien.gesto = { tipo: e.cuerpo, t: performance.now() };
       const el = document.createElement('div');
       el.className = 'gesto';
       const i = document.createElement('i');
@@ -2052,7 +2115,7 @@ export default function Mundo() {
         const r = await fetch('/api/presencia', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ jugador: p.id, nombre: p.nombre, color: p.color, x: Math.round(yo.x * 10) / 10, y: Math.round(yo.y * 10) / 10, r: Math.round(yo.rumbo * 100) / 100, m: dicho || undefined, e: gesto || undefined }),
+          body: JSON.stringify({ jugador: p.id, nombre: p.nombre, color: p.color, p: p.pelo, s: p.piel, x: Math.round(yo.x * 10) / 10, y: Math.round(yo.y * 10) / 10, r: Math.round(yo.rumbo * 100) / 100, m: dicho || undefined, e: gesto || undefined }),
         });
         if (!r.ok) return;
         const j = await r.json();
@@ -2062,7 +2125,7 @@ export default function Mundo() {
         for (const d of j.cerca || []) {
           vistos.add(d.id);
           let o = otros.get(d.id);
-          if (o && (o.color !== d.c || o.nombre !== d.n)) {
+          if (o && (o.color !== d.c || o.pelo !== d.p || o.piel !== d.s || o.nombre !== d.n)) {
             quitaOtro(d.id);
             o = null;
           }
@@ -2111,6 +2174,19 @@ export default function Mundo() {
         return { d: e.radius, pol: e.phi, az: e.theta, ox: controls.target.x - yo.x, oz: controls.target.z + yo.y };
       },
       recentra: () => centraMapa(10, true),
+      // Qué gesto está haciendo cada cual y cómo le ha quedado el brazo. El
+      // GESTO es lo que comprueba la prueba: se pone en cuanto llega por la
+      // red y dura segundo y medio, sin depender de que se pinte. El ángulo
+      // del brazo es solo información: con render por software hay menos de
+      // dos fotogramas por segundo y la postura puede no llegar a pintarse.
+      gestos: () => ({
+        yo: yo.gesto?.tipo || null,
+        otros: Object.fromEntries([...otros.values()].map((o) => [o.nombre, o.o.gesto?.tipo || null])),
+      }),
+      brazos: () => ({
+        yo: Math.round(avatar.bd.rotation.z * 100) / 100,
+        otros: Object.fromEntries([...otros.values()].map((o) => [o.nombre, Math.round(o.figura.bd.rotation.z * 100) / 100])),
+      }),
       // dónde cae en pantalla un punto del mundo (diagnóstico)
       proyecta: (x, y) => {
         const v = new THREE.Vector3(x, alturaEn(x, y), -y).project(camera);
@@ -2255,10 +2331,14 @@ export default function Mundo() {
         actualizaDonde(false);
         traeParcelas(true);
       },
-      // el avatar cambia de color al cambiar el perfil
-      recolorea(c) {
+      // el avatar se rehace al cambiar el perfil (ropa, pelo o piel)
+      recolorea(p) {
         avatar.cuerpo.geometry.dispose();
-        avatar.cuerpo.geometry = geometriaAvatar(coloresTinte[c] || coloresTinte[0]);
+        avatar.cuerpo.geometry = geometriaAvatar(dePaleta(coloresTinte, p.color), dePaleta(PELOS_3D, p.pelo), dePaleta(PIELES_3D, p.piel));
+        avatar.bi.geometry.dispose(); // los dos brazos comparten geometría
+        const geoBrazo = geometriaBrazo(dePaleta(coloresTinte, p.color));
+        avatar.bi.geometry = geoBrazo;
+        avatar.bd.geometry = geoBrazo;
       },
       presentate() {
         mandaPresencia();
@@ -2518,6 +2598,7 @@ export default function Mundo() {
       texMarco.dispose();
       texObra.dispose();
       avatar.cuerpo.geometry.dispose();
+      avatar.bi.geometry.dispose();
       geoPierna.dispose();
       suelo.geometry.dispose();
       suelo.material.dispose();
@@ -2539,7 +2620,18 @@ export default function Mundo() {
     };
   }, []);
 
-  // --- presentación (nombre y color) ---
+  // --- presentarse y cambiarse: la misma hoja ---
+  // Antes solo se podía elegir nombre y color UNA vez, al entrar. Ahora la
+  // misma hoja se abre desde la cabecera, así que el aspecto (y el nombre)
+  // se pueden cambiar, que es lo que hace falta si el pelo y la piel de
+  // serie te salen del id.
+  function abreEditor() {
+    const p = perfil();
+    setColorElegido(p.color);
+    setPeloElegido(p.pelo);
+    setPielElegido(p.piel);
+    setEditando(true);
+  }
   function onPresentar(e) {
     e.preventDefault();
     const n = nombreRef.current?.value?.trim();
@@ -2547,11 +2639,13 @@ export default function Mundo() {
       avisa('Dinos cómo te llamas para entrar');
       return;
     }
-    const p = guardaPerfil(n, colorElegido);
+    const eraNuevo = !yo?.nombre;
+    const p = guardaPerfil(n, colorElegido, peloElegido, pielElegido);
     setYo({ ...p });
-    engineRef.current?.recolorea(p.color);
-    engineRef.current?.presentate();
-    avisa('¡Bienvenido/a, ' + p.nombre + '! Toca el suelo para andar');
+    setEditando(false);
+    engineRef.current?.recolorea(p);
+    engineRef.current?.presentate(); // el cambio sale ya, sin esperar al sondeo
+    avisa(eraNuevo ? '¡Bienvenido/a, ' + p.nombre + '! Toca el suelo para andar' : 'Guardado: así te ven los demás');
   }
 
   // --- parcela ---
@@ -2652,41 +2746,65 @@ export default function Mundo() {
           se cuenta aquí, para quien no los vea */}
       <p id="dichos" ref={dichosRef} className="solo-lector" aria-live="polite" />
 
-      {yo && !presentado && (
+      {yo && (!presentado || editando) && (
         <div className="ui velo">
           <form className="hoja glass presenta" onSubmit={onPresentar}>
-            <h2>Bienvenido al mundo</h2>
-            <p>Un mundo que se construye entre todos: anda, reclama una parcela y levanta tu casa.</p>
+            <h2>{editando ? 'Así eres' : 'Bienvenido al mundo'}</h2>
+            {!editando && <p>Un mundo que se construye entre todos: anda, reclama una parcela y levanta tu casa.</p>}
             <label>
               ¿Cómo te llamas?
-              <input ref={nombreRef} type="text" maxLength={MAX_NOMBRE} placeholder="Tu nombre" autoComplete="nickname" autoFocus />
+              <input
+                ref={nombreRef}
+                type="text"
+                maxLength={MAX_NOMBRE}
+                placeholder="Tu nombre"
+                autoComplete="nickname"
+                defaultValue={yo.nombre || ''}
+                autoFocus
+              />
             </label>
-            <div className="colores" role="radiogroup" aria-label="Color de tu avatar">
-              {COLORES.map((c, i) => (
-                <button
-                  key={c}
-                  type="button"
-                  className={'color' + (colorElegido === i ? ' on' : '')}
-                  style={{ background: c }}
-                  onClick={() => setColorElegido(i)}
-                  aria-label={'Color ' + (i + 1)}
-                  aria-checked={colorElegido === i}
-                  role="radio"
-                />
-              ))}
+            {[
+              { t: 'Ropa', p: COLORES, v: colorElegido, set: setColorElegido },
+              { t: 'Pelo', p: PELOS, v: peloElegido, set: setPeloElegido },
+              { t: 'Piel', p: PIELES, v: pielElegido, set: setPielElegido },
+            ].map((fila) => (
+              <div className="pinta" key={fila.t}>
+                <span>{fila.t}</span>
+                <div className="colores" role="radiogroup" aria-label={fila.t + ' de tu avatar'}>
+                  {fila.p.map((c, i) => (
+                    <button
+                      key={c}
+                      type="button"
+                      className={'color' + (fila.v === i ? ' on' : '')}
+                      style={{ background: c }}
+                      onClick={() => fila.set(i)}
+                      aria-label={fila.t + ' ' + (i + 1)}
+                      aria-checked={fila.v === i}
+                      role="radio"
+                    />
+                  ))}
+                </div>
+              </div>
+            ))}
+            <div className="fila-botones">
+              <button type="submit" className="btn-principal">
+                {editando ? 'Guardar' : 'Entrar'}
+              </button>
+              {editando && (
+                <button type="button" className="btn-sec" onClick={() => setEditando(false)}>
+                  Cancelar
+                </button>
+              )}
             </div>
-            <button type="submit" className="btn-principal">
-              Entrar
-            </button>
           </form>
         </div>
       )}
 
       <div className="ui cabecera glass">
-        <span className="quien">
+        <button className="quien" onClick={abreEditor} disabled={!presentado} aria-label="Cambiar tu nombre y tu aspecto" title="Cambiar tu nombre y tu aspecto">
           <i style={{ background: COLORES[yo?.color ?? 0] }} />
           {yo?.nombre || '…'}
-        </span>
+        </button>
         <span className="conectados">
           {conectados} {conectados === 1 ? 'persona' : 'personas'} en el mundo
         </span>
