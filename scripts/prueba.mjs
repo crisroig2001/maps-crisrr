@@ -1,6 +1,7 @@
 // Prueba de extremo a extremo con dos jugadores (npm run prueba, con la app
 // servida en npm run dev): presentación, andar, ver al
-// otro, reclamar una parcela, construir y que el otro lo vea.
+// otro, hablar y que el otro lo lea, reclamar una parcela, construir y que el
+// otro lo vea.
 import { chromium } from 'playwright';
 import path from 'node:path';
 
@@ -50,9 +51,23 @@ await ana.screenshot({ path: path.join(OUT, 'm2-andando.png') });
 // segundo jugador, en la misma plaza
 const bea = await abre('Bea', 4);
 await bea.waitForTimeout(3500); // dos sondeos de presencia
-const nombresBea = await bea.$$eval('#rotulos .nombre', (els) => els.filter((e) => e.style.display !== 'none').map((e) => e.textContent));
+const nombresBea = await bea.$$eval('#rotulos .rotulo b', (els) => els.filter((e) => e.parentElement.style.display !== 'none').map((e) => e.textContent));
 console.log('Bea ve los nombres:', nombresBea);
 await bea.screenshot({ path: path.join(OUT, 'm3-bea-ve-a-ana.png') });
+
+// Hablar: Ana dice algo y hace un gesto, y a Bea le tienen que salir sobre la
+// cabeza de Ana. Va por el sondeo de presencia, así que tarda un sondeo suyo
+// (que se dispara al hablar) más uno de Bea.
+await pulsa(ana, '.chat .btn-cuad');
+await ana.$eval('.chat .decir input', (i) => (i.value = '¡Hola, Bea!'));
+await pulsa(ana, '.chat .decir button[type=submit]');
+await pulsa(ana, '.chat .emote[aria-label="Hola"]');
+let gesto = true;
+await bea.waitForSelector('#rotulos .gesto', { state: 'attached', timeout: 10000 }).catch(() => (gesto = false));
+const dice = await bea.$$eval('#rotulos .rotulo .dice', (els) => els.filter((e) => !e.hidden).map((e) => e.textContent));
+console.log('Bea lee la burbuja:', dice.length ? dice : 'NINGUNA', '| gesto:', gesto ? 'sí' : 'NO LLEGA');
+await bea.screenshot({ path: path.join(OUT, 'm3b-bea-lee-a-ana.png') });
+await pulsa(ana, '.chat .decir button[aria-label="Cerrar"]');
 
 // el teclado mueve: un par de segundos hacia el oeste y la x baja
 const antes = await ana.evaluate(() => window.__mundo.pos());

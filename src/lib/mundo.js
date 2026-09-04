@@ -10,7 +10,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { PARCELA_M, claveParcela } from './parcela';
-import { validaPiezas, limpiaNombre, COLORES, MAX_NOMBRE } from './piezas';
+import { validaPiezas, limpiaNombre, limpiaMensaje, COLORES, MAX_NOMBRE, EMOTES, MENSAJE_MS, EMOTE_MS } from './piezas';
 import { tipoParcela, esPublica, piezasPublicas, RADIO_RESIDENCIAL } from './paisaje';
 
 const DIR = process.env.DATA_DIR || path.join(process.cwd(), '.data');
@@ -163,7 +163,10 @@ export function abandona(clave, jugador) {
 // --- presencia: quién está dónde ahora mismo (memoria, una instancia) ---
 // El perfil (nombre, color, última posición) sí se persiste, con poca
 // frecuencia, para que al volver aparezcas donde lo dejaste.
-const vivos = new Map(); // id → {n, c, x, y, r, t}
+// Lo que se dice (m: mensaje, e: gesto) vive AQUÍ y solo aquí: en memoria,
+// con su instante, y caduca solo. No se persiste ni se lleva registro; una
+// burbuja que ya no se ve no ha dejado rastro en ningún sitio.
+const vivos = new Map(); // id → {n, c, x, y, r, t, m, mt, e, et}
 const PRESENCIA_VIVA_MS = 12_000;
 const RADIO_VECINOS_M = 400;
 let ultimaPersistencia = 0;
@@ -176,7 +179,27 @@ export function presencia(id, datos) {
   const y = Number(datos.y);
   const r = Number(datos.r) || 0;
   if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
-  vivos.set(id, { n: nombre.slice(0, MAX_NOMBRE), c: color, x, y, r, t: now });
+  // lo dicho se arrastra de un sondeo al siguiente mientras dure: el cliente
+  // manda el mensaje UNA vez y la burbuja sigue viva para quien llegue luego
+  const antes = vivos.get(id);
+  const dicho = limpiaMensaje(datos.m);
+  const gesto = typeof datos.e === 'string' && EMOTES[datos.e] ? datos.e : null;
+  const mio = { n: nombre.slice(0, MAX_NOMBRE), c: color, x, y, r, t: now };
+  if (dicho) {
+    mio.m = dicho;
+    mio.mt = now;
+  } else if (antes?.m && now - antes.mt < MENSAJE_MS) {
+    mio.m = antes.m;
+    mio.mt = antes.mt;
+  }
+  if (gesto) {
+    mio.e = gesto;
+    mio.et = now;
+  } else if (antes?.e && now - antes.et < EMOTE_MS) {
+    mio.e = antes.e;
+    mio.et = antes.et;
+  }
+  vivos.set(id, mio);
 
   const cerca = [];
   for (const [k, v] of vivos) {
@@ -186,7 +209,18 @@ export function presencia(id, datos) {
     }
     if (k === id) continue;
     if (Math.hypot(v.x - x, v.y - y) > RADIO_VECINOS_M) continue;
-    cerca.push({ id: k, n: v.n, c: v.c, x: v.x, y: v.y, r: v.r });
+    const d = { id: k, n: v.n, c: v.c, x: v.x, y: v.y, r: v.r };
+    // el instante va con el dato: es lo que deja al cliente distinguir un
+    // gesto nuevo de el mismo gesto repetido en tres sondeos seguidos
+    if (v.m && now - v.mt < MENSAJE_MS) {
+      d.m = v.m;
+      d.mt = v.mt;
+    }
+    if (v.e && now - v.et < EMOTE_MS) {
+      d.e = v.e;
+      d.et = v.et;
+    }
+    cerca.push(d);
   }
 
   // el perfil se guarda como mucho cada 20 s por proceso: es lo que hace

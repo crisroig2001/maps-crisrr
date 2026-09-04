@@ -81,6 +81,18 @@ servidor solo guarda qué hay en cada parcela y quién anda cerca.
   y el de dos se le apaga. Con **ratón**, arrastrar gira y cambia el ángulo y
   la rueda acerca. El mapa nunca se aleja más de 120 m del avatar y vuelve a
   centrarlo en cuanto se anda: se puede mirar alrededor sin perderse.
+- **Hablar**: con el botón 💬 sale un anillo de **gestos** (👋 😄 ❤️ 🎉 🙏 😮)
+  y una caja de texto. Lo que dices sale en una **burbuja sobre tu cabeza** y
+  lo lee quien esté cerca; un gesto es un emoji que sube y se desvanece. Viaja
+  **por el mismo sondeo que la presencia**, sin infraestructura nueva: el
+  mensaje va montado en el POST (que se adelanta al hablar, así que se ve casi
+  al momento), el servidor lo mantiene vivo en memoria los segundos que dura
+  la burbuja y lo reparte a quien sondee, y cada dato lleva su instante para
+  que el cliente distinga un gesto nuevo de el mismo repetido en tres sondeos.
+  Un sondeo de 1,5 s sería poco para mover avatares, pero para hablar sobra.
+  **No se guarda nada**: ni en disco ni en un registro; la burbuja se
+  desvanece y ahí se acaba. El texto entra acotado (80 caracteres, sin
+  caracteres de control) y se pinta con `textContent`, nunca como marcado.
 - **Presencia**: cada 1,5 s el cliente manda su posición a `POST
   /api/presencia` y recibe a quien esté a menos de 400 m. Los demás se
   interpolan hacia su última posición conocida, así que se les ve andar y no
@@ -176,8 +188,9 @@ npm run vistas -- --solo casa-de-muestra  # una sola vista
 ```
 
 `npm run prueba` es la otra mitad: dos jugadores de verdad en dos pestañas
-(Ana y Bea) que se presentan, andan, se ven, reclaman un solar, construyen y
-comprueban que el otro lo ve y que el servidor lo guardó. Deja capturas de
+(Ana y Bea) que se presentan, andan, se ven, **se hablan** (Ana dice algo y
+hace un gesto, y se comprueba que a Bea le llegan), reclaman un solar,
+construyen y comprueban que el otro lo ve y que el servidor lo guardó. Deja capturas de
 cada paso en `OUT` (por defecto, el directorio actual).
 
 Las vistas están en `scripts/vistas.config.mjs`. Si aparece un fallo nuevo,
@@ -189,7 +202,8 @@ se baje otro.
 
 1. ✅ Mundo, avatar, presencia por sondeo, parcelas y construcción con piezas
 2. Cuentas de usuario (la propiedad de las parcelas de verdad), moderación
-3. WebSockets para la presencia, chat entre avatares
+3. WebSockets para la presencia (hablar ya va por el sondeo), y con ellos
+   silenciar y reportar, que es lo que pide el texto libre cuando hay gente
 4. Más piezas, piezas apilables (plantas), interiores
 
 ## Historia

@@ -91,6 +91,40 @@ export const MAX_PIEZAS = 150;
 export const RE_JUGADOR = /^[a-f0-9]{16,32}$/;
 export const MAX_NOMBRE = 18;
 
+// --- lo que se dice sobre la cabeza ---
+// Un mensaje corto en una burbuja, o un gesto de esta lista. Va por el mismo
+// sondeo que la presencia (cada 1,5 s), que para movimiento sería poco pero
+// para hablar sobra: un mensaje tarda un segundo o dos en llegar y nadie lo
+// nota. NO se guarda en disco: vive en la memoria del servidor los segundos
+// que dura la burbuja y desaparece.
+export const MAX_MENSAJE = 80;
+export const MENSAJE_MS = 9000; // lo que dura una burbuja
+export const EMOTE_MS = 3000; // lo que un gesto sigue disponible para quien sondee después
+
+// Los gestos son una lista cerrada: el cliente manda la CLAVE, no el emoji,
+// así que por aquí no entra texto arbitrario. El orden es el del anillo de
+// botones.
+export const EMOTES = {
+  hola: { emoji: '👋', nombre: 'Hola' },
+  risa: { emoji: '😄', nombre: 'Risa' },
+  corazon: { emoji: '❤️', nombre: 'Me gusta' },
+  fiesta: { emoji: '🎉', nombre: 'Fiesta' },
+  gracias: { emoji: '🙏', nombre: 'Gracias' },
+  vaya: { emoji: '😮', nombre: 'Vaya' },
+};
+
+// Un mensaje que viene del navegador: sin caracteres de control (que
+// romperían la burbuja), sin espacios de sobra y acotado. Vacío → null.
+export function limpiaMensaje(m) {
+  if (typeof m !== 'string') return null;
+  const s = m
+    .replace(/[\u0000-\u001f\u007f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, MAX_MENSAJE);
+  return s || null;
+}
+
 // Normaliza y valida una lista de piezas que viene del navegador. Devuelve la
 // lista limpia o null si algo no vale. Recorta a MAX_PIEZAS en vez de
 // rechazar, para que un cliente con un tope mayor no lo pierda todo.
@@ -114,6 +148,10 @@ export function validaPiezas(lista, lado) {
 // Un nombre de jugador: sin caracteres de control ni exceso. Vacío → null.
 export function limpiaNombre(n) {
   if (typeof n !== 'string') return null;
-  const s = n.replace(/[ -]/g, '').trim().slice(0, MAX_NOMBRE);
+  const s = n
+    .replace(/[\u0000-\u001f\u007f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, MAX_NOMBRE);
   return s || null;
 }

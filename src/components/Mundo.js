@@ -16,7 +16,7 @@ import { MapControls } from 'three/examples/jsm/controls/MapControls.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { PARCELA_M, parcelaDe, claveParcela, parseParcela, centroParcela } from '../lib/parcela';
-import { PIEZAS, CATEGORIAS, COLORES, MAX_PIEZAS, MAX_NOMBRE } from '../lib/piezas';
+import { PIEZAS, CATEGORIAS, COLORES, MAX_PIEZAS, MAX_NOMBRE, MAX_MENSAJE, MENSAJE_MS, EMOTES, limpiaMensaje } from '../lib/piezas';
 import { perfil, guardaPerfil } from '../lib/jugador';
 import { tipoParcela, conSuelo, cauce, distRio, rioEsteX as rioEsteXEnEscena, rioSurY as rioSurYEnEscena, GLSL_CAUCE, RIO_ANCHO, NIVEL_AGUA, LECHO, BANDA_AGUA } from '../lib/paisaje';
 const LECHO_G = LECHO.toFixed(1);
@@ -484,14 +484,17 @@ function hash2(x, y) {
 export default function Mundo() {
   const canvasRef = useRef(null);
   const rotulosRef = useRef(null);
+  const dichosRef = useRef(null);
   const engineRef = useRef(null);
   const toastT = useRef(null);
   const nombreRef = useRef(null);
+  const decirRef = useRef(null);
   // {msg, on}: el texto se conserva mientras se desvanece, si no el aviso se
   // vacía antes de apagarse y queda una píldora en blanco
   const [toast, setToast] = useState({ msg: '', on: false });
   const [sinGL, setSinGL] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
   const [yo, setYo] = useState(null); // {id, nombre, color}
   const [colorElegido, setColorElegido] = useState(0);
   const [conectados, setConectados] = useState(1);
@@ -1390,6 +1393,9 @@ export default function Mundo() {
         color: datos.c,
         nombre: datos.n,
         visto: Date.now(),
+        dice: null, // lo que dice ahora mismo, si dice algo
+        diceT: 0, // ... y cuándo lo dijo: distingue lo nuevo de lo repetido
+        gestoT: 0,
         o: { x: datos.x, y: datos.y, h: alturaEn(datos.x, datos.y), rumbo: datos.r, fase: 0, andando: false },
         objetivo: { x: datos.x, y: datos.y, rumbo: datos.r },
       };
@@ -1409,40 +1415,92 @@ export default function Mundo() {
       }
     }
 
-    // --- nombres sobre las cabezas: <div> proyectados ---
+    // --- sobre las cabezas: el nombre, lo que dice y los gestos ---
+    // Son <div> proyectados desde el 3D en cada fotograma, no geometría: un
+    // texto en el mundo saldría pixelado y habría que rehacerlo al escribir.
     const pv = new THREE.Vector3();
     let vpW = 1;
     let vpH = 1;
+    // Coloca un nodo sobre un punto del mundo. Devuelve la distancia a la
+    // cámara, o null si queda detrás o demasiado lejos para leerse.
+    function sitúa(el, x, y, h, alto) {
+      pv.set(x, h + alto, -y);
+      const dist = pv.distanceTo(camera.position);
+      pv.project(camera);
+      if (pv.z > 1 || dist > 160 || Math.abs(pv.x) > 1.1 || Math.abs(pv.y) > 1.1) {
+        el.style.display = 'none';
+        return null;
+      }
+      el.style.display = '';
+      el.style.transform =
+        'translate3d(' + Math.round((pv.x * 0.5 + 0.5) * vpW) + 'px,' + Math.round((-pv.y * 0.5 + 0.5) * vpH) + 'px,0) translate(-50%,-100%)';
+      return dist;
+    }
+    // Un gesto: el emoji sube y se desvanece (eso lo hace el CSS) mientras el
+    // JS lo lleva pegado a la cabeza de quien lo hizo, que puede ir andando.
+    const gestos = [];
+    function lanzaGesto(id, clave) {
+      const cont = rotulosRef.current;
+      const e = EMOTES[clave];
+      if (!cont || !e) return;
+      const el = document.createElement('div');
+      el.className = 'gesto';
+      const i = document.createElement('i');
+      i.textContent = e.emoji;
+      el.appendChild(i);
+      cont.appendChild(el);
+      const g = { id, el };
+      gestos.push(g);
+      setTimeout(() => {
+        el.remove();
+        const k = gestos.indexOf(g);
+        if (k >= 0) gestos.splice(k, 1);
+      }, 1700);
+    }
     function pintaNombres() {
       const cont = rotulosRef.current;
       if (!cont) return;
-      const pinta = (id, nombre, x, y, h, propio) => {
+      const pinta = (id, nombre, dice, x, y, h, propio) => {
         let el = nodos.get(id);
         if (!el) {
           el = document.createElement('div');
-          el.className = 'nombre' + (propio ? ' yo' : '');
+          el.className = 'rotulo' + (propio ? ' yo' : '');
+          const b = document.createElement('b');
+          const sp = document.createElement('span');
+          sp.className = 'dice';
+          el.append(sp, b);
+          // los dos hijos quedan a mano: esto se pinta en CADA fotograma y no
+          // hay que rebuscarlos en el DOM
+          el._b = b;
+          el._sp = sp;
           cont.appendChild(el);
           nodos.set(id, el);
         }
-        if (el._txt !== nombre) {
-          el.textContent = nombre;
-          el._txt = nombre;
+        const b = el._b;
+        const sp = el._sp;
+        if (b.textContent !== nombre) b.textContent = nombre;
+        // textContent, nunca innerHTML: lo que escribe otra persona entra
+        // como TEXTO y no como marcado
+        if (sp._txt !== dice) {
+          sp.textContent = dice || '';
+          sp.hidden = !dice;
+          sp._txt = dice;
         }
-        pv.set(x, h + ALTO_AVATAR + 0.3, -y);
-        const dist = pv.distanceTo(camera.position);
-        pv.project(camera);
-        if (pv.z > 1 || dist > 160 || Math.abs(pv.x) > 1.1 || Math.abs(pv.y) > 1.1) {
-          el.style.display = 'none';
-          return;
-        }
-        el.style.display = '';
+        const dist = sitúa(el, x, y, h, ALTO_AVATAR + 0.3);
+        if (dist === null) return;
         el.style.opacity = dist > 110 ? ((160 - dist) / 50).toFixed(2) : '1';
-        el.style.transform =
-          'translate3d(' + Math.round((pv.x * 0.5 + 0.5) * vpW) + 'px,' + Math.round((-pv.y * 0.5 + 0.5) * vpH) + 'px,0) translate(-50%,-100%)';
       };
       const yoP = perfil();
-      if (yoP.nombre) pinta('yo', yoP.nombre, yo.x, yo.y, yo.h, true);
-      for (const [id, o] of otros) pinta(id, o.nombre, o.o.x, o.o.y, o.o.h, false);
+      if (yoP.nombre) pinta('yo', yoP.nombre, miDice && Date.now() - miDice.t < MENSAJE_MS ? miDice.txt : null, yo.x, yo.y, yo.h, true);
+      for (const [id, o] of otros) pinta(id, o.nombre, o.dice, o.o.x, o.o.y, o.o.h, false);
+      for (const g of gestos) {
+        const o = g.id === 'yo' ? yo : otros.get(g.id)?.o;
+        if (!o) {
+          g.el.style.display = 'none';
+          continue;
+        }
+        sitúa(g.el, o.x, o.y, o.h, ALTO_AVATAR + 0.5);
+      }
     }
 
     // --- conversiones y toques ---
@@ -1888,14 +1946,26 @@ export default function Mundo() {
 
     // --- presencia ---
     let ultimaPresencia = 0;
+    // Lo que se dice va montado en el sondeo de presencia: se manda UNA vez
+    // (el servidor la mantiene viva lo que dura la burbuja) y al decir algo se
+    // adelanta el sondeo, así que se ve casi al momento en vez de esperar al
+    // siguiente ciclo.
+    let porDecir = null;
+    let porGesticular = null;
+    let miDice = null; // lo mío se pinta ya, sin esperar a la respuesta
     async function mandaPresencia() {
+      ultimaPresencia = performance.now();
       const p = perfil();
       if (!p.nombre) return; // hasta que no te presentes, no sales en el mundo
+      const dicho = porDecir;
+      const gesto = porGesticular;
+      porDecir = null;
+      porGesticular = null;
       try {
         const r = await fetch('/api/presencia', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ jugador: p.id, nombre: p.nombre, color: p.color, x: Math.round(yo.x * 10) / 10, y: Math.round(yo.y * 10) / 10, r: Math.round(yo.rumbo * 100) / 100 }),
+          body: JSON.stringify({ jugador: p.id, nombre: p.nombre, color: p.color, x: Math.round(yo.x * 10) / 10, y: Math.round(yo.y * 10) / 10, r: Math.round(yo.rumbo * 100) / 100, m: dicho || undefined, e: gesto || undefined }),
         });
         if (!r.ok) return;
         const j = await r.json();
@@ -1912,6 +1982,17 @@ export default function Mundo() {
           if (!o) o = creaOtro(d.id, d);
           o.objetivo = { x: d.x, y: d.y, rumbo: d.r };
           o.visto = ahora;
+          // el instante es lo que distingue «lo ha dicho ahora» de «lo mismo
+          // por tercer sondeo»: sin él, un gesto se repetiría tres veces
+          if ((d.mt || 0) !== o.diceT) {
+            o.dice = d.m || null;
+            o.diceT = d.mt || 0;
+            if (o.dice && dichosRef.current) dichosRef.current.textContent = o.nombre + ' dice: ' + o.dice;
+          }
+          if (d.et && d.et !== o.gestoT) {
+            o.gestoT = d.et;
+            lanzaGesto(d.id, d.e);
+          }
         }
         for (const [id, o] of otros) if (!vistos.has(id) && ahora - o.visto > 9000) quitaOtro(id);
         setConectados(j.conectados || 1);
@@ -2067,6 +2148,23 @@ export default function Mundo() {
       },
       presentate() {
         mandaPresencia();
+      },
+      // Decir algo: sale en la burbuja propia al momento y viaja en el
+      // siguiente sondeo. Si se acaba de sondear se espera al ciclo (≤1,5 s)
+      // en vez de disparar otro: el servidor limita a 90 peticiones/min y el
+      // sondeo ya gasta 40.
+      di(texto) {
+        const t = limpiaMensaje(texto);
+        if (!t) return;
+        porDecir = t;
+        miDice = { txt: t, t: Date.now() };
+        if (performance.now() - ultimaPresencia > 600) mandaPresencia();
+      },
+      gesto(clave) {
+        if (!EMOTES[clave]) return;
+        porGesticular = clave;
+        lanzaGesto('yo', clave);
+        if (performance.now() - ultimaPresencia > 600) mandaPresencia();
       },
     };
 
@@ -2229,10 +2327,7 @@ export default function Mundo() {
       if (t - ultimoSondeo > 1500) {
         ultimoSondeo = t;
         traeParcelas(false);
-        if (t - ultimaPresencia > 1500) {
-          ultimaPresencia = t;
-          mandaPresencia();
-        }
+        if (t - ultimaPresencia > 1500) mandaPresencia();
       }
     }
 
@@ -2411,6 +2506,14 @@ export default function Mundo() {
     }
   }
 
+  // --- hablar ---
+  function onDecir(e) {
+    e.preventDefault();
+    const t = decirRef.current?.value || '';
+    engineRef.current?.di(t);
+    if (decirRef.current) decirRef.current.value = '';
+  }
+
   if (sinGL) {
     return (
       <div style={{ display: 'grid', placeItems: 'center', height: '100vh', padding: 20, textAlign: 'center', color: '#2b3440', fontWeight: 700 }}>
@@ -2427,6 +2530,9 @@ export default function Mundo() {
       <canvas id="lienzo" ref={canvasRef} />
       <div id="vineta" aria-hidden="true" />
       <div id="rotulos" ref={rotulosRef} aria-hidden="true" />
+      {/* los rótulos van sobre el 3D y son aria-hidden: lo que dicen los demás
+          se cuenta aquí, para quien no los vea */}
+      <p id="dichos" ref={dichosRef} className="solo-lector" aria-live="polite" />
 
       {yo && !presentado && (
         <div className="ui velo">
@@ -2491,6 +2597,9 @@ export default function Mundo() {
           </p>
           <p>
             <b>Construye</b> en tu parcela: casas, árboles, rocas, caminos, vallas, muebles… Elige una pieza del panel y toca el suelo para colocarla. <b>Arrastra</b> una pieza para llevarla donde quieras; tócala para girarla o borrarla. Lo ve todo el mundo al momento.
+          </p>
+          <p>
+            <b>Habla con quien te encuentres</b> con el botón 💬: lo que digas sale en una burbuja sobre tu cabeza y lo ve quien esté cerca, y los gestos son de un toque. No se guarda nada: la burbuja se desvanece y ahí acaba.
           </p>
           <p>
             <b>Todo se dibuja en tu GPU.</b> El servidor solo guarda qué hay en cada parcela y quién anda cerca.
@@ -2618,6 +2727,48 @@ export default function Mundo() {
         </>
       )}
 
+      {presentado && !obra && (
+        <div className={'ui chat' + (chatOpen ? ' abierto' : '')}>
+          {chatOpen ? (
+            <>
+              <div className="emotes" role="group" aria-label="Gestos">
+                {Object.entries(EMOTES).map(([k, e]) => (
+                  <button key={k} className="emote" onClick={() => engineRef.current?.gesto(k)} title={e.nombre} aria-label={e.nombre}>
+                    {e.emoji}
+                  </button>
+                ))}
+              </div>
+              <form className="decir" onSubmit={onDecir}>
+                <input
+                  ref={decirRef}
+                  type="text"
+                  maxLength={MAX_MENSAJE}
+                  placeholder="Di algo…"
+                  autoComplete="off"
+                  aria-label="Lo que dices"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape') {
+                      e.currentTarget.blur();
+                      setChatOpen(false);
+                    }
+                  }}
+                />
+                <button type="submit" className="btn-principal" aria-label="Decir">
+                  ➤
+                </button>
+                <button type="button" className="btn-sec" onClick={() => setChatOpen(false)} aria-label="Cerrar">
+                  ✕
+                </button>
+              </form>
+            </>
+          ) : (
+            <button className="btn-cuad" aria-label="Hablar y hacer gestos" title="Hablar y hacer gestos" onClick={() => setChatOpen(true)}>
+              💬
+            </button>
+          )}
+        </div>
+      )}
+
       {presentado && !obra && tactil && (
         <div
           className="ui joy"
@@ -2638,7 +2789,7 @@ export default function Mundo() {
         </div>
       )}
 
-      <div className={'ui toast glass' + (toast.on ? ' on' : '')}>{toast.msg}</div>
+      <div className={'ui toast glass' + (toast.on ? ' on' : '') + (chatOpen ? ' arriba' : '')}>{toast.msg}</div>
     </>
   );
 }
