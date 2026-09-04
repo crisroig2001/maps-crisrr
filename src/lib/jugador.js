@@ -43,6 +43,28 @@ export function perfil() {
   return cache;
 }
 
+// Cuántos «me gusta» tenía tu parcela la última vez que te lo contamos. Vive
+// en este dispositivo porque es un aviso, no un dato del mundo: sirve para
+// decirte al volver que mientras no estabas alguien pasó por tu casa.
+const CLAVE_GUSTA = 'crisrr_gusta_visto';
+
+export function gustaVisto() {
+  try {
+    const n = Number(localStorage.getItem(CLAVE_GUSTA));
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  } catch {
+    return 0;
+  }
+}
+
+export function guardaGustaVisto(n) {
+  try {
+    localStorage.setItem(CLAVE_GUSTA, String(n));
+  } catch {
+    /* modo privado o sin storage: se avisará otra vez */
+  }
+}
+
 export function guardaPerfil(nombre, color) {
   const p = perfil();
   p.nombre = limpiaNombre(nombre);

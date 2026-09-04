@@ -57,10 +57,17 @@ servidor solo guarda qué hay en cada parcela y quién anda cerca.
   avatares) y en GLSL (para desplazar suelo, marcos y plazas en el vertex
   shader y sacar su normal), y que nunca da más de medio metro de desnivel
   en una parcela.
-- **El avatar**: cuerpo redondo del color elegido, cabeza, pelo y ojos. Anda
-  **tocando el suelo**, con el **joystick** de abajo a la izquierda (solo en
-  pantallas táctiles) o con WASD / flechas, todo relativo a la cámara, que va
-  con él en tercera persona.
+- **El avatar**: cuerpo redondo del color elegido, cabeza, pelo y ojos. Mide
+  **1,8 m**, lo que mide una persona, y ese número es la vara de medir del
+  mundo: las casas son de 6,4 a 8,8 m de alto, los árboles de 8 a 10 y la
+  puerta de una casa 2, así que un avatar más alto las convertía en casitas de
+  juguete. `npm run medidas` dice lo que mide cada pieza ya colocada y cuántas
+  veces el avatar: el catálogo escala cada modelo por su lado mayor **en
+  planta**, así que un modelo alto y estrecho (una silla, una maceta, una
+  flor) se va de alto sin que se note en el número. Anda **tocando el suelo**,
+  con el **joystick** de abajo a la izquierda (solo en pantallas táctiles) o
+  con WASD / flechas, todo relativo a la cámara, que va con él en tercera
+  persona.
 - **La cámara y los gestos**, los mismos que en los mapas del iPhone: **un
   dedo** lleva el mapa a donde se quiera, y **dos dedos** hacen tres cosas a
   la vez y sin modos: separarlos o juntarlos acerca y aleja, girarlos gira el
@@ -74,6 +81,18 @@ servidor solo guarda qué hay en cada parcela y quién anda cerca.
   y el de dos se le apaga. Con **ratón**, arrastrar gira y cambia el ángulo y
   la rueda acerca. El mapa nunca se aleja más de 120 m del avatar y vuelve a
   centrarlo en cuanto se anda: se puede mirar alrededor sin perderse.
+- **Hablar**: con el botón 💬 sale un anillo de **gestos** (👋 😄 ❤️ 🎉 🙏 😮)
+  y una caja de texto. Lo que dices sale en una **burbuja sobre tu cabeza** y
+  lo lee quien esté cerca; un gesto es un emoji que sube y se desvanece. Viaja
+  **por el mismo sondeo que la presencia**, sin infraestructura nueva: el
+  mensaje va montado en el POST (que se adelanta al hablar, así que se ve casi
+  al momento), el servidor lo mantiene vivo en memoria los segundos que dura
+  la burbuja y lo reparte a quien sondee, y cada dato lleva su instante para
+  que el cliente distinga un gesto nuevo de el mismo repetido en tres sondeos.
+  Un sondeo de 1,5 s sería poco para mover avatares, pero para hablar sobra.
+  **No se guarda nada**: ni en disco ni en un registro; la burbuja se
+  desvanece y ahí se acaba. El texto entra acotado (80 caracteres, sin
+  caracteres de control) y se pinta con `textContent`, nunca como marcado.
 - **Presencia**: cada 1,5 s el cliente manda su posición a `POST
   /api/presencia` y recibe a quien esté a menos de 400 m. Los demás se
   interpolan hacia su última posición conocida, así que se les ve andar y no
@@ -85,6 +104,22 @@ servidor solo guarda qué hay en cada parcela y quién anda cerca.
   de un solo constructor. Se puede abandonar, y vuelve a ser un solar.
   Cada parcela reclamada lleva un marco en el suelo del color de su dueño
   (derivado de su id, sin preguntarle a nadie); la tuya, en azul.
+- **De quién es cada casa**: sobre cada parcela reclamada flota un **cartel**
+  con el nombre de su dueño y un punto del color de su marco, así que el
+  cartel y el suelo dicen lo mismo. Es lo que hace que el mundo se note
+  habitado **aunque no haya nadie conectado**, que es casi siempre: sin él se
+  anda entre casas de nadie. El nombre viaja con la parcela (`GET /api/mundo`
+  lo saca de `jugadores[dueño].n`, y `reclama` lo guarda al vuelo para que una
+  casa recién hecha no diga «Alguien»); los carteles son de las parcelas a dos
+  de distancia y se apagan a 130 m.
+- **Me gusta**: en la parcela de otro, un botón deja un ❤️, uno por jugador y
+  se puede quitar. Se ve en el cartel y **se guarda** (a diferencia de lo que
+  se dice, que se desvanece): es el bucle que cierra construir cuando no
+  coincides con nadie, porque al volver se te cuenta cuánta gente ha pasado
+  por tu casa. Los ids de quién lo ha dado no salen del servidor: sale la
+  cuenta y, para ti, si tú eras uno. Tope de `MAX_GUSTA` por parcela, que es
+  lo que impide que una parcela famosa se coma el fichero. El «cuántos había
+  la última vez» vive en tu dispositivo: es un aviso, no un dato del mundo.
 - **Construir**: en tu parcela, «Construir» abre la paleta con una treintena
   de piezas: cuatro casas, tienda, torre, árboles (roble, pino, palmera…),
   arbustos, flores, setas, calabazas, rocas, troncos, hoguera, camino, puente,
@@ -153,6 +188,10 @@ npm run dev                       # en otra terminal, con el almacén de semilla
 npm run vistas                    # captura y compara
 ```
 
+Hay una vista, `a-escala`, que existe solo para juzgar el **tamaño**: el
+avatar pegado a la casa de muestra y a su jardín, donde se ve enseguida si una
+persona mide lo que mide al lado de una puerta, un banco o una valla.
+
 Deja `capturas/index.html`: cada vista con su referencia al lado, el
 porcentaje de píxeles que han cambiado y, si han cambiado, una imagen que los
 señala en magenta. El banco entra ya presentado (perfil fijo «Banco») y mira
@@ -165,8 +204,10 @@ npm run vistas -- --solo casa-de-muestra  # una sola vista
 ```
 
 `npm run prueba` es la otra mitad: dos jugadores de verdad en dos pestañas
-(Ana y Bea) que se presentan, andan, se ven, reclaman un solar, construyen y
-comprueban que el otro lo ve y que el servidor lo guardó. Deja capturas de
+(Ana y Bea) que se presentan, andan, se ven, **se hablan** (Ana dice algo y
+hace un gesto, y se comprueba que a Bea le llegan), reclaman un solar,
+construyen, comprueban que el otro lo ve y que el servidor lo guardó, y Bea
+entra en la parcela de Ana, ve de quién es y le da a me gusta. Deja capturas de
 cada paso en `OUT` (por defecto, el directorio actual).
 
 Las vistas están en `scripts/vistas.config.mjs`. Si aparece un fallo nuevo,
@@ -178,7 +219,8 @@ se baje otro.
 
 1. ✅ Mundo, avatar, presencia por sondeo, parcelas y construcción con piezas
 2. Cuentas de usuario (la propiedad de las parcelas de verdad), moderación
-3. WebSockets para la presencia, chat entre avatares
+3. WebSockets para la presencia (hablar ya va por el sondeo), y con ellos
+   silenciar y reportar, que es lo que pide el texto libre cuando hay gente
 4. Más piezas, piezas apilables (plantas), interiores
 
 ## Historia

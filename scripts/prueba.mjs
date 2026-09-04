@@ -1,6 +1,7 @@
 // Prueba de extremo a extremo con dos jugadores (npm run prueba, con la app
 // servida en npm run dev): presentación, andar, ver al
-// otro, reclamar una parcela, construir y que el otro lo vea.
+// otro, hablar y que el otro lo lea, reclamar una parcela, construir, que el
+// otro lo vea, y que pueda saber de quién es y darle a me gusta.
 import { chromium } from 'playwright';
 import path from 'node:path';
 
@@ -50,9 +51,23 @@ await ana.screenshot({ path: path.join(OUT, 'm2-andando.png') });
 // segundo jugador, en la misma plaza
 const bea = await abre('Bea', 4);
 await bea.waitForTimeout(3500); // dos sondeos de presencia
-const nombresBea = await bea.$$eval('#rotulos .nombre', (els) => els.filter((e) => e.style.display !== 'none').map((e) => e.textContent));
+const nombresBea = await bea.$$eval('#rotulos .rotulo b', (els) => els.filter((e) => e.parentElement.style.display !== 'none').map((e) => e.textContent));
 console.log('Bea ve los nombres:', nombresBea);
 await bea.screenshot({ path: path.join(OUT, 'm3-bea-ve-a-ana.png') });
+
+// Hablar: Ana dice algo y hace un gesto, y a Bea le tienen que salir sobre la
+// cabeza de Ana. Va por el sondeo de presencia, así que tarda un sondeo suyo
+// (que se dispara al hablar) más uno de Bea.
+await pulsa(ana, '.chat .btn-cuad');
+await ana.$eval('.chat .decir input', (i) => (i.value = '¡Hola, Bea!'));
+await pulsa(ana, '.chat .decir button[type=submit]');
+await pulsa(ana, '.chat .emote[aria-label="Hola"]');
+let gesto = true;
+await bea.waitForSelector('#rotulos .gesto', { state: 'attached', timeout: 10000 }).catch(() => (gesto = false));
+const dice = await bea.$$eval('#rotulos .rotulo .dice', (els) => els.filter((e) => !e.hidden).map((e) => e.textContent));
+console.log('Bea lee la burbuja:', dice.length ? dice : 'NINGUNA', '| gesto:', gesto ? 'sí' : 'NO LLEGA');
+await bea.screenshot({ path: path.join(OUT, 'm3b-bea-lee-a-ana.png') });
+await pulsa(ana, '.chat .decir button[aria-label="Cerrar"]');
 
 // el teclado mueve: un par de segundos hacia el oeste y la x baja
 const antes = await ana.evaluate(() => window.__mundo.pos());
@@ -129,6 +144,24 @@ for (let i = 0; i < 3 && !guardada; i++) {
   if (!guardada) await ana.waitForTimeout(1500);
 }
 console.log('servidor parcela -2/1:', guardada ? guardada.d.length + ' piezas, dueño ' + guardada.o : 'NO GUARDADA');
+
+// Bea entra en la parcela de Ana: tiene que ver de quién es y poder darle a
+// me gusta. A Ana le llega en su sondeo: el cartel sube la cuenta y se lo
+// cuentan por el aviso de abajo.
+await bea.evaluate(() => window.__mundo.mueve(-2 * 48 + 24, 48 + 12));
+await bea.waitForSelector('.acciones .gusta', { state: 'attached', timeout: 20000 });
+console.log('Bea, en casa de Ana:', (await bea.textContent('.acciones')).trim());
+await pulsa(bea, '.acciones .gusta');
+await bea.waitForTimeout(700);
+console.log('tras darle a me gusta:', (await bea.textContent('.acciones')).trim());
+await bea.screenshot({ path: path.join(OUT, 'm5b-bea-en-casa-de-ana.png') });
+const conGusta = await bea.evaluate(async () => (await fetch('/api/mundo?px0=-2&py0=1&px1=-2&py1=1', { cache: 'no-store' })).json());
+console.log('servidor me gusta:', conGusta.parcelas?.find((p) => p.k === '-2/1')?.g ?? 'NINGUNO');
+// el sondeo de parcelas de Ana es cada 6 s
+await ana.waitForTimeout(8000);
+const carteles = await ana.$$eval('#rotulos .cartel', (els) => els.filter((e) => e.style.display !== 'none').map((e) => e.textContent));
+console.log('cartel que ve Ana:', carteles.length ? carteles : 'NINGUNO', '| aviso:', (await ana.textContent('.toast')).trim());
+await ana.screenshot({ path: path.join(OUT, 'm5c-ana-ve-su-cartel.png') });
 // Móvil: con pantalla táctil sale el joystick, y arrastrarlo mueve el avatar.
 // Las otras dos pestañas se cierran antes: tres mundos con sombras a la vez
 // dejan sin frames al render por software.

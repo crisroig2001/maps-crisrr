@@ -27,6 +27,15 @@ export const VISTAS = [
     az: 200,
   },
   {
+    id: 'a-escala',
+    desc: 'El avatar pegado a la casa de muestra y a su jardín. Aquí se juzga el TAMAÑO: una persona mide 1,8 m, así que la puerta le tiene que venir un poco alta, el banco por la cadera y la valla por el pecho.',
+    x: 72,
+    y: 60,
+    d: 11,
+    pol: 76,
+    az: 195,
+  },
+  {
     id: 'a-ras-de-suelo',
     desc: 'Cámara casi horizontal detrás del avatar: el horizonte, la niebla y que el suelo no se corte.',
     x: 24,

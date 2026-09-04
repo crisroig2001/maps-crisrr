@@ -16,8 +16,8 @@ import { MapControls } from 'three/examples/jsm/controls/MapControls.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { PARCELA_M, parcelaDe, claveParcela, parseParcela, centroParcela } from '../lib/parcela';
-import { PIEZAS, CATEGORIAS, COLORES, MAX_PIEZAS, MAX_NOMBRE } from '../lib/piezas';
-import { perfil, guardaPerfil } from '../lib/jugador';
+import { PIEZAS, CATEGORIAS, COLORES, MAX_PIEZAS, MAX_NOMBRE, MAX_MENSAJE, MENSAJE_MS, EMOTES, limpiaMensaje } from '../lib/piezas';
+import { perfil, guardaPerfil, gustaVisto, guardaGustaVisto } from '../lib/jugador';
 import { tipoParcela, conSuelo, cauce, distRio, rioEsteX as rioEsteXEnEscena, rioSurY as rioSurYEnEscena, GLSL_CAUCE, RIO_ANCHO, NIVEL_AGUA, LECHO, BANDA_AGUA } from '../lib/paisaje';
 const LECHO_G = LECHO.toFixed(1);
 
@@ -72,7 +72,8 @@ const NUBE_SOMBRA = new THREE.Color(0xdfe3f5);
 
 const MAX_INST = 3000; // instancias por parte de pieza en el mundo cargado
 const MAX_HIERBA = 3000;
-const VELOCIDAD = 4.6; // m/s del avatar
+const VELOCIDAD = 3.8; // m/s del avatar
+const CADENCIA = 12.5; // rad/s de la zancada: con VELOCIDAD da un paso de ~0,95 m
 
 // --- terreno: colinas suaves, la MISMA función en JS y en GLSL ---
 // Amplitud pequeña y ondas largas: una parcela de 48 m nunca tiene más de
@@ -215,7 +216,7 @@ function conAltura(mat, { tinta = false, viento = false, normales = false, nubes
                transformed.z += cos(tiempo * 1.3 + wpos.x * 0.17 - wpos.z * 0.3) * 0.08 * position.y;
                vec2 dAv = wpos.xz - uAvatar.xz;
                float lAv = length(dAv);
-               transformed.xz += (dAv / max(lAv, 0.001)) * (1.0 - smoothstep(0.2, 1.5, lAv)) * 0.7 * position.y;`
+               transformed.xz += (dAv / max(lAv, 0.001)) * (1.0 - smoothstep(0.15, 1.0, lAv)) * 0.45 * position.y;`
             : ''
         }`
       );
@@ -414,20 +415,29 @@ function geometriaPieza(tipo) {
 
 // El avatar: cuerpo redondo del color del jugador, cabeza, pelo y ojos
 // mirando al frente (+z). Las piernas van aparte para poder moverlas.
+//
+// Mide ALTO_AVATAR de la planta al pelo. Las piezas están a escala de verdad
+// (las casas miden de 6,4 a 8,8 m de alto, los árboles de 8 a 10, la puerta
+// de una casa 2), así que un avatar de 2,8 m las encogía: parecían casitas de
+// juguete. Las proporciones del muñeco no cambian —sigue siendo cabezón, de
+// dibujo—, solo su tamaño. Todo lo que va con él (el salto al andar, la
+// altura a la que mira la cámara, el rótulo del nombre, el radio con que
+// choca) sale de aquí.
+const ALTO_AVATAR = 1.8;
 function geometriaAvatar(color) {
   const g = nuevaGeo();
-  esfera(g, 0, 1.5, 0, 0.38, color, 1.4); // cuerpo
-  esfera(g, -0.5, 1.5, 0, 0.15, color, 1.9); // brazos
-  esfera(g, 0.5, 1.5, 0, 0.15, color, 1.9);
-  esfera(g, 0, 2.35, 0, 0.42, PIEL); // cabeza
-  esfera(g, 0, 2.5, -0.06, 0.44, PELO, 0.75); // pelo
-  esfera(g, -0.15, 2.36, 0.36, 0.06, OJO, 1, 6); // ojos
-  esfera(g, 0.15, 2.36, 0.36, 0.06, OJO, 1, 6);
+  esfera(g, 0, 0.96, 0, 0.24, color, 1.4); // cuerpo
+  esfera(g, -0.32, 0.96, 0, 0.1, color, 1.9); // brazos
+  esfera(g, 0.32, 0.96, 0, 0.1, color, 1.9);
+  esfera(g, 0, 1.5, 0, 0.27, PIEL); // cabeza
+  esfera(g, 0, 1.6, -0.04, 0.28, PELO, 0.75); // pelo
+  esfera(g, -0.1, 1.51, 0.23, 0.04, OJO, 1, 6); // ojos
+  esfera(g, 0.1, 1.51, 0.23, 0.04, OJO, 1, 6);
   return aGeo(g);
 }
 function geometriaPierna() {
   const g = nuevaGeo();
-  esfera(g, 0, -0.45, 0, 0.19, PANTALON, 2.6, 6);
+  esfera(g, 0, -0.29, 0, 0.12, PANTALON, 2.6, 6);
   return aGeo(g);
 }
 // una nube: varias esferas aplastadas, blancas arriba y lavanda abajo
@@ -474,14 +484,17 @@ function hash2(x, y) {
 export default function Mundo() {
   const canvasRef = useRef(null);
   const rotulosRef = useRef(null);
+  const dichosRef = useRef(null);
   const engineRef = useRef(null);
   const toastT = useRef(null);
   const nombreRef = useRef(null);
+  const decirRef = useRef(null);
   // {msg, on}: el texto se conserva mientras se desvanece, si no el aviso se
   // vacía antes de apagarse y queda una píldora en blanco
   const [toast, setToast] = useState({ msg: '', on: false });
   const [sinGL, setSinGL] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
   const [yo, setYo] = useState(null); // {id, nombre, color}
   const [colorElegido, setColorElegido] = useState(0);
   const [conectados, setConectados] = useState(1);
@@ -835,7 +848,7 @@ export default function Mundo() {
     controls.dampingFactor = 0.1;
     controls.enablePan = true; // con dos dedos se arrastra el mapa (ver GESTOS)
     controls.screenSpacePanning = false; // arrastrar mueve por el suelo, no por el aire
-    controls.minDistance = 6;
+    controls.minDistance = 4;
     controls.maxDistance = 140;
     controls.minPolarAngle = 0.15;
     controls.maxPolarAngle = 1.45;
@@ -1303,7 +1316,7 @@ export default function Mundo() {
             }
           }
           if (tapada) continue;
-          const s = 0.45 + h * 1.3; // como mucho a la rodilla del avatar
+          const s = 0.3 + h * 0.85; // como mucho, al muslo del avatar
           posI.set(wx, 0, -wy);
           rotI.setFromAxisAngle(ejeY, h * 9);
           escS.set(s, s * (0.9 + hash2(gy, gx) * 0.7), s);
@@ -1322,8 +1335,8 @@ export default function Mundo() {
       const cuerpo = new THREE.Mesh(geometriaAvatar(color), matFijo);
       const pi = new THREE.Mesh(geoPierna, matFijo);
       const pd = new THREE.Mesh(geoPierna, matFijo);
-      pi.position.set(-0.19, 1.0, 0);
-      pd.position.set(0.19, 1.0, 0);
+      pi.position.set(-0.12, 0.64, 0);
+      pd.position.set(0.12, 0.64, 0);
       for (const m of [cuerpo, pi, pd]) {
         m.castShadow = true;
         m.receiveShadow = true;
@@ -1344,7 +1357,7 @@ export default function Mundo() {
     }
     yo.h = alturaEn(yo.x, yo.y);
     function colocaFigura(f, o) {
-      const salto = o.andando ? Math.abs(Math.sin(o.fase)) * 0.09 : 0;
+      const salto = o.andando ? Math.abs(Math.sin(o.fase)) * 0.06 : 0;
       f.grupo.position.set(o.x, o.h + salto, -o.y);
       f.grupo.rotation.y = o.rumbo;
       const a = o.andando ? Math.sin(o.fase) * 0.65 : 0;
@@ -1355,18 +1368,18 @@ export default function Mundo() {
     // Cámara inicial: al sur del avatar, mirando al norte. Reproducible desde
     // la URL (?d=&pol=&az=) para el banco visual: az es el rumbo desde el
     // avatar hacia la cámara (180 = la cámara está al sur).
-    controls.target.set(yo.x, yo.h + 1.2, -yo.y);
+    controls.target.set(yo.x, yo.h + ALTO_AVATAR * 0.5, -yo.y);
     {
       const dCam = parseFloat(params.get('d'));
       const polCam = parseFloat(params.get('pol'));
       const azCam = parseFloat(params.get('az'));
       // por defecto, cerca y baja: como en la referencia, siempre se ve el
       // horizonte con sus nubes
-      const d = dCam > 0 ? dCam : 18;
+      const d = dCam > 0 ? dCam : 14;
       const pol = (Number.isFinite(polCam) ? Math.max(9, Math.min(83, polCam)) : 66) * (Math.PI / 180);
       const az = (Number.isFinite(azCam) ? azCam : 180) * (Math.PI / 180);
       const r = d * Math.sin(pol);
-      camera.position.set(yo.x + r * Math.sin(az), yo.h + 1.2 + d * Math.cos(pol), -yo.y - r * Math.cos(az));
+      camera.position.set(yo.x + r * Math.sin(az), yo.h + ALTO_AVATAR * 0.5 + d * Math.cos(pol), -yo.y - r * Math.cos(az));
     }
 
     // --- otros jugadores ---
@@ -1380,6 +1393,9 @@ export default function Mundo() {
         color: datos.c,
         nombre: datos.n,
         visto: Date.now(),
+        dice: null, // lo que dice ahora mismo, si dice algo
+        diceT: 0, // ... y cuándo lo dijo: distingue lo nuevo de lo repetido
+        gestoT: 0,
         o: { x: datos.x, y: datos.y, h: alturaEn(datos.x, datos.y), rumbo: datos.r, fase: 0, andando: false },
         objetivo: { x: datos.x, y: datos.y, rumbo: datos.r },
       };
@@ -1399,40 +1415,160 @@ export default function Mundo() {
       }
     }
 
-    // --- nombres sobre las cabezas: <div> proyectados ---
+    // --- sobre las cabezas: el nombre, lo que dice y los gestos ---
+    // Son <div> proyectados desde el 3D en cada fotograma, no geometría: un
+    // texto en el mundo saldría pixelado y habría que rehacerlo al escribir.
     const pv = new THREE.Vector3();
     let vpW = 1;
     let vpH = 1;
+    // Coloca un nodo sobre un punto del mundo. Devuelve la distancia a la
+    // cámara, o null si queda detrás o demasiado lejos para leerse.
+    function sitúa(el, x, y, h, alto, lejos = 160) {
+      pv.set(x, h + alto, -y);
+      const dist = pv.distanceTo(camera.position);
+      pv.project(camera);
+      if (pv.z > 1 || dist > lejos || Math.abs(pv.x) > 1.1 || Math.abs(pv.y) > 1.1) {
+        el.style.display = 'none';
+        return null;
+      }
+      el.style.display = '';
+      el.style.transform =
+        'translate3d(' + Math.round((pv.x * 0.5 + 0.5) * vpW) + 'px,' + Math.round((-pv.y * 0.5 + 0.5) * vpH) + 'px,0) translate(-50%,-100%)';
+      return dist;
+    }
+    // Un gesto: el emoji sube y se desvanece (eso lo hace el CSS) mientras el
+    // JS lo lleva pegado a la cabeza de quien lo hizo, que puede ir andando.
+    const gestos = [];
+    function lanzaGesto(id, clave) {
+      const cont = rotulosRef.current;
+      const e = EMOTES[clave];
+      if (!cont || !e) return;
+      const el = document.createElement('div');
+      el.className = 'gesto';
+      const i = document.createElement('i');
+      i.textContent = e.emoji;
+      el.appendChild(i);
+      cont.appendChild(el);
+      const g = { id, el };
+      gestos.push(g);
+      setTimeout(() => {
+        el.remove();
+        const k = gestos.indexOf(g);
+        if (k >= 0) gestos.splice(k, 1);
+      }, 1700);
+    }
+    // --- carteles: de quién es cada parcela ---
+    // El mundo se construye entre todos, pero conectados hay poca gente a la
+    // vez, así que casi siempre se anda entre casas de nadie. El cartel dice
+    // de quién es cada una y a cuánta gente le gusta: el trabajo de alguien se
+    // ve aunque no coincidáis. Se rehacen al cambiar de parcela o al llegar
+    // datos, y se colocan en cada fotograma como los nombres.
+    const carteles = new Map(); // clave de parcela → <div>
+    const CARTELES_RADIO = 2; // parcelas a la redonda
+    const CARTEL_LEJOS = 130; // m: más allá no se lee y estorba
+    const CARTEL_ALTO = 4; // m sobre el suelo: con la cámara de serie, más alto se sale por arriba
+    function sincronizaCarteles() {
+      const cont = rotulosRef.current;
+      if (!cont) return;
+      const p = parcelaDe(yo.x, yo.y);
+      const quedan = new Set();
+      for (let dx = -CARTELES_RADIO; dx <= CARTELES_RADIO; dx++) {
+        for (let dy = -CARTELES_RADIO; dy <= CARTELES_RADIO; dy++) {
+          const clave = claveParcela(p.px + dx, p.py + dy);
+          const pc = parcelas.get(clave);
+          if (!pc?.o || pc.o === 'mundo' || !pc.n) continue;
+          quedan.add(clave);
+          let el = carteles.get(clave);
+          if (!el) {
+            el = document.createElement('div');
+            el.className = 'cartel';
+            const i = document.createElement('i');
+            const b = document.createElement('b');
+            const g = document.createElement('span');
+            g.className = 'gusta';
+            el.append(i, b, g);
+            el._i = i;
+            el._b = b;
+            el._g = g;
+            cont.appendChild(el);
+            carteles.set(clave, el);
+          }
+          const mia = pc.o === jugador.id;
+          // el punto del color del marco que la parcela lleva en el suelo:
+          // el cartel y el suelo dicen lo mismo
+          const col = '#' + (mia ? colorMio : cacheColorDueno.get(pc.o) || colorDueno(pc.o)).getHexString();
+          if (el._col !== col) {
+            el._i.style.background = col;
+            el._col = col;
+          }
+          if (el._txt !== pc.n) {
+            el._b.textContent = pc.n;
+            el._txt = pc.n;
+          }
+          if (el._g._n !== pc.g) {
+            el._g.textContent = pc.g ? '❤️ ' + pc.g : '';
+            el._g.hidden = !pc.g;
+            el._g._n = pc.g;
+          }
+          el.classList.toggle('mia', mia);
+        }
+      }
+      for (const [clave, el] of carteles) {
+        if (quedan.has(clave)) continue;
+        el.remove();
+        carteles.delete(clave);
+      }
+    }
+
     function pintaNombres() {
       const cont = rotulosRef.current;
       if (!cont) return;
-      const pinta = (id, nombre, x, y, h, propio) => {
+      const pinta = (id, nombre, dice, x, y, h, propio) => {
         let el = nodos.get(id);
         if (!el) {
           el = document.createElement('div');
-          el.className = 'nombre' + (propio ? ' yo' : '');
+          el.className = 'rotulo' + (propio ? ' yo' : '');
+          const b = document.createElement('b');
+          const sp = document.createElement('span');
+          sp.className = 'dice';
+          el.append(sp, b);
+          // los dos hijos quedan a mano: esto se pinta en CADA fotograma y no
+          // hay que rebuscarlos en el DOM
+          el._b = b;
+          el._sp = sp;
           cont.appendChild(el);
           nodos.set(id, el);
         }
-        if (el._txt !== nombre) {
-          el.textContent = nombre;
-          el._txt = nombre;
+        const b = el._b;
+        const sp = el._sp;
+        if (b.textContent !== nombre) b.textContent = nombre;
+        // textContent, nunca innerHTML: lo que escribe otra persona entra
+        // como TEXTO y no como marcado
+        if (sp._txt !== dice) {
+          sp.textContent = dice || '';
+          sp.hidden = !dice;
+          sp._txt = dice;
         }
-        pv.set(x, h + 3.2, -y);
-        const dist = pv.distanceTo(camera.position);
-        pv.project(camera);
-        if (pv.z > 1 || dist > 160 || Math.abs(pv.x) > 1.1 || Math.abs(pv.y) > 1.1) {
-          el.style.display = 'none';
-          return;
-        }
-        el.style.display = '';
+        const dist = sitúa(el, x, y, h, ALTO_AVATAR + 0.3);
+        if (dist === null) return;
         el.style.opacity = dist > 110 ? ((160 - dist) / 50).toFixed(2) : '1';
-        el.style.transform =
-          'translate3d(' + Math.round((pv.x * 0.5 + 0.5) * vpW) + 'px,' + Math.round((-pv.y * 0.5 + 0.5) * vpH) + 'px,0) translate(-50%,-100%)';
       };
       const yoP = perfil();
-      if (yoP.nombre) pinta('yo', yoP.nombre, yo.x, yo.y, yo.h, true);
-      for (const [id, o] of otros) pinta(id, o.nombre, o.o.x, o.o.y, o.o.h, false);
+      if (yoP.nombre) pinta('yo', yoP.nombre, miDice && Date.now() - miDice.t < MENSAJE_MS ? miDice.txt : null, yo.x, yo.y, yo.h, true);
+      for (const [id, o] of otros) pinta(id, o.nombre, o.dice, o.o.x, o.o.y, o.o.h, false);
+      for (const g of gestos) {
+        const o = g.id === 'yo' ? yo : otros.get(g.id)?.o;
+        if (!o) {
+          g.el.style.display = 'none';
+          continue;
+        }
+        sitúa(g.el, o.x, o.y, o.h, ALTO_AVATAR + 0.5);
+      }
+      for (const [clave, el] of carteles) {
+        const q = parseParcela(clave);
+        const c = centroParcela(q.px, q.py);
+        sitúa(el, c.x, c.y, alturaEn(c.x, c.y), CARTEL_ALTO, CARTEL_LEJOS);
+      }
     }
 
     // --- conversiones y toques ---
@@ -1572,7 +1708,7 @@ export default function Mundo() {
         lista.push(z);
         seleccion = { clave: obraClave, z };
       }
-      parcelas.set(obraClave, { o: pc?.o || jugador.id, d: lista });
+      parcelas.set(obraClave, { ...pc, o: pc?.o || jugador.id, d: lista });
       pintaMundo();
       avisaObra?.({ n: lista.length, seleccion: !!seleccion });
       programaGuardado(obraClave);
@@ -1820,7 +1956,9 @@ export default function Mundo() {
         for (const k of ['px0', 'py0', 'px1', 'py1']) q.set(k, String(caja[k]));
         // el delta solo vale con la misma caja: si cambia, lo nuevo es viejo
         if (ultimoHasta != null && !cambiaCaja) q.set('desde', String(ultimoHasta));
-        else q.set('jugador', jugador.id);
+        // el jugador va siempre: con él vienen los «me gusta» que ha dado y
+        // cuánto gusta la suya, que es lo que se le cuenta al volver
+        q.set('jugador', jugador.id);
         const r = await fetch('/api/mundo?' + q.toString());
         if (r.status === 304) return;
         const j = await r.json();
@@ -1838,17 +1976,19 @@ export default function Mundo() {
         for (const it of j.parcelas || []) {
           if (it.k === obraClave) continue; // lo local aún no se ha guardado
           const prev = parcelas.get(it.k);
-          if (!prev || prev.o !== it.o || JSON.stringify(prev.d) !== JSON.stringify(it.d)) {
-            parcelas.set(it.k, { o: it.o, d: it.d || [] });
-            cambios = true;
-          }
+          // el dueño y las piezas son lo que hay que volver a dibujar en 3D;
+          // el nombre y los me gusta solo cambian el cartel, que se pinta
+          // por su cuenta en cada fotograma
+          if (!prev || prev.o !== it.o || JSON.stringify(prev.d) !== JSON.stringify(it.d)) cambios = true;
+          parcelas.set(it.k, { o: it.o, d: it.d || [], n: it.n || null, g: it.g || 0, mg: !!it.mg });
         }
         if (j.yo) {
           miParcelaClave = j.yo.p || null;
           setMiParcela(miParcelaClave);
+          cuentaGusta(j.yo.g || 0);
         }
         if (cambios || cambiaCaja) pintaMundo();
-        actualizaDonde(true);
+        actualizaDonde(true); // ... que además sincroniza los carteles
         compruebaListo();
       } catch {
         /* sin red: se reintenta en el siguiente sondeo */
@@ -1870,22 +2010,49 @@ export default function Mundo() {
         clave,
         tipo,
         dueno: pc?.o || null,
+        nombre: pc?.n || null,
         mia: pc?.o === jugador.id,
         libre: !pc?.o && tipo === 'residencial',
+        g: pc?.g || 0,
+        mg: !!pc?.mg,
         n: pc?.d?.length || 0,
       });
+      sincronizaCarteles();
+    }
+
+    // Al volver, si a tu parcela le ha gustado a más gente, se te cuenta: es
+    // lo único que devuelve haber construido cuando no coincides con nadie.
+    // El «cuántos había» es de este dispositivo (localStorage), no del mundo.
+    let gustaPrevio = null;
+    function cuentaGusta(n) {
+      const antes = gustaPrevio === null ? gustaVisto() : gustaPrevio;
+      gustaPrevio = n;
+      if (n > antes) avisa(n === 1 ? '❤️ A alguien le gusta tu parcela' : '❤️ Le gusta tu parcela a ' + n + ' personas');
+      if (n !== gustaVisto()) guardaGustaVisto(n);
     }
 
     // --- presencia ---
     let ultimaPresencia = 0;
+    // Lo que se dice va montado en el sondeo de presencia: se manda UNA vez
+    // (el servidor la mantiene viva lo que dura la burbuja) y al decir algo se
+    // adelanta el sondeo, así que se ve casi al momento en vez de esperar al
+    // siguiente ciclo.
+    let porDecir = null;
+    let porGesticular = null;
+    let miDice = null; // lo mío se pinta ya, sin esperar a la respuesta
     async function mandaPresencia() {
+      ultimaPresencia = performance.now();
       const p = perfil();
       if (!p.nombre) return; // hasta que no te presentes, no sales en el mundo
+      const dicho = porDecir;
+      const gesto = porGesticular;
+      porDecir = null;
+      porGesticular = null;
       try {
         const r = await fetch('/api/presencia', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ jugador: p.id, nombre: p.nombre, color: p.color, x: Math.round(yo.x * 10) / 10, y: Math.round(yo.y * 10) / 10, r: Math.round(yo.rumbo * 100) / 100 }),
+          body: JSON.stringify({ jugador: p.id, nombre: p.nombre, color: p.color, x: Math.round(yo.x * 10) / 10, y: Math.round(yo.y * 10) / 10, r: Math.round(yo.rumbo * 100) / 100, m: dicho || undefined, e: gesto || undefined }),
         });
         if (!r.ok) return;
         const j = await r.json();
@@ -1902,6 +2069,17 @@ export default function Mundo() {
           if (!o) o = creaOtro(d.id, d);
           o.objetivo = { x: d.x, y: d.y, rumbo: d.r };
           o.visto = ahora;
+          // el instante es lo que distingue «lo ha dicho ahora» de «lo mismo
+          // por tercer sondeo»: sin él, un gesto se repetiría tres veces
+          if ((d.mt || 0) !== o.diceT) {
+            o.dice = d.m || null;
+            o.diceT = d.mt || 0;
+            if (o.dice && dichosRef.current) dichosRef.current.textContent = o.nombre + ' dice: ' + o.dice;
+          }
+          if (d.et && d.et !== o.gestoT) {
+            o.gestoT = d.et;
+            lanzaGesto(d.id, d.e);
+          }
         }
         for (const [id, o] of otros) if (!vistos.has(id) && ahora - o.visto > 9000) quitaOtro(id);
         setConectados(j.conectados || 1);
@@ -1987,7 +2165,7 @@ export default function Mundo() {
         if (!seleccion || !obraClave) return 0;
         const pc = parcelas.get(obraClave);
         const lista = (pc?.d || []).filter((z) => z !== seleccion.z);
-        parcelas.set(obraClave, { o: pc?.o || jugador.id, d: lista });
+        parcelas.set(obraClave, { ...pc, o: pc?.o || jugador.id, d: lista });
         seleccion = null;
         pintaMundo();
         programaGuardado(obraClave);
@@ -2006,11 +2184,11 @@ export default function Mundo() {
           const r = await fetch('/api/parcela', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ accion: 'reclama', parcela: clave, jugador: jugador.id }),
+            body: JSON.stringify({ accion: 'reclama', parcela: clave, jugador: jugador.id, nombre: perfil().nombre }),
           });
           const j = await r.json().catch(() => ({}));
           if (!r.ok) return j.error || 'red';
-          parcelas.set(clave, { o: jugador.id, d: [] });
+          parcelas.set(clave, { o: jugador.id, n: perfil().nombre, g: 0, mg: false, d: [] });
           miParcelaClave = clave;
           setMiParcela(clave);
           ultimoHasta = null;
@@ -2030,7 +2208,7 @@ export default function Mundo() {
           });
           const j = await r.json().catch(() => ({}));
           if (!r.ok) return j.error || 'red';
-          parcelas.set(clave, { o: null, d: [] });
+          parcelas.set(clave, { o: null, n: null, g: 0, mg: false, d: [] });
           miParcelaClave = null;
           setMiParcela(null);
           ultimoHasta = null;
@@ -2040,6 +2218,33 @@ export default function Mundo() {
         } catch {
           return 'red';
         }
+      },
+      // Me gusta la parcela donde estás. El corazón responde al toque y no al
+      // servidor; si la petición falla, se deshace.
+      async daGusta() {
+        const clave = dondeClave;
+        const pc = parcelas.get(clave);
+        if (!pc?.o || pc.o === 'mundo' || pc.o === jugador.id) return 'propia';
+        const quiero = !pc.mg;
+        const aplica = (v) => {
+          pc.mg = v;
+          pc.g = Math.max(0, (pc.g || 0) + (v ? 1 : -1));
+          sincronizaCarteles();
+          actualizaDonde(true);
+        };
+        aplica(quiero);
+        try {
+          const r = await fetch('/api/parcela', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ accion: 'gusta', parcela: clave, jugador: jugador.id }),
+          });
+          if (!r.ok) throw new Error('no');
+        } catch {
+          aplica(!quiero);
+          return 'red';
+        }
+        return null;
       },
       // teletransporte a una parcela (la plaza, la tuya)
       vaA(clave) {
@@ -2057,6 +2262,23 @@ export default function Mundo() {
       },
       presentate() {
         mandaPresencia();
+      },
+      // Decir algo: sale en la burbuja propia al momento y viaja en el
+      // siguiente sondeo. Si se acaba de sondear se espera al ciclo (≤1,5 s)
+      // en vez de disparar otro: el servidor limita a 90 peticiones/min y el
+      // sondeo ya gasta 40.
+      di(texto) {
+        const t = limpiaMensaje(texto);
+        if (!t) return;
+        porDecir = t;
+        miDice = { txt: t, t: Date.now() };
+        if (performance.now() - ultimaPresencia > 600) mandaPresencia();
+      },
+      gesto(clave) {
+        if (!EMOTES[clave]) return;
+        porGesticular = clave;
+        lanzaGesto('yo', clave);
+        if (performance.now() - ultimaPresencia > 600) mandaPresencia();
       },
     };
 
@@ -2135,7 +2357,7 @@ export default function Mundo() {
           const ex = yo.x - so.x;
           const ey = yo.y - so.y;
           const d = Math.hypot(ex, ey);
-          const r = so.r + 0.45;
+          const r = so.r + 0.3;
           if (d < r && d > 0.001) {
             yo.x = so.x + (ex / d) * r;
             yo.y = so.y + (ey / d) * r;
@@ -2153,7 +2375,7 @@ export default function Mundo() {
           }
         }
         yo.rumbo = Math.atan2(dx, -dy); // el frente del avatar es +z (sur)
-        yo.fase += dt * 11;
+        yo.fase += dt * CADENCIA;
         // la cámara va con él
         camera.position.x += yo.x - x0;
         camera.position.z -= yo.y - y0;
@@ -2186,7 +2408,7 @@ export default function Mundo() {
           s.y += (dy / d) * paso;
           s.rumbo = Math.atan2(dx, -dy);
           s.andando = true;
-          s.fase += dt * 11;
+          s.fase += dt * CADENCIA;
         } else {
           s.andando = false;
           s.fase = 0;
@@ -2219,10 +2441,7 @@ export default function Mundo() {
       if (t - ultimoSondeo > 1500) {
         ultimoSondeo = t;
         traeParcelas(false);
-        if (t - ultimaPresencia > 1500) {
-          ultimaPresencia = t;
-          mandaPresencia();
-        }
+        if (t - ultimaPresencia > 1500) mandaPresencia();
       }
     }
 
@@ -2401,6 +2620,18 @@ export default function Mundo() {
     }
   }
 
+  async function onGusta() {
+    if ((await engineRef.current?.daGusta()) === 'red') avisa('No se ha podido guardar; inténtalo otra vez');
+  }
+
+  // --- hablar ---
+  function onDecir(e) {
+    e.preventDefault();
+    const t = decirRef.current?.value || '';
+    engineRef.current?.di(t);
+    if (decirRef.current) decirRef.current.value = '';
+  }
+
   if (sinGL) {
     return (
       <div style={{ display: 'grid', placeItems: 'center', height: '100vh', padding: 20, textAlign: 'center', color: '#2b3440', fontWeight: 700 }}>
@@ -2417,6 +2648,9 @@ export default function Mundo() {
       <canvas id="lienzo" ref={canvasRef} />
       <div id="vineta" aria-hidden="true" />
       <div id="rotulos" ref={rotulosRef} aria-hidden="true" />
+      {/* los rótulos van sobre el 3D y son aria-hidden: lo que dicen los demás
+          se cuenta aquí, para quien no los vea */}
+      <p id="dichos" ref={dichosRef} className="solo-lector" aria-live="polite" />
 
       {yo && !presentado && (
         <div className="ui velo">
@@ -2483,6 +2717,9 @@ export default function Mundo() {
             <b>Construye</b> en tu parcela: casas, árboles, rocas, caminos, vallas, muebles… Elige una pieza del panel y toca el suelo para colocarla. <b>Arrastra</b> una pieza para llevarla donde quieras; tócala para girarla o borrarla. Lo ve todo el mundo al momento.
           </p>
           <p>
+            <b>Habla con quien te encuentres</b> con el botón 💬: lo que digas sale en una burbuja sobre tu cabeza y lo ve quien esté cerca, y los gestos son de un toque. No se guarda nada: la burbuja se desvanece y ahí acaba.
+          </p>
+          <p>
             <b>Todo se dibuja en tu GPU.</b> El servidor solo guarda qué hay en cada parcela y quién anda cerca.
           </p>
         </div>
@@ -2495,27 +2732,43 @@ export default function Mundo() {
               🛠️ Construir
             </button>
           )}
+          {donde.mia && donde.g > 0 && (
+            <span className="etiqueta glass gustada" title="A cuánta gente le gusta tu parcela">
+              ❤️ {donde.g}
+            </span>
+          )}
           {donde.libre && !miParcela && (
             <button className="btn-principal" onClick={onReclamar}>
               📍 Reclamar esta parcela
             </button>
           )}
           {donde.libre && miParcela && <span className="etiqueta glass">Solar libre</span>}
-          {!donde.libre && !donde.mia && (
+          {!donde.libre && !donde.mia && donde.dueno && donde.dueno !== 'mundo' && (
+            <>
+              <span className="etiqueta glass">Aquí vive {donde.nombre || 'alguien'}</span>
+              <button
+                className={'btn-principal gusta' + (donde.mg ? ' on' : '')}
+                onClick={onGusta}
+                aria-pressed={donde.mg}
+                aria-label={donde.mg ? 'Quitar el me gusta' : 'Me gusta esta parcela'}
+              >
+                {donde.mg ? '❤️' : '🤍'} {donde.g > 0 ? donde.g : 'Me gusta'}
+              </button>
+            </>
+          )}
+          {!donde.libre && !donde.mia && !(donde.dueno && donde.dueno !== 'mundo') && (
             <span className="etiqueta glass">
-              {donde.dueno && donde.dueno !== 'mundo'
-                ? 'Parcela de otra persona'
-                : donde.tipo === 'plaza'
-                  ? 'Plaza pública'
-                  : donde.tipo === 'paseo'
-                    ? 'Paseo público'
-                    : donde.tipo === 'parque'
-                      ? 'Parque público'
-                      : donde.tipo === 'rio'
-                        ? 'Río: aquí no se construye'
-                        : donde.tipo === 'muestra'
-                          ? 'Casa de muestra'
-                          : 'Campo: se construye cerca de la plaza'}
+              {donde.tipo === 'plaza'
+                ? 'Plaza pública'
+                : donde.tipo === 'paseo'
+                  ? 'Paseo público'
+                  : donde.tipo === 'parque'
+                    ? 'Parque público'
+                    : donde.tipo === 'rio'
+                      ? 'Río: aquí no se construye'
+                      : donde.tipo === 'muestra'
+                        ? 'Casa de muestra'
+                        : 'Campo: se construye cerca de la plaza'}
             </span>
           )}
         </div>
@@ -2608,6 +2861,48 @@ export default function Mundo() {
         </>
       )}
 
+      {presentado && !obra && (
+        <div className={'ui chat' + (chatOpen ? ' abierto' : '')}>
+          {chatOpen ? (
+            <>
+              <div className="emotes" role="group" aria-label="Gestos">
+                {Object.entries(EMOTES).map(([k, e]) => (
+                  <button key={k} className="emote" onClick={() => engineRef.current?.gesto(k)} title={e.nombre} aria-label={e.nombre}>
+                    {e.emoji}
+                  </button>
+                ))}
+              </div>
+              <form className="decir" onSubmit={onDecir}>
+                <input
+                  ref={decirRef}
+                  type="text"
+                  maxLength={MAX_MENSAJE}
+                  placeholder="Di algo…"
+                  autoComplete="off"
+                  aria-label="Lo que dices"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape') {
+                      e.currentTarget.blur();
+                      setChatOpen(false);
+                    }
+                  }}
+                />
+                <button type="submit" className="btn-principal" aria-label="Decir">
+                  ➤
+                </button>
+                <button type="button" className="btn-sec" onClick={() => setChatOpen(false)} aria-label="Cerrar">
+                  ✕
+                </button>
+              </form>
+            </>
+          ) : (
+            <button className="btn-cuad" aria-label="Hablar y hacer gestos" title="Hablar y hacer gestos" onClick={() => setChatOpen(true)}>
+              💬
+            </button>
+          )}
+        </div>
+      )}
+
       {presentado && !obra && tactil && (
         <div
           className="ui joy"
@@ -2628,7 +2923,7 @@ export default function Mundo() {
         </div>
       )}
 
-      <div className={'ui toast glass' + (toast.on ? ' on' : '')}>{toast.msg}</div>
+      <div className={'ui toast glass' + (toast.on ? ' on' : '') + (chatOpen ? ' arriba' : '')}>{toast.msg}</div>
     </>
   );
 }

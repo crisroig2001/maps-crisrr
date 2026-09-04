@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { reclama, setPiezas, abandona } from '../../../lib/mundo';
+import { reclama, setPiezas, abandona, gusta } from '../../../lib/mundo';
 import { RE_PARCELA } from '../../../lib/parcela';
 import { RE_JUGADOR } from '../../../lib/piezas';
 import { creaLimite, ipDe } from '../../../lib/ratelimit';
@@ -10,7 +10,7 @@ export const dynamic = 'force-dynamic';
 // 60/min por IP da de sobra para construir y frena a un script.
 const limited = creaLimite(60);
 
-// POST {accion: 'reclama' | 'piezas' | 'abandona', parcela, jugador, piezas?}
+// POST {accion: 'reclama' | 'piezas' | 'abandona' | 'gusta', parcela, jugador, piezas?, nombre?}
 export async function POST(req) {
   if (limited(ipDe(req))) {
     return NextResponse.json({ error: 'rate_limited' }, { status: 429 });
@@ -30,9 +30,10 @@ export async function POST(req) {
     return NextResponse.json({ error: 'bad_jugador' }, { status: 400 });
   }
   let motivo;
-  if (body.accion === 'reclama') motivo = reclama(parcela, jugador);
+  if (body.accion === 'reclama') motivo = reclama(parcela, jugador, body.nombre);
   else if (body.accion === 'piezas') motivo = setPiezas(parcela, jugador, body.piezas);
   else if (body.accion === 'abandona') motivo = abandona(parcela, jugador);
+  else if (body.accion === 'gusta') motivo = gusta(parcela, jugador);
   else return NextResponse.json({ error: 'bad_accion' }, { status: 400 });
 
   if (motivo === 'bad_piezas') return NextResponse.json({ error: motivo }, { status: 400 });

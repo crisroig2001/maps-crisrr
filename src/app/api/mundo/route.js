@@ -39,7 +39,8 @@ export async function GET(req) {
   if (req.headers.get('if-none-match') === etag) {
     return new NextResponse(null, { status: 304, headers: { ETag: etag } });
   }
-  const out = { parcelas: getParcelas(caja, desde), hasta };
-  if (typeof jugador === 'string' && RE_JUGADOR.test(jugador)) out.yo = estadoJugador(jugador);
+  const quien = typeof jugador === 'string' && RE_JUGADOR.test(jugador) ? jugador : null;
+  const out = { parcelas: getParcelas(caja, desde, quien), hasta };
+  if (quien) out.yo = estadoJugador(quien);
   return NextResponse.json(out, { headers: { ETag: etag, 'Cache-Control': 'no-cache' } });
 }

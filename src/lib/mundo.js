@@ -2,7 +2,8 @@
 // Volumen de escrituras bajo → fichero plano con escritura atómica (tmp +
 // rename), sin dependencias nativas. Solo servidor.
 //
-//   parcelas: { "px/py": { o: dueño, t: último cambio, d: [piezas] } }
+//   parcelas: { "px/py": { o: dueño, t: último cambio, d: [piezas],
+//                          g: [ids a quien les gusta] } }
 //   jugadores: { id: { n: nombre, c: color, p: "px/py" o null, x, y, t } }
 //
 // La presencia (quién está dónde AHORA) va aparte y en memoria: cambia cada
@@ -10,7 +11,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { PARCELA_M, claveParcela } from './parcela';
-import { validaPiezas, limpiaNombre, COLORES, MAX_NOMBRE } from './piezas';
+import { validaPiezas, limpiaNombre, limpiaMensaje, COLORES, MAX_NOMBRE, EMOTES, MENSAJE_MS, EMOTE_MS } from './piezas';
 import { tipoParcela, esPublica, piezasPublicas, RADIO_RESIDENCIAL } from './paisaje';
 
 const DIR = process.env.DATA_DIR || path.join(process.cwd(), '.data');
@@ -19,6 +20,11 @@ const FILE = path.join(DIR, 'mundo.json');
 // cuántas parcelas puede reclamar un jugador. Una, de momento: el mundo se
 // llena de vecinos, no de un solo constructor.
 export const MAX_PARCELAS_POR_JUGADOR = 1;
+
+// Tope de «me gusta» por parcela. Se guardan los ids (no un contador) porque
+// hace falta saber si TÚ ya lo diste, para poder quitarlo; el tope es lo que
+// impide que una parcela famosa se coma el fichero.
+export const MAX_GUSTA = 500;
 
 let cache = null;
 
@@ -85,8 +91,15 @@ function save() {
 // Parcelas dentro de una caja de índices, opcionalmente solo las cambiadas
 // después de `desde`. Una parcela vacía (sin piezas) también se manda: su
 // dueño se pinta en el suelo.
-export function getParcelas(caja, desde) {
-  const ps = load().parcelas;
+//
+// Con `jugador` va además lo que hace falta para el cartel: el NOMBRE del
+// dueño (que si no, una casa es de un id de 24 letras y el mundo parece
+// vacío aunque esté lleno), cuánta gente le ha dado a me gusta y si este
+// jugador es una de ellas. Los ids de quién ha dado a me gusta NO salen del
+// servidor: sale la cuenta.
+export function getParcelas(caja, desde, jugador) {
+  const m = load();
+  const ps = m.parcelas;
   const out = [];
   for (const k of Object.keys(ps)) {
     const e = ps[k];
@@ -95,7 +108,13 @@ export function getParcelas(caja, desde) {
       const [px, py] = k.split('/').map(Number);
       if (px < caja.px0 || px > caja.px1 || py < caja.py0 || py > caja.py1) continue;
     }
-    out.push({ k, o: e.o, t: e.t, d: e.d || [] });
+    const p = { k, o: e.o, t: e.t, d: e.d || [] };
+    if (e.o && e.o !== 'mundo') {
+      p.n = m.jugadores[e.o]?.n || 'Alguien';
+      if (e.g?.length) p.g = e.g.length;
+      if (jugador && e.g?.includes(jugador)) p.mg = 1;
+    }
+    out.push(p);
   }
   return out;
 }
@@ -113,13 +132,17 @@ export function totalParcelas() {
 
 // Reclama una parcela libre. Reglas: no puede ser de nadie, y el jugador no
 // puede tener ya su cupo. Devuelve null si va bien o el motivo.
-export function reclama(clave, jugador) {
+export function reclama(clave, jugador, nombre) {
   const m = load();
   const [px, py] = clave.split('/').map(Number);
   // solo en la zona residencial: ni en el paseo, ni en el río, ni en el campo
   if (tipoParcela(px, py) !== 'residencial') return 'no_residencial';
   if (m.parcelas[clave]) return 'ocupada';
   const j = m.jugadores[jugador] || (m.jugadores[jugador] = { t: Date.now() });
+  // el nombre viene con la petición: la presencia lo persiste cada 20 s, y
+  // hasta entonces el cartel de una casa recién reclamada diría «Alguien»
+  const n = limpiaNombre(nombre);
+  if (n) j.n = n.slice(0, MAX_NOMBRE);
   const suyas = Object.keys(m.parcelas).filter((k) => m.parcelas[k].o === jugador).length;
   if (suyas >= MAX_PARCELAS_POR_JUGADOR) return 'cupo';
   m.parcelas[clave] = { o: jugador, t: Date.now(), d: [] };
@@ -160,10 +183,33 @@ export function abandona(clave, jugador) {
   return null;
 }
 
+// Me gusta a la parcela de otro: se pone y se quita, uno por jugador. Es lo
+// que hace que construir tenga público aunque no coincidáis conectados; por
+// eso se guarda (a diferencia de lo que se dice, que se desvanece). Toca `t`
+// para que el cambio viaje en el delta y lo vean todos.
+export function gusta(clave, jugador) {
+  const m = load();
+  const e = m.parcelas[clave];
+  if (!e || !e.o) return 'sin_reclamar';
+  if (e.o === 'mundo') return 'del_mundo';
+  if (e.o === jugador) return 'propia';
+  const g = e.g || (e.g = []);
+  const i = g.indexOf(jugador);
+  if (i >= 0) g.splice(i, 1);
+  else if (g.length >= MAX_GUSTA) return 'lleno';
+  else g.push(jugador);
+  e.t = Date.now();
+  save();
+  return null;
+}
+
 // --- presencia: quién está dónde ahora mismo (memoria, una instancia) ---
 // El perfil (nombre, color, última posición) sí se persiste, con poca
 // frecuencia, para que al volver aparezcas donde lo dejaste.
-const vivos = new Map(); // id → {n, c, x, y, r, t}
+// Lo que se dice (m: mensaje, e: gesto) vive AQUÍ y solo aquí: en memoria,
+// con su instante, y caduca solo. No se persiste ni se lleva registro; una
+// burbuja que ya no se ve no ha dejado rastro en ningún sitio.
+const vivos = new Map(); // id → {n, c, x, y, r, t, m, mt, e, et}
 const PRESENCIA_VIVA_MS = 12_000;
 const RADIO_VECINOS_M = 400;
 let ultimaPersistencia = 0;
@@ -176,7 +222,27 @@ export function presencia(id, datos) {
   const y = Number(datos.y);
   const r = Number(datos.r) || 0;
   if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
-  vivos.set(id, { n: nombre.slice(0, MAX_NOMBRE), c: color, x, y, r, t: now });
+  // lo dicho se arrastra de un sondeo al siguiente mientras dure: el cliente
+  // manda el mensaje UNA vez y la burbuja sigue viva para quien llegue luego
+  const antes = vivos.get(id);
+  const dicho = limpiaMensaje(datos.m);
+  const gesto = typeof datos.e === 'string' && EMOTES[datos.e] ? datos.e : null;
+  const mio = { n: nombre.slice(0, MAX_NOMBRE), c: color, x, y, r, t: now };
+  if (dicho) {
+    mio.m = dicho;
+    mio.mt = now;
+  } else if (antes?.m && now - antes.mt < MENSAJE_MS) {
+    mio.m = antes.m;
+    mio.mt = antes.mt;
+  }
+  if (gesto) {
+    mio.e = gesto;
+    mio.et = now;
+  } else if (antes?.e && now - antes.et < EMOTE_MS) {
+    mio.e = antes.e;
+    mio.et = antes.et;
+  }
+  vivos.set(id, mio);
 
   const cerca = [];
   for (const [k, v] of vivos) {
@@ -186,7 +252,18 @@ export function presencia(id, datos) {
     }
     if (k === id) continue;
     if (Math.hypot(v.x - x, v.y - y) > RADIO_VECINOS_M) continue;
-    cerca.push({ id: k, n: v.n, c: v.c, x: v.x, y: v.y, r: v.r });
+    const d = { id: k, n: v.n, c: v.c, x: v.x, y: v.y, r: v.r };
+    // el instante va con el dato: es lo que deja al cliente distinguir un
+    // gesto nuevo de el mismo gesto repetido en tres sondeos seguidos
+    if (v.m && now - v.mt < MENSAJE_MS) {
+      d.m = v.m;
+      d.mt = v.mt;
+    }
+    if (v.e && now - v.et < EMOTE_MS) {
+      d.e = v.e;
+      d.et = v.et;
+    }
+    cerca.push(d);
   }
 
   // el perfil se guarda como mucho cada 20 s por proceso: es lo que hace
@@ -207,13 +284,20 @@ export function presencia(id, datos) {
   return { cerca, conectados: vivos.size };
 }
 
-// Dónde dejó su avatar este jugador y cuál es su parcela (o null: aparece en
-// la plaza y no tiene ninguna)
+// Dónde dejó su avatar este jugador, cuál es su parcela (o null: aparece en
+// la plaza y no tiene ninguna) y a cuánta gente le gusta: eso último se
+// manda estés donde estés, para poder avisarte al volver de que mientras no
+// estabas alguien pasó por tu casa.
 export function estadoJugador(id) {
   const m = load();
   const j = m.jugadores[id];
   let p = null;
-  for (const k of Object.keys(m.parcelas)) if (m.parcelas[k].o === id) p = k;
-  if (!j || !Number.isFinite(j.x) || !Number.isFinite(j.y)) return { x: null, y: null, p };
-  return { x: j.x, y: j.y, p };
+  let g = 0;
+  for (const k of Object.keys(m.parcelas)) {
+    if (m.parcelas[k].o !== id) continue;
+    p = k;
+    g = m.parcelas[k].g?.length || 0;
+  }
+  if (!j || !Number.isFinite(j.x) || !Number.isFinite(j.y)) return { x: null, y: null, p, g };
+  return { x: j.x, y: j.y, p, g };
 }
