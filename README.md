@@ -104,6 +104,29 @@ servidor solo guarda qué hay en cada parcela y quién anda cerca.
   **No se guarda nada**: ni en disco ni en un registro; la burbuja se
   desvanece y ahí se acaba. El texto entra acotado (80 caracteres, sin
   caracteres de control) y se pinta con `textContent`, nunca como marcado.
+- **Silenciar y reportar**: tocando «N personas en el mundo» se abre la hoja
+  de **vecinos**, con quien anda cerca y a qué distancia. **Silenciar** es lo
+  primero que protege a alguien y no necesita ni servidor ni cuentas: es tu
+  decisión sobre tu pantalla, vive en tu dispositivo (`localStorage`) y a un
+  silenciado dejas de verle lo que dice, sus gestos y **su nombre**, que
+  también puede ser el problema (en su cabeza y en el cartel de su parcela
+  pone «silenciado»). **Reportar** no expulsa a nadie: deja constancia en
+  `DATA_DIR/reportes.json` para que una persona lo mire, con quién reporta, a
+  quién, dónde y **qué estaba diciendo según el servidor** —no según quien
+  reporta, que si no el reporte se podría inventar—. Viaja montado en el POST
+  de presencia y no en una ruta propia, que es lo que se probó primero y no
+  funcionaba: la presencia vive en memoria y en Next cada ruta puede acabar
+  con **su copia del módulo**, así que `/api/reporte` miraba un mapa vacío y
+  todos los reportes salían sin lo que la persona había dicho. Esa memoria
+  solo es de fiar en la ruta que la escribe. Tope de 500, los viejos
+  se caen: es una bandeja de entrada, no un archivo. La única palanca del
+  moderador, mientras no haya cuentas, es la variable de entorno
+  `BLOQUEADOS=id1,id2`: quien está ahí no sale en la presencia de nadie, no
+  ve a nadie y no puede reclamar ni construir, y no se le dice que lo está
+  (si se le dijera, lo primero que haría es volver con otro id). No es una
+  expulsión de verdad —se vacía el `localStorage` y se vuelve—, pero cuesta
+  algo. **Las cuentas son lo que falta** para que esto sea moderación de
+  verdad.
 - **Presencia**: cada 1,5 s el cliente manda su posición a `POST
   /api/presencia` y recibe a quien esté a menos de 400 m. Los demás se
   interpolan hacia su última posición conocida, así que se les ve andar y no
@@ -171,7 +194,8 @@ servidor solo guarda qué hay en cada parcela y quién anda cerca.
   sondeo anterior (delta, con `ETag`). `POST /api/parcela` reclama, guarda
   las piezas (entero, con retardo de 900 ms: un POST por ráfaga de toques) o
   abandona. Almacén JSON en `DATA_DIR` (`src/lib/mundo.js`), escritura
-  atómica, volumen persistente en Coolify. Cuando crezca, SQLite.
+  atómica, volumen persistente en Coolify. Al lado, `reportes.json` con la
+  bandeja del moderador. Cuando crezca, SQLite.
 - **Identidad**: un id anónimo por dispositivo, con nombre y color, en
   `localStorage` (`src/lib/jugador.js`). **No es una cuenta** y se puede
   falsificar; las cuentas son el siguiente paso, esto es la mecánica de juego
@@ -216,7 +240,10 @@ npm run vistas -- --solo casa-de-muestra  # una sola vista
 
 `npm run prueba` es la otra mitad: dos jugadores de verdad en dos pestañas
 (Ana y Bea) que se presentan, andan, se ven, **se hablan** (Ana dice algo y
-hace un gesto, y se comprueba que a Bea le llegan), reclaman un solar,
+hace un gesto, y se comprueba que a Bea le llegan), **se silencian** (Bea
+silencia a Ana y la reporta, y se comprueba que deja de verle el nombre y lo
+que dice, y que el reporte queda guardado con lo que Ana decía), reclaman un
+solar,
 construyen, comprueban que el otro lo ve y que el servidor lo guardó, y Bea
 entra en la parcela de Ana, ve de quién es y le da a me gusta. Deja capturas de
 cada paso en `OUT` (por defecto, el directorio actual).
@@ -237,7 +264,9 @@ se baje otro.
 ## Hoja de ruta
 
 1. ✅ Mundo, avatar, presencia por sondeo, parcelas y construcción con piezas
-2. Cuentas de usuario (la propiedad de las parcelas de verdad), moderación
+2. Cuentas de usuario: la propiedad de las parcelas de verdad, y lo que
+   convierte silenciar y bloquear en moderación de verdad (hoy el id es del
+   dispositivo y se puede falsificar)
 3. WebSockets para la presencia (hablar ya va por el sondeo), y con ellos
    silenciar y reportar, que es lo que pide el texto libre cuando hay gente
 4. Más piezas, piezas apilables (plantas), interiores

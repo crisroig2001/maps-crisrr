@@ -17,7 +17,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { PARCELA_M, parcelaDe, claveParcela, parseParcela, centroParcela } from '../lib/parcela';
 import { PIEZAS, CATEGORIAS, COLORES, PELOS, PIELES, MAX_PIEZAS, MAX_NOMBRE, MAX_MENSAJE, MENSAJE_MS, EMOTES, limpiaMensaje } from '../lib/piezas';
-import { perfil, guardaPerfil, gustaVisto, guardaGustaVisto } from '../lib/jugador';
+import { perfil, guardaPerfil, gustaVisto, guardaGustaVisto, silenciados, silencia, quitaSilencio } from '../lib/jugador';
 import { tipoParcela, conSuelo, cauce, distRio, rioEsteX as rioEsteXEnEscena, rioSurY as rioSurYEnEscena, GLSL_CAUCE, RIO_ANCHO, NIVEL_AGUA, LECHO, BANDA_AGUA } from '../lib/paisaje';
 const LECHO_G = LECHO.toFixed(1);
 
@@ -508,6 +508,8 @@ export default function Mundo() {
   const [peloElegido, setPeloElegido] = useState(0);
   const [pielElegido, setPielElegido] = useState(0);
   const [editando, setEditando] = useState(false); // la misma hoja, ya presentado
+  const [panelVecinos, setPanelVecinos] = useState(false);
+  const [vecinos, setVecinos] = useState({ cerca: [], callados: [] });
   const [conectados, setConectados] = useState(1);
   // dónde está el avatar: {clave, dueno, mia, libre, n}
   const [donde, setDonde] = useState(null);
@@ -524,6 +526,14 @@ export default function Mundo() {
   const [tactil, setTactil] = useState(false);
   const joyRef = useRef(null);
   const joyKnobRef = useRef(null);
+
+  // La hoja de vecinos se refresca mientras está abierta: la gente anda, y
+  // una lista de distancias congelada engaña.
+  useEffect(() => {
+    if (!panelVecinos) return;
+    const t = setInterval(() => setVecinos(engineRef.current?.vecinos() || { cerca: [], callados: [] }), 1500);
+    return () => clearInterval(t);
+  }, [panelVecinos]);
 
   function avisa(msg) {
     setToast({ msg, on: true });
@@ -1440,6 +1450,11 @@ export default function Mundo() {
     }
 
     // --- otros jugadores ---
+    // A quién has silenciado. Vive en este dispositivo y no se le dice a
+    // nadie: es tu decisión sobre tu pantalla, no un castigo (eso es
+    // reportar). De un silenciado no se pinta ni lo que dice, ni sus gestos,
+    // ni su nombre, que también puede ser el problema.
+    const callados = new Set(Object.keys(silenciados()));
     const otros = new Map(); // id → {figura, o: {x, y, h, rumbo, ...}, objetivo, nombre, color, visto}
     const nodos = new Map(); // id → <div> del nombre
     function creaOtro(id, datos) {
@@ -1564,9 +1579,10 @@ export default function Mundo() {
             el._i.style.background = col;
             el._col = col;
           }
-          if (el._txt !== pc.n) {
-            el._b.textContent = pc.n;
-            el._txt = pc.n;
+          const nombre = callados.has(pc.o) ? 'silenciado' : pc.n;
+          if (el._txt !== nombre) {
+            el._b.textContent = nombre;
+            el._txt = nombre;
           }
           if (el._g._n !== pc.g) {
             el._g.textContent = pc.g ? '❤️ ' + pc.g : '';
@@ -1618,7 +1634,11 @@ export default function Mundo() {
       };
       const yoP = perfil();
       if (yoP.nombre) pinta('yo', yoP.nombre, miDice && Date.now() - miDice.t < MENSAJE_MS ? miDice.txt : null, yo.x, yo.y, yo.h, true);
-      for (const [id, o] of otros) pinta(id, o.nombre, o.dice, o.o.x, o.o.y, o.o.h, false);
+      for (const [id, o] of otros) {
+        const callado = callados.has(id);
+        pinta(id, callado ? 'silenciado' : o.nombre, callado ? null : o.dice, o.o.x, o.o.y, o.o.h, false);
+        nodos.get(id)?.classList.toggle('callado', callado);
+      }
       for (const g of gestos) {
         const o = g.id === 'yo' ? yo : otros.get(g.id)?.o;
         if (!o) {
@@ -2103,7 +2123,25 @@ export default function Mundo() {
     let porDecir = null;
     let porGesticular = null;
     let miDice = null; // lo mío se pinta ya, sin esperar a la respuesta
-    async function mandaPresencia() {
+    let esperaDicho = null;
+    // Lo dicho sale AHORA, o en cuanto se pueda. Si se acaba de sondear se
+    // espera lo que falte con un temporizador y NO con el bucle de dibujo:
+    // una pestaña de fondo se queda sin fotogramas, y lo escrito se quedaba
+    // en la cola sin salir nunca.
+    function sacaLoDicho() {
+      const falta = 600 - (performance.now() - ultimaPresencia);
+      if (falta <= 0) {
+        mandaPresencia();
+        return;
+      }
+      if (!esperaDicho) {
+        esperaDicho = setTimeout(() => {
+          esperaDicho = null;
+          mandaPresencia();
+        }, falta);
+      }
+    }
+    async function mandaPresencia(extra) {
       ultimaPresencia = performance.now();
       const p = perfil();
       if (!p.nombre) return; // hasta que no te presentes, no sales en el mundo
@@ -2115,11 +2153,11 @@ export default function Mundo() {
         const r = await fetch('/api/presencia', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ jugador: p.id, nombre: p.nombre, color: p.color, p: p.pelo, s: p.piel, x: Math.round(yo.x * 10) / 10, y: Math.round(yo.y * 10) / 10, r: Math.round(yo.rumbo * 100) / 100, m: dicho || undefined, e: gesto || undefined }),
+          body: JSON.stringify({ jugador: p.id, nombre: p.nombre, color: p.color, p: p.pelo, s: p.piel, x: Math.round(yo.x * 10) / 10, y: Math.round(yo.y * 10) / 10, r: Math.round(yo.rumbo * 100) / 100, m: dicho || undefined, e: gesto || undefined, ...extra }),
         });
-        if (!r.ok) return;
+        if (!r.ok) return null;
         const j = await r.json();
-        if (!vivo) return;
+        if (!vivo) return null;
         const ahora = Date.now();
         const vistos = new Set();
         for (const d of j.cerca || []) {
@@ -2134,20 +2172,22 @@ export default function Mundo() {
           o.visto = ahora;
           // el instante es lo que distingue «lo ha dicho ahora» de «lo mismo
           // por tercer sondeo»: sin él, un gesto se repetiría tres veces
+          const callado = callados.has(d.id);
           if ((d.mt || 0) !== o.diceT) {
-            o.dice = d.m || null;
+            o.dice = callado ? null : d.m || null;
             o.diceT = d.mt || 0;
             if (o.dice && dichosRef.current) dichosRef.current.textContent = o.nombre + ' dice: ' + o.dice;
           }
           if (d.et && d.et !== o.gestoT) {
             o.gestoT = d.et;
-            lanzaGesto(d.id, d.e);
+            if (!callado) lanzaGesto(d.id, d.e);
           }
         }
         for (const [id, o] of otros) if (!vistos.has(id) && ahora - o.visto > 9000) quitaOtro(id);
         setConectados(j.conectados || 1);
+        return j;
       } catch {
-        /* sin red */
+        return null; // sin red
       }
     }
 
@@ -2174,6 +2214,11 @@ export default function Mundo() {
         return { d: e.radius, pol: e.phi, az: e.theta, ox: controls.target.x - yo.x, oz: controls.target.z + yo.y };
       },
       recentra: () => centraMapa(10, true),
+      // Manda la presencia AHORA. El sondeo normal va con el bucle de
+      // dibujo, y una pestaña de fondo puede quedarse sin fotogramas: con dos
+      // mundos abiertos a la vez (la prueba) el navegador congela la que no
+      // mira nadie y quien está ahí desaparece del mundo para los demás.
+      sondea: () => mandaPresencia(),
       // Qué gesto está haciendo cada cual y cómo le ha quedado el brazo. El
       // GESTO es lo que comprueba la prueba: se pone en cuanto llega por la
       // red y dura segundo y medio, sin depender de que se pinte. El ángulo
@@ -2202,6 +2247,51 @@ export default function Mundo() {
     };
 
     engineRef.current = {
+      // Quién anda cerca (los que caben en el radio de la presencia) y a
+      // quién has silenciado, para la hoja de vecinos.
+      vecinos() {
+        const lista = [...otros.entries()]
+          .map(([id, o]) => ({
+            id,
+            nombre: o.nombre,
+            color: o.color,
+            dist: Math.round(Math.hypot(o.o.x - yo.x, o.o.y - yo.y)),
+            callado: callados.has(id),
+          }))
+          .sort((a, b) => a.dist - b.dist);
+        const guardados = silenciados();
+        return {
+          cerca: lista,
+          // los silenciados que ahora mismo no están a la vista: si no, no
+          // habría forma de volver a escuchar a alguien que se fue
+          callados: Object.keys(guardados)
+            .filter((id) => !otros.has(id))
+            .map((id) => ({ id, nombre: guardados[id] })),
+        };
+      },
+      silenciaA(id, nombre) {
+        silencia(id, nombre);
+        callados.add(id);
+        const o = otros.get(id);
+        if (o) o.dice = null; // lo que estuviera diciendo se va de la pantalla
+        pintaNombres();
+        sincronizaCarteles();
+      },
+      hablaCon(id) {
+        quitaSilencio(id);
+        callados.delete(id);
+        pintaNombres();
+        sincronizaCarteles();
+      },
+      // Reportar no hace nada automáticamente: deja constancia para que una
+      // persona lo mire. Va montado en el sondeo de presencia, que es donde el
+      // servidor tiene viva a esa persona y puede guardar lo que estaba
+      // diciendo (según él, no según quien reporta).
+      async reportaA(id) {
+        const j = await mandaPresencia({ reporta: id });
+        if (!j) return 'red';
+        return j.reporte === 'ok' ? null : j.reporte || 'red';
+      },
       construye(clave, cb) {
         vaciaGuardado();
         acabaArrastre();
@@ -2344,21 +2434,21 @@ export default function Mundo() {
         mandaPresencia();
       },
       // Decir algo: sale en la burbuja propia al momento y viaja en el
-      // siguiente sondeo. Si se acaba de sondear se espera al ciclo (≤1,5 s)
-      // en vez de disparar otro: el servidor limita a 90 peticiones/min y el
-      // sondeo ya gasta 40.
+      // siguiente sondeo, que se adelanta. Si se acaba de sondear se espera
+      // lo que falte en vez de disparar otro seguido: el servidor limita a 90
+      // peticiones por minuto y el sondeo ya gasta 40.
       di(texto) {
         const t = limpiaMensaje(texto);
         if (!t) return;
         porDecir = t;
         miDice = { txt: t, t: Date.now() };
-        if (performance.now() - ultimaPresencia > 600) mandaPresencia();
+        sacaLoDicho();
       },
       gesto(clave) {
         if (!EMOTES[clave]) return;
         porGesticular = clave;
         lanzaGesto('yo', clave);
-        if (performance.now() - ultimaPresencia > 600) mandaPresencia();
+        sacaLoDicho();
       },
     };
 
@@ -2554,6 +2644,7 @@ export default function Mundo() {
       cancelAnimationFrame(raf);
       vaciaGuardado();
       window.removeEventListener('resize', medir);
+      clearTimeout(esperaDicho);
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
       canvas.removeEventListener('pointerdown', onBaja);
@@ -2714,6 +2805,30 @@ export default function Mundo() {
     }
   }
 
+  // --- vecinos: silenciar y reportar ---
+  function refrescaVecinos() {
+    setVecinos(engineRef.current?.vecinos() || { cerca: [], callados: [] });
+  }
+  function abreVecinos() {
+    refrescaVecinos();
+    setPanelVecinos(true);
+  }
+  function onSilencia(v) {
+    engineRef.current?.silenciaA(v.id, v.nombre);
+    refrescaVecinos();
+    avisa('Silenciado. No verás lo que diga ni su nombre');
+  }
+  function onEscucha(v) {
+    engineRef.current?.hablaCon(v.id);
+    refrescaVecinos();
+  }
+  async function onReporta(v) {
+    const err = await engineRef.current?.reportaA(v.id);
+    if (err === 'ya') avisa('Ya lo habías reportado hace poco');
+    else if (err) avisa('No se ha podido enviar el reporte');
+    else avisa('Reportado. Lo mirará una persona; de momento, mejor silénciale');
+  }
+
   async function onGusta() {
     if ((await engineRef.current?.daGusta()) === 'red') avisa('No se ha podido guardar; inténtalo otra vez');
   }
@@ -2800,14 +2915,63 @@ export default function Mundo() {
         </div>
       )}
 
+      {panelVecinos && (
+        <div className="ui velo" onClick={() => setPanelVecinos(false)}>
+          <div className="hoja glass vecinos" onClick={(e) => e.stopPropagation()}>
+            <h2>Quién anda cerca</h2>
+            {vecinos.cerca.length === 0 ? (
+              <p>Ahora mismo no hay nadie a la vista. El mundo es grande: prueba en la plaza.</p>
+            ) : (
+              <ul>
+                {vecinos.cerca.map((v) => (
+                  <li key={v.id}>
+                    <i style={{ background: COLORES[v.color ?? 0] }} />
+                    <b className={v.callado ? 'callado' : ''}>{v.callado ? 'silenciado' : v.nombre}</b>
+                    <small>{v.dist} m</small>
+                    <button className="btn-sec" onClick={() => (v.callado ? onEscucha(v) : onSilencia(v))}>
+                      {v.callado ? 'Escuchar' : 'Silenciar'}
+                    </button>
+                    <button className="btn-sec peligro" onClick={() => onReporta(v)}>
+                      Reportar
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {vecinos.callados.length > 0 && (
+              <>
+                <h3>Silenciados que no están cerca</h3>
+                <ul>
+                  {vecinos.callados.map((v) => (
+                    <li key={v.id}>
+                      <b className="callado">{v.nombre}</b>
+                      <button className="btn-sec" onClick={() => onEscucha(v)}>
+                        Escuchar
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+            <p className="nota">
+              <b>Silenciar</b> es solo para ti y en este dispositivo: dejas de ver lo que dice, sus gestos y su nombre.
+              <b> Reportar</b> deja constancia para que una persona lo mire; no expulsa a nadie por sí solo.
+            </p>
+            <button className="btn-principal" onClick={() => setPanelVecinos(false)}>
+              Cerrar
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="ui cabecera glass">
         <button className="quien" onClick={abreEditor} disabled={!presentado} aria-label="Cambiar tu nombre y tu aspecto" title="Cambiar tu nombre y tu aspecto">
           <i style={{ background: COLORES[yo?.color ?? 0] }} />
           {yo?.nombre || '…'}
         </button>
-        <span className="conectados">
+        <button className="conectados" onClick={abreVecinos} disabled={!presentado} title="Quién anda cerca">
           {conectados} {conectados === 1 ? 'persona' : 'personas'} en el mundo
-        </span>
+        </button>
       </div>
 
       <button className="ui btn-cuad b-info" aria-label="Cómo funciona" onClick={() => setInfoOpen((v) => !v)}>

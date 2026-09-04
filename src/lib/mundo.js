@@ -11,11 +11,28 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { PARCELA_M, claveParcela } from './parcela';
-import { validaPiezas, limpiaNombre, limpiaMensaje, COLORES, PELOS, PIELES, MAX_NOMBRE, EMOTES, MENSAJE_MS, EMOTE_MS } from './piezas';
+import { validaPiezas, limpiaNombre, limpiaMensaje, COLORES, PELOS, PIELES, MAX_NOMBRE, EMOTES, MENSAJE_MS, EMOTE_MS, RE_JUGADOR } from './piezas';
 import { tipoParcela, esPublica, piezasPublicas, RADIO_RESIDENCIAL } from './paisaje';
 
 const DIR = process.env.DATA_DIR || path.join(process.cwd(), '.data');
 const FILE = path.join(DIR, 'mundo.json');
+// Los reportes van en su propio fichero: no son el mundo, y así el moderador
+// los lee (o los borra) sin tocar lo que la gente ha construido.
+const FILE_REPORTES = path.join(DIR, 'reportes.json');
+
+// Ids bloqueados, por variable de entorno (BLOQUEADOS=id1,id2). Sin cuentas
+// esto no es una expulsión de verdad —quien la reciba puede vaciar el
+// localStorage y volver con otro id—, pero cuesta algo y es la única palanca
+// que hay hasta que existan cuentas. Para quien está bloqueado el mundo sigue
+// igual, solo que nadie le ve ni le oye: si le dijéramos que está bloqueado,
+// lo primero que haría es volver con otro id.
+const BLOQUEADOS = new Set(
+  (process.env.BLOQUEADOS || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+);
+export const estaBloqueado = (id) => BLOQUEADOS.has(id);
 
 // cuántas parcelas puede reclamar un jugador. Una, de momento: el mundo se
 // llena de vecinos, no de un solo constructor.
@@ -133,6 +150,7 @@ export function totalParcelas() {
 // Reclama una parcela libre. Reglas: no puede ser de nadie, y el jugador no
 // puede tener ya su cupo. Devuelve null si va bien o el motivo.
 export function reclama(clave, jugador, nombre) {
+  if (BLOQUEADOS.has(jugador)) return 'bloqueado';
   const m = load();
   const [px, py] = clave.split('/').map(Number);
   // solo en la zona residencial: ni en el paseo, ni en el río, ni en el campo
@@ -154,6 +172,7 @@ export function reclama(clave, jugador, nombre) {
 
 // Sustituye las piezas de una parcela. Solo el dueño; nunca las del «mundo».
 export function setPiezas(clave, jugador, lista) {
+  if (BLOQUEADOS.has(jugador)) return 'bloqueado';
   const m = load();
   const e = m.parcelas[clave];
   if (!e) return 'sin_reclamar';
@@ -203,6 +222,73 @@ export function gusta(clave, jugador) {
   return null;
 }
 
+// --- reportes ---
+// Reportar a alguien no le hace nada automáticamente: deja constancia para
+// que una persona lo mire. Lo que dijo lo pone el SERVIDOR, de la presencia
+// viva, no quien reporta: así el reporte no se puede inventar. Sin cuentas
+// esto es lo honesto que se puede ser; lo demás lo decide el moderador
+// mirando el fichero.
+const MAX_REPORTES = 500;
+const REPORTE_REPETIDO_MS = 30 * 60_000;
+let reportes = null;
+
+function cargaReportes() {
+  if (reportes) return reportes;
+  try {
+    const v = JSON.parse(fs.readFileSync(FILE_REPORTES, 'utf8'));
+    reportes = Array.isArray(v) ? v : [];
+  } catch {
+    reportes = []; // aún no hay ninguno
+  }
+  return reportes;
+}
+
+function guardaReportes() {
+  try {
+    fs.mkdirSync(DIR, { recursive: true });
+    const tmp = FILE_REPORTES + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(reportes));
+    fs.renameSync(tmp, FILE_REPORTES);
+  } catch (e) {
+    console.error('reportes save failed', e?.message);
+  }
+}
+
+// {t, de, deNombre, a, aNombre, dijo, x, y}. Devuelve null si va bien, o el
+// motivo: 'a_ti_mismo', 'no_esta' (no hay nadie con ese id ahora mismo) o
+// 'ya' (mismo reporte hace nada).
+//
+// No se exporta: se llama desde presencia(), en este mismo módulo. Tuvo su
+// propia ruta y no funcionaba: la presencia vive en memoria y en Next cada
+// ruta puede acabar con SU copia del módulo, así que /api/reporte miraba un
+// `vivos` vacío y los reportes salían sin lo que la persona dijo. La memoria
+// de la presencia solo es de fiar en la ruta que la escribe.
+function reporta(de, a) {
+  if (de === a) return 'a_ti_mismo';
+  const v = vivos.get(a);
+  const m = load();
+  const nombre = v?.n || m.jugadores[a]?.n;
+  if (!nombre) return 'no_esta';
+  const lista = cargaReportes();
+  const now = Date.now();
+  if (lista.some((r) => r.de === de && r.a === a && now - r.t < REPORTE_REPETIDO_MS)) return 'ya';
+  lista.push({
+    t: now,
+    de,
+    deNombre: vivos.get(de)?.n || m.jugadores[de]?.n || null,
+    a,
+    aNombre: nombre,
+    dijo: v?.m || null, // lo que estaba diciendo, según el servidor
+    x: v ? Math.round(v.x) : null,
+    y: v ? Math.round(v.y) : null,
+  });
+  // los viejos se van cayendo: el fichero es una bandeja de entrada, no un
+  // archivo histórico
+  if (lista.length > MAX_REPORTES) lista.splice(0, lista.length - MAX_REPORTES);
+  guardaReportes();
+  return null;
+}
+
 // --- presencia: quién está dónde ahora mismo (memoria, una instancia) ---
 // El perfil (nombre, color, última posición) sí se persiste, con poca
 // frecuencia, para que al volver aparezcas donde lo dejaste.
@@ -216,6 +302,9 @@ let ultimaPersistencia = 0;
 
 export function presencia(id, datos) {
   const now = Date.now();
+  // a quien está bloqueado no se le registra ni se le cuenta nada de nadie:
+  // anda por un mundo vacío
+  if (BLOQUEADOS.has(id)) return { cerca: [], conectados: vivos.size };
   const nombre = limpiaNombre(datos.nombre) || 'Alguien';
   const indice = (v, n) => (Number.isInteger(v) && v >= 0 && v < n ? v : 0);
   const color = indice(datos.color, COLORES.length);
@@ -284,7 +373,14 @@ export function presencia(id, datos) {
     }
     save();
   }
-  return { cerca, conectados: vivos.size };
+  const salida = { cerca, conectados: vivos.size };
+  // Reportar viaja montado en el sondeo, como lo que se dice: se resuelve
+  // aquí, donde está la presencia viva, y así el reporte puede llevar lo que
+  // el reportado estaba diciendo según el servidor.
+  if (typeof datos.reporta === 'string' && RE_JUGADOR.test(datos.reporta)) {
+    salida.reporte = reporta(id, datos.reporta) || 'ok';
+  }
+  return salida;
 }
 
 // Dónde dejó su avatar este jugador, cuál es su parcela (o null: aparece en

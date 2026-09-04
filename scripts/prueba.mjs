@@ -1,8 +1,10 @@
 // Prueba de extremo a extremo con dos jugadores (npm run prueba, con la app
 // servida en npm run dev): presentación, andar, ver al
-// otro, hablar y que el otro lo lea, reclamar una parcela, construir, que el
-// otro lo vea, y que pueda saber de quién es y darle a me gusta.
+// otro, hablar y que el otro lo lea, silenciar y reportar, reclamar una
+// parcela, construir, que el otro lo vea, y que pueda saber de quién es y
+// darle a me gusta.
 import { chromium } from 'playwright';
+import fs from 'node:fs';
 import path from 'node:path';
 
 const OUT = process.env.OUT || '.';
@@ -51,6 +53,10 @@ await ana.screenshot({ path: path.join(OUT, 'm2-andando.png') });
 // segundo jugador, en la misma plaza
 const bea = await abre('Bea', 4);
 await bea.waitForTimeout(3500); // dos sondeos de presencia
+// los rótulos también son DOM del bucle de dibujo: se espera a que estén
+await bea
+  .waitForFunction(() => [...document.querySelectorAll('#rotulos .rotulo')].filter((e) => e.style.display !== 'none').length >= 2, null, { timeout: 15000, polling: 300 })
+  .catch(() => {});
 const nombresBea = await bea.$$eval('#rotulos .rotulo b', (els) => els.filter((e) => e.parentElement.style.display !== 'none').map((e) => e.textContent));
 console.log('Bea ve los nombres:', nombresBea);
 await bea.screenshot({ path: path.join(OUT, 'm3-bea-ve-a-ana.png') });
@@ -92,6 +98,11 @@ const [enAna, enBea] = await Promise.all([
   esperaGesto(bea, 'Ana'),
   bea.waitForSelector('#rotulos .gesto', { state: 'attached', timeout: 10000 }).catch(() => (gesto = false)),
 ]);
+// la burbuja es DOM y se pinta en el bucle de dibujo: hay que esperar a que
+// haya un fotograma, que con render por software tarda
+await bea
+  .waitForFunction(() => [...document.querySelectorAll('#rotulos .rotulo .dice')].some((e) => !e.hidden), null, { timeout: 15000, polling: 300 })
+  .catch(() => {});
 const dice = await bea.$$eval('#rotulos .rotulo .dice', (els) => els.filter((e) => !e.hidden).map((e) => e.textContent));
 console.log('Bea lee la burbuja:', dice.length ? dice : 'NINGUNA', '| emoji:', gesto ? 'sí' : 'NO LLEGA');
 console.log('Ana saluda:', enAna.gesto || 'NO SE MUEVE', '(brazo', enAna.brazo + ')', '| Bea lo ve:', enBea.gesto || 'NO LO VE', '(brazo', enBea.brazo + ')');
@@ -102,6 +113,39 @@ for (const [n, pg] of [['Ana', ana], ['Bea', bea]]) {
 }
 console.log('aspecto:', aspectos);
 await bea.screenshot({ path: path.join(OUT, 'm3b-bea-lee-a-ana.png') });
+
+// Silenciar y reportar. Bea abre la hoja de vecinos, silencia a Ana y la
+// reporta; luego Ana dice otra cosa y a Bea no le tiene que llegar ni el
+// texto ni el nombre. El reporte guarda lo que Ana estaba diciendo SEGÚN EL
+// SERVIDOR, que es lo que hace que no se pueda inventar.
+await pulsa(bea, '.cabecera .conectados');
+await bea.waitForSelector('.vecinos li', { state: 'attached', timeout: 15000 });
+console.log('Bea, en la hoja de vecinos:', (await bea.textContent('.vecinos li')).trim());
+await pulsa(bea, '.vecinos li .btn-sec');
+await bea.waitForTimeout(400);
+await ana.$eval('.chat .decir input', (i) => (i.value = 'esto ya no lo lee Bea'));
+await pulsa(ana, '.chat .decir button[type=submit]');
+// se fuerza el sondeo de Ana: su pestaña está de fondo y el navegador puede
+// dejarla sin fotogramas, que es lo que mueve el sondeo normal
+await ana.evaluate(() => window.__mundo.sondea());
+await bea.waitForTimeout(2500); // que le llegue al servidor y Bea sondee
+await pulsa(bea, '.vecinos li .btn-sec.peligro');
+await bea.waitForTimeout(1000);
+console.log('tras reportar:', (await bea.textContent('.toast')).trim());
+await bea.screenshot({ path: path.join(OUT, 'm3c-bea-silencia-a-ana.png') });
+await pulsa(bea, '.vecinos .btn-principal');
+await bea.waitForTimeout(2500);
+const burbujas = await bea.$$eval('#rotulos .rotulo .dice', (els) => els.filter((e) => !e.hidden).map((e) => e.textContent));
+const rotulos = await bea.$$eval('#rotulos .rotulo b', (els) => els.map((e) => e.textContent));
+console.log('Bea, con Ana silenciada: burbujas', burbujas.length ? burbujas : 'ninguna', '| rótulos', rotulos);
+let reporte = null;
+try {
+  const rs = JSON.parse(fs.readFileSync(path.join(process.env.DATA_DIR || '.data', 'reportes.json'), 'utf8'));
+  reporte = rs[rs.length - 1];
+} catch {
+  /* no hay fichero: no se guardó */
+}
+console.log('reporte guardado:', reporte ? `${reporte.deNombre} → ${reporte.aNombre}, dijo «${reporte.dijo}»` : 'NINGUNO');
 await pulsa(ana, '.chat .decir button[aria-label="Cerrar"]');
 
 // el teclado mueve: un par de segundos hacia el oeste y la x baja
