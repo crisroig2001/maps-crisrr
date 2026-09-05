@@ -204,7 +204,7 @@ function conAltura(mat, { tinta = false, viento = false, normales = false, nubes
     sh.uniforms.tNubes = uNubes;
     sh.uniforms.uAvatar = uAvatar;
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\n' + GLSL_ALTURA + '\nuniform float tiempo;\nuniform vec3 uAvatar;\nvarying float vAltura;\nvarying vec2 vMundoXZ;')
+      .replace('#include <common>', '#include <common>\n' + GLSL_ALTURA + '\nuniform float tiempo;\nuniform vec3 uAvatar;\nvarying float vAltura;\nvarying vec2 vMundoXZ;' + (viento ? '\nvarying float vMata;' : ''))
       .replace(
         '#include <beginnormal_vertex>',
         `#include <beginnormal_vertex>
@@ -246,7 +246,19 @@ function conAltura(mat, { tinta = false, viento = false, normales = false, nubes
         vMundoXZ = wpos.xz;
         ${
           viento
-            ? `transformed.x += sin(tiempo * 1.6 + wpos.x * 0.35 + wpos.z * 0.21) * 0.16 * position.y;
+            ? `#ifdef USE_INSTANCING
+                 vec3 oMata = (modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+               #else
+                 vec3 oMata = (modelMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+               #endif
+               vMata = fract(sin(dot(floor(oMata.xz * 8.0), vec2(12.9898, 78.233))) * 43758.545);
+               // A la mitad de las matas se les da la vuelta a la textura. La
+               // mata es SIEMPRE el mismo dibujo de 27 hojas, así que un prado
+               // era el mismo sello estampado mil veces: el giro por instancia
+               // no lo disimula, porque una mata girada 180° sigue siendo la
+               // misma silueta. Espejarla cuesta una resta y dobla la variedad.
+               if (vMata > 0.5) vMapUv.x = 1.0 - vMapUv.x;
+               transformed.x += sin(tiempo * 1.6 + wpos.x * 0.35 + wpos.z * 0.21) * 0.16 * position.y;
                transformed.z += cos(tiempo * 1.3 + wpos.x * 0.17 - wpos.z * 0.3) * 0.08 * position.y;
                vec2 dAv = wpos.xz - uAvatar.xz;
                float lAv = length(dAv);
@@ -268,12 +280,34 @@ function conAltura(mat, { tinta = false, viento = false, normales = false, nubes
     sh.fragmentShader = sh.fragmentShader
       .replace(
         '#include <common>',
-        '#include <common>\nuniform float tiempo;\nuniform sampler2D tNubes;\nvarying float vAltura;\nvarying vec2 vMundoXZ;' + (cesped || rio || piedra ? GLSL_RUIDO : '') + (tinta || rio ? GLSL_CAUCE : '')
+        '#include <common>\nuniform float tiempo;\nuniform sampler2D tNubes;\nvarying float vAltura;\nvarying vec2 vMundoXZ;' + (viento ? '\nvarying float vMata;' : '') + (cesped || rio || piedra ? GLSL_RUIDO : '') + (tinta || rio ? GLSL_CAUCE : '')
       )
       // la hierba es de doble cara y three le da la vuelta a la normal en
       // la cara trasera: la mitad de cada mata salía a oscuras. La normal
       // se queda mirando arriba, se vea por donde se vea.
       .replace('#include <normal_fragment_begin>', '#include <normal_fragment_begin>' + (viento ? '\nnormal = normalize(vNormal);' : ''))
+      // El filo de la hoja, suavizado por la GPU. El alphaTest recorta a
+      // tijera —o el píxel está o no está— y el MSAA del lienzo no lo
+      // arregla, porque el multisample solo ve los bordes de la GEOMETRÍA, y
+      // el borde de una hoja está dentro de un quad. Con `alphaToCoverage` la
+      // alfa pasa a ser la máscara de cobertura del propio MSAA, y ahí sí se
+      // suaviza sin ordenar transparencias ni un pase más.
+      // La fórmula NO es la que trae three (un smoothstep de alphaTest a
+      // alphaTest + fwidth): esa reparte el medio tono por TODA la hoja
+      // cuando la hoja mide cuatro píxeles, y además la adelgaza, que es lo
+      // que escarchaba las puntas y dejaba el prado con brillos blancos.
+      // Esta convierte la alfa en DISTANCIA AL BORDE en píxeles y la recorta:
+      // la hoja conserva su grosor y solo el píxel del filo queda a medias.
+      .replace(
+        '#include <alphatest_fragment>',
+        viento && mat.alphaToCoverage
+          ? `#ifdef USE_ALPHATEST
+               float aBorde = (diffuseColor.a - alphaTest) / max(fwidth(diffuseColor.a), 1e-5) + 0.5;
+               diffuseColor.a = clamp(aBorde, 0.0, 1.0);
+               if (diffuseColor.a <= 0.0) discard;
+             #endif`
+          : '#include <alphatest_fragment>'
+      )
       .replace(
         '#include <color_fragment>',
         `#include <color_fragment>
@@ -350,7 +384,17 @@ function conAltura(mat, { tinta = false, viento = false, normales = false, nubes
           // mismo problema de contacto que las piezas, multiplicado por mil,
           // y son tres instrucciones. `vMapUv` y no `vUv`: desde r152 cada
           // mapa lleva su varying, y este material tiene `map`.
-          pie ? 'diffuseColor.rgb *= mix(0.55, 1.0, smoothstep(0.0, 0.45, vMapUv.y));' : ''
+          pie
+            ? `diffuseColor.rgb *= mix(0.55, 1.0, smoothstep(0.0, 0.45, vMapUv.y));
+               // Y su verde. Las copas ya lo tenían; la hierba no, así que
+               // mil matas del mismo verde exacto se leían como un sello
+               // repetido por mucho que cada una fuera girada y de otro
+               // tamaño. Mismo reparto que las copas: brillo y matiz, unas
+               // hacia el amarillo de sol y otras hacia el verde de sombra.
+               diffuseColor.rgb *= 0.86 + vMata * 0.30;
+               diffuseColor.r *= 0.94 + vMata * 0.15;
+               diffuseColor.b *= 1.08 - vMata * 0.17;`
+            : ''
         }
         ${
           nubes
@@ -362,7 +406,7 @@ function conAltura(mat, { tinta = false, viento = false, normales = false, nubes
       );
     parcheaNiebla(sh);
   };
-  mat.customProgramCacheKey = () => 'altura' + (tinta ? 't' : '') + (viento ? 'v' : '') + (normales ? 'n' : '') + (nubes ? 'c' : '') + (cesped ? 'g' : '') + (pie ? 'p' : '') + (rio ? 'r' : '') + (piedra ? 's' : '');
+  mat.customProgramCacheKey = () => 'altura' + (tinta ? 't' : '') + (viento ? (mat.alphaToCoverage ? 'vc' : 'v') : '') + (normales ? 'n' : '') + (nubes ? 'c' : '') + (cesped ? 'g' : '') + (pie ? 'p' : '') + (rio ? 'r' : '') + (piedra ? 's' : '');
   return mat;
 }
 // Las copas se mecen: un vaivén lento proporcional a la altura sobre el
@@ -937,6 +981,14 @@ export default function Mundo() {
     renderer.shadowMap.needsUpdate = true;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.06;
+    const hayMSAA = (() => {
+      try {
+        const gl = renderer.getContext();
+        return gl.getParameter(gl.SAMPLES) > 1;
+      } catch {
+        return false;
+      }
+    })();
     const params = new URLSearchParams(window.location.search);
     // El banco visual necesita un mundo QUIETO: de `uTiempo` cuelgan la hierba,
     // las copas, las sombras de nube, el agua, los cúmulos y los pájaros, así
@@ -1672,24 +1724,37 @@ export default function Mundo() {
       cv.width = cv.height = S;
       const c = cv.getContext('2d');
       const rnd = prng(3);
-      // Una MATA, no tres briznas sueltas. Con 8 hojas en 64 px la mata salía
-      // como un cardo: tres pinchos separados con el suelo por en medio, y de
-      // lejos ni se veía. Ahora van dos filas —primero las cortas del fondo,
-      // más oscuras, y encima las largas— así que la mata tiene base y se lee
-      // como una macolla incluso a 30 m.
+      // Una MATA de POCAS hojas y ANCHAS, en dos filas: las cortas y oscuras
+      // detrás, las largas y claras delante.
+      // Pocas y anchas a propósito. Con 27 hojas finas la mata era preciosa
+      // parada y de cerca, pero a la distancia a la que se anda cada hoja no
+      // llegaba a un píxel: el suavizado —que es lo correcto— la dejaba
+      // medio transparente, se mezclaba con el verde claro del suelo y el
+      // prado salía lechoso, como con un velo blanco por encima. Ninguna
+      // fórmula arregla eso; lo que hay que hacer es que la hoja no baje del
+      // píxel. Nueve hojas de 26 px sobre 128 aguantan hasta donde la mata
+      // empieza a encogerse, y encima leen como dibujo animado y no como
+      // ruido verde.
+      // La punta va ROMA, no en pico: un pico acaba siempre en subpíxel por
+      // muy gorda que sea la hoja, y es justo donde se veía la escarcha.
       const hoja = (x, alto, ancho, color) => {
-        const inclina = (rnd() - 0.5) * 44;
+        const inclina = (rnd() - 0.5) * 34;
+        const punta = ancho * 0.34;
         c.fillStyle = color;
         c.beginPath();
         c.moveTo(x - ancho, S);
-        c.quadraticCurveTo(x + inclina * 0.4, S - alto * 0.55, x + inclina, S - alto);
-        c.quadraticCurveTo(x + inclina * 0.4 + ancho * 0.7, S - alto * 0.55, x + ancho, S);
+        c.quadraticCurveTo(x + inclina * 0.4 - punta, S - alto * 0.6, x + inclina - punta, S - alto);
+        c.lineTo(x + inclina + punta, S - alto);
+        c.quadraticCurveTo(x + inclina * 0.4 + ancho * 0.6, S - alto * 0.6, x + ancho, S);
         c.fill();
       };
-      // fondo: cortas, apretadas y oscuras — es la sombra de dentro de la mata
-      for (let i = 0; i < 15; i++) hoja(7 + i * 8.2 + rnd() * 4, 30 + rnd() * 26, 9 + rnd() * 4, i % 2 ? '#4a8540' : '#57944a');
-      // delante: las largas, en tres verdes, más claras según suben
-      for (let i = 0; i < 12; i++) hoja(9 + i * 9.8 + rnd() * 5, 58 + rnd() * 52, 8 + rnd() * 4, i % 3 === 0 ? '#63a44e' : i % 3 === 1 ? '#79b95c' : '#8ecb69');
+      // fondo: cortas y oscuras — es la sombra de dentro de la mata
+      for (let i = 0; i < 5; i++) hoja(16 + i * 24 + rnd() * 6, 32 + rnd() * 20, 14 + rnd() * 4, i % 2 ? '#4a7431' : '#54813b');
+      // Delante: las largas, en tres verdes, más claras según suben. Un punto
+      // más oscuras de lo que pide el ojo en la textura: al suavizar el filo,
+      // el píxel del borde se mezcla con el suelo, que es más claro, y la
+      // mata entera sube de valor. Esto lo devuelve a su sitio.
+      for (let i = 0; i < 9; i++) hoja(10 + i * 14 + rnd() * 6, 62 + rnd() * 44, 12 + rnd() * 4, i % 3 === 0 ? '#5f8e3f' : i % 3 === 1 ? '#6e9e4c' : '#7dae59');
       const tex = new THREE.CanvasTexture(cv);
       tex.colorSpace = THREE.SRGBColorSpace;
       tex.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
@@ -1725,6 +1790,13 @@ export default function Mundo() {
       new THREE.MeshToonMaterial({ map: texHierba, alphaTest: 0.5, side: THREE.DoubleSide, gradientMap: rampa }),
       { viento: true, nubes: true, pie: true }
     );
+    // Suavizar el filo con la GPU solo si hay MSAA de verdad: `alphaToCoverage`
+    // convierte la alfa en la máscara de cobertura del multisample, así que
+    // sin muestras no tiene dónde escribir. Un móvil que no dé antialias en
+    // el lienzo se queda con el recorte a tijera de siempre, que es peor pero
+    // es lo que hay; lo que no puede pasar es dejar puesto el filo suavizado
+    // sin cobertura, porque entonces solo engorda la hoja.
+    matHierba.alphaToCoverage = hayMSAA;
     const hierba = new THREE.InstancedMesh(geoHierba, matHierba, MAX_HIERBA);
     hierba.count = 0;
     hierba.frustumCulled = false;
