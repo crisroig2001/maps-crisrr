@@ -21,6 +21,7 @@
 //   zoom            la miniatura deja mucho aire: se recorta al centro
 //   tinte           se pinta del color elegido (solo piezas generadas)
 //   rejilla         se pega a una rejilla de 4 m (caminos, vallas, puentes)
+//   viento          se mece con el aire por encima de 1,5 m (copas)
 //   suelo           es plana y a ras de suelo: la hierba la esquiva
 //   cat             pestaña de la paleta (CATEGORIAS)
 //   solido          radio en metros que el avatar no puede atravesar
@@ -37,11 +38,11 @@ export const PIEZAS = {
   torre: { nombre: 'Torre', icono: '🗼', tinte: true, ancho: 5.6, cat: 'casas', solido: 2.6 },
   tienda: { nombre: 'Tienda', icono: '⛺', glb: 'tienda', mini: true, zoom: true, ancho: 5, cat: 'casas', solido: 2.2 },
   // árboles y plantas (Nature Kit)
-  arbol: { nombre: 'Árbol', icono: '🌳', glb: 'arbol', mini: true, zoom: true, ancho: 5.5, cat: 'naturaleza', solido: 0.6 },
-  roble: { nombre: 'Roble', icono: '🌳', glb: 'roble', mini: true, zoom: true, ancho: 5, cat: 'naturaleza', solido: 0.6 },
-  pino: { nombre: 'Pino', icono: '🌲', glb: 'pino', mini: true, zoom: true, ancho: 2.6, cat: 'naturaleza', solido: 0.5 },
-  palmera: { nombre: 'Palmera', icono: '🌴', glb: 'palmera', mini: true, zoom: true, ancho: 6, cat: 'naturaleza', solido: 0.5 },
-  arbusto: { nombre: 'Arbusto', icono: '🌿', glb: 'arbusto', mini: true, zoom: true, ancho: 2.4, cat: 'naturaleza' },
+  arbol: { nombre: 'Árbol', icono: '🌳', glb: 'arbol', mini: true, zoom: true, ancho: 5.5, viento: true, cat: 'naturaleza', solido: 0.6 },
+  roble: { nombre: 'Roble', icono: '🌳', glb: 'roble', mini: true, zoom: true, ancho: 5, viento: true, cat: 'naturaleza', solido: 0.6 },
+  pino: { nombre: 'Pino', icono: '🌲', glb: 'pino', mini: true, zoom: true, ancho: 2.6, viento: true, cat: 'naturaleza', solido: 0.5 },
+  palmera: { nombre: 'Palmera', icono: '🌴', glb: 'palmera', mini: true, zoom: true, ancho: 6, viento: true, cat: 'naturaleza', solido: 0.5 },
+  arbusto: { nombre: 'Arbusto', icono: '🌿', glb: 'arbusto', mini: true, zoom: true, ancho: 2.4, viento: true, cat: 'naturaleza' },
   flores: { nombre: 'Flores rojas', icono: '🌷', glb: 'flores-rojas', mini: true, zoom: true, ancho: 0.5, cat: 'naturaleza' }, // 0,8 m de alto
   'flores-amarillas': { nombre: 'Flores amarillas', icono: '🌼', glb: 'flores-amarillas', mini: true, zoom: true, ancho: 0.9, cat: 'naturaleza' },
   'flores-moradas': { nombre: 'Flores moradas', icono: '💐', glb: 'flores-moradas', mini: true, zoom: true, ancho: 0.7, cat: 'naturaleza' },

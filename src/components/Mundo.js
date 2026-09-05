@@ -44,7 +44,7 @@ const CIELO_CALIMA = 0xd8eeff;
 const CIELO_NUBES = 0xffe5c4;
 const NIEBLA = 0xd8eeff;
 const NIEBLA_DESDE = 60;
-const NIEBLA_HASTA = 380;
+const NIEBLA_HASTA = 325; // satura antes de los 384 m en que se acaba el plano del suelo
 const SUELO_M = 16 * L; // el plano del suelo que sigue al avatar: 768 m
 const RADIO_PARCELAS = 6; // se piden (2r+1)² parcelas alrededor: 13×13
 
@@ -156,7 +156,12 @@ const GLSL_NIEBLA = `
   vec3 nHSV = rgb2hsv(gl_FragColor.rgb);
   nHSV.z = mix(nHSV.z, 0.88, nieblaF);
   nHSV.y = mix(nHSV.y, 0.12, nieblaF);
-  gl_FragColor.rgb = mix(hsv2rgb(nHSV), fogColor, nieblaF * nieblaF * 0.5);
+  // El 0.5 de antes era un TOPE del 50 %: por lejos que estuviera algo nunca
+  // acababa del color del cielo, así que a 380 m el terreno aterrizaba en
+  // ~(214,231,226) contra una calima de (216,238,255) y quedaba una raya
+  // horizontal de 29 niveles de azul justo donde se corta el plano. El
+  // cuadrado ya evita que lo cercano se lave; el tope sobraba.
+  gl_FragColor.rgb = mix(hsv2rgb(nHSV), fogColor, nieblaF * nieblaF);
 #endif`;
 function parcheaNiebla(sh) {
   sh.fragmentShader = sh.fragmentShader.replace('#include <fog_pars_fragment>', '#include <fog_pars_fragment>\n' + GLSL_HSV).replace('#include <fog_fragment>', GLSL_NIEBLA);
@@ -348,7 +353,7 @@ function prisma(g, n, r, y0, y1, color, r1 = r, cx = 0, cz = 0) {
 // árbol, arbustos, nubes, cabezas. Las normales son las de la esfera, así
 // que la luz recorre la forma en degradado en vez de a cortes.
 const cacheEsferas = new Map();
-function esfera(g, cx, cy, cz, r, color, sy = 1, detalle = 10) {
+function esfera(g, cx, cy, cz, r, color, sy = 1, detalle = 10, colorAbajo = null) {
   const k = detalle;
   let base = cacheEsferas.get(k);
   if (!base) {
@@ -359,7 +364,9 @@ function esfera(g, cx, cy, cz, r, color, sy = 1, detalle = 10) {
   const n = base.getAttribute('normal').array;
   for (let i = 0; i < p.length; i += 3) {
     g.pos.push(cx + p[i] * r, cy + p[i + 1] * r * sy, cz + p[i + 2] * r);
-    vert(g, color, n[i], n[i + 1], n[i + 2]);
+    // con `colorAbajo`, el color va por la ALTURA de la normal: la esfera
+    // sale clara arriba y en sombra abajo sin necesidad de luces
+    vert(g, colorAbajo ? colorAbajo.clone().lerp(color, n[i + 1] * 0.5 + 0.5) : color, n[i], n[i + 1], n[i + 2]);
   }
 }
 // tejado a cuatro aguas sobre un rectángulo: alero en y0, cumbrera (paralela
@@ -462,7 +469,11 @@ function geometriaNube(rnd) {
   const n = 4 + Math.floor(rnd() * 3);
   for (let i = 0; i < n; i++) {
     const r = 6 + rnd() * 7;
-    esfera(g, (i - n / 2) * 8 + rnd() * 4, rnd() * 3, rnd() * 6 - 3, r, i % 2 ? NUBE : NUBE_SOMBRA, 0.55, 8);
+    // Antes el color alternaba por ÍNDICE (i % 2) y salía una salchicha a
+    // franjas a lo largo, aunque el comentario dijera «blancas arriba y
+    // lavanda abajo». Ahora va por la altura de la normal, que es lo que
+    // decía. Y se reparten en volumen, no en fila.
+    esfera(g, (i - n / 2) * 6 + rnd() * 5, rnd() * 3, rnd() * 8 - 4, r, NUBE, 0.55, 8, NUBE_SOMBRA);
   }
   return aGeo(g);
 }
@@ -479,6 +490,33 @@ function colorDueno(id) {
 // referencia es todo verde hierba, con el follaje en la familia del suelo.
 // Así que los verdes azulados del follaje se llevan a ese tono (los demás
 // colores, tal cual).
+// Lo que hace de verdad `acercaVerde` es girar el matiz de todo lo que caiga
+// entre 0,36 y 0,52, y eso tiene dos fallos gordos:
+//   · `stone` está en 0,5208 y SE SALVA POR 0,0008, así que la roca, las
+//     piedras del camino y el pretil del puente se quedan en #b8e2e8, un cian
+//     de hielo: el color más frío de la escena, en el suelo, en un mundo de
+//     tarde de verano y encima peleado con la plaza, que es beige cálido.
+//   · `leafsGreen` (#29c9ab) y `grass` (#2cd8b8) acaban los dos en el MISMO
+//     verde, así que de los cuatro verdes del kit sale uno y medio.
+// La tabla los pone por nombre, en la familia del césped del shader (que va
+// de 84° a 103° de matiz) pero separados entre sí.
+// OJO: `wood` y `woodDark` NO entran. Cada uno aparece con DOS colores
+// distintos en el kit (wood es #e59964 en banco/mesa/maceta y #ff8e62 en
+// cartel/hoguera/puente), así que meterlos aquí QUITARÍA variedad justo
+// donde la hay. Lo que no esté en la tabla sigue pasando por `acercaVerde`.
+const PALETA_KIT = {
+  leafsGreen: '#60c342',   // #29c9ab -> luminancia 0.646 vs 0.646
+  grass: '#7ccb4c',   // #2cd8b8 -> luminancia 0.694 vs 0.695
+  plant: '#60c859',   // #2ed193 -> luminancia 0.666 vs 0.666
+  leafsDark: '#47a938',   // #2ba6aa -> luminancia 0.549 vs 0.550
+  stone: '#e1d9c9',   // #b8e2e8 -> luminancia 0.853 vs 0.853
+  stoneDark: '#bcae96',   // #9ab5ba -> luminancia 0.687 vs 0.689
+};
+// Se gira el MATIZ y se conserva la LUMINANCIA relativa de cada color del kit
+// (0,2126 R + 0,7152 G + 0,0722 B), no su claridad HSL: un turquesa y un verde
+// con la misma L se ven con brillos muy distintos, porque el turquesa suma
+// verde Y azul. Igualando la claridad, el pino —que es `leafsDark` entero— se
+// iba a casi negro.
 function acercaVerde(c) {
   const hsl = {};
   c.getHSL(hsl);
@@ -705,6 +743,7 @@ export default function Mundo() {
         cHorizonte: { value: new THREE.Color(CIELO_HORIZONTE) },
         cCalima: { value: new THREE.Color(CIELO_CALIMA) },
         cNubes: { value: new THREE.Color(CIELO_NUBES) },
+        uSol: { value: SOL },
       },
       vertexShader: `
         varying vec3 vDir;
@@ -719,6 +758,7 @@ export default function Mundo() {
         uniform vec3 cHorizonte;
         uniform vec3 cCalima;
         uniform vec3 cNubes;
+        uniform vec3 uSol;
         varying vec3 vDir;
         float ajusta(float v, float a, float b) { return clamp((v - a) / (b - a), 0.0, 1.0); }
         void main() {
@@ -735,6 +775,17 @@ export default function Mundo() {
           float e = 1.0 - nubes;
           nubes = 1.0 - e * e * e;
           color = mix(color, cNubes, nubes);
+          // El velo del sol. NO un disco: el sol está a 44,1° de altura y el
+          // borde de arriba del encuadre no pasa de 17°, así que un disco o
+          // un halo radial quedan fuera de cuadro SIEMPRE. Lo que sí se ve en
+          // cualquier encuadre alcanzable es el acimut: la mitad suroeste del
+          // horizonte se calienta y la noreste se queda fría, que es la
+          // lectura de tarde. Hasta ahora la cúpula era idéntica en las cuatro
+          // direcciones y el mundo no sabía dónde tenía el sol.
+          float az = dot(normalize(d.xz), normalize(uSol.xz));
+          float velo = pow(max(az, 0.0), 3.0) * (1.0 - ajusta(d.y, 0.0, 0.45)) * 0.22;
+          color = mix(color, vec3(1.0, 0.95, 0.86), velo);
+          color = min(color, vec3(1.0)); // la cúpula no lleva tone mapping: sin esto recortaría plano
           color = mix(color, cCalima, ajusta(d.y, 0.06, -0.04));
           gl_FragColor = vec4(color, 1.0);
           #include <colorspace_fragment>
@@ -807,7 +858,19 @@ export default function Mundo() {
       const d = new Uint8Array(n);
       for (let i = 0; i < n; i++) {
         const t = i / (n - 1);
-        const v = t < 0.53 ? 0.16 : t < 0.9 ? 0.86 : 1.0;
+        // Cuatro escalones y con wrap. El corte de antes estaba en t = 0,53,
+        // que es N·L = 0,06: JUSTO en el terminador y sin envolver, así que
+        // cada esfera del mundo —el avatar son cinco, las copas son esferas,
+        // la torre y la fuente son prismas de doce lados— se partía por la
+        // mitad con un borde recto y duro. El 0,44 mete el wrap (la luz da la
+        // vuelta un poco por detrás del canto) y la franja 0,44..0,56 es el
+        // escalón de media luz que no existía, que es EL rasgo de las rampas
+        // pintadas a mano.
+        // El tercer corte se queda en 0,88 y no en 0,86 a propósito: el suelo
+        // tiene N·L ≈ 0,70, o sea t = 0,85, y con el corte en 0,86 medio
+        // terreno saltaría de escalón y todas las capturas se aclararían de
+        // golpe.
+        const v = t < 0.44 ? 0.18 : t < 0.56 ? 0.46 : t < 0.88 ? 0.88 : 1.0;
         d[i] = Math.round(v * 255);
       }
       const tex = new THREE.DataTexture(d, n, 1, THREE.RedFormat);
@@ -1013,7 +1076,8 @@ export default function Mundo() {
             const col = new Float32Array(n * 3);
             // Kenney exporta los colores de material en sRGB aunque glTF los
             // pide lineales: sin esta conversión todo sale lavado y pálido
-            const c = acercaVerde((m.color || BLANCO).clone()).convertSRGBToLinear();
+            const dePaletaKit = PALETA_KIT[m.name];
+            const c = (dePaletaKit ? new THREE.Color(dePaletaKit) : acercaVerde((m.color || BLANCO).clone())).convertSRGBToLinear();
             for (let i = 0; i < n; i++) {
               col[i * 3] = c.r;
               col[i * 3 + 1] = c.g;
@@ -1026,7 +1090,14 @@ export default function Mundo() {
         }
       });
       const partes = [];
-      if (lisas.length) partes.push({ geo: mergeGeometries(lisas, false), mat: matFijo });
+      // Las copas se mecen. `conViento` ya existía, ya estaba calibrado para
+      // esto (`smoothstep(1.5, 6.0, position.y)`, que es justo la altura de un
+      // árbol) y su propio comentario decía «las copas se mecen», pero
+      // `CON_VIENTO` solo tenía la bandera y el bucle que lo aplicaba se
+      // saltaba todo lo que tuviera `glb`. Un mundo donde la hierba ondea a
+      // los pies y las copas de 8-10 m están clavadas se lee como un decorado.
+      // La sombra se queda quieta, y con 0,18 m de amplitud no se echa de menos.
+      if (lisas.length) partes.push({ geo: mergeGeometries(lisas, false), mat: def.viento ? matFijoViento : matFijo });
       for (const [tex, gs] of conTextura) {
         tex.colorSpace = THREE.SRGBColorSpace;
         partes.push({ geo: mergeGeometries(gs, false), mat: conNiebla(new THREE.MeshToonMaterial({ map: tex, gradientMap: rampa })) });
@@ -1134,10 +1205,20 @@ export default function Mundo() {
     // --- nubes ---
     const rndNubes = prng(11);
     const nubes = [];
-    const matNube = new THREE.MeshBasicMaterial({ vertexColors: true, fog: false, transparent: true, opacity: 0.92 });
+    // `toneMapped: false` porque la cúpula tampoco pasa por ACES: con él el
+    // blanco de la nube caía a 228 mientras los cúmulos pintados de la cúpula
+    // se quedaban en 255, y las dos familias de nube no casaban.
+    // Opacas: las esferas se solapan DENTRO de la misma malla, así que con
+    // `transparent` las circunferencias de intersección se veían como cortes
+    // duros. Y con la niebla puesta (a 110 m de alto, nieblaF ≈ 0,19) no hace
+    // falta desvanecido propio.
+    const matNube = new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: false });
     for (let i = 0; i < 7; i++) {
       const m = new THREE.Mesh(geometriaNube(rndNubes), matNube);
-      m.frustumCulled = false;
+      // Las siete estaban alineadas al mismo eje X y se veía: cada una a su
+      // aire. Y sin `frustumCulled = false`, que eran 7 mallas dibujándose
+      // aunque mirases al suelo; three les calcula la envolvente sola.
+      m.rotation.y = rndNubes() * Math.PI * 2;
       nubes.push({ m, ox: (rndNubes() - 0.5) * 520, oz: (rndNubes() - 0.5) * 520, h: 95 + rndNubes() * 45, v: 1.2 + rndNubes() * 1.4 });
       scene.add(m);
     }
@@ -1279,6 +1360,11 @@ export default function Mundo() {
     const escI = new THREE.Vector3(1, 1, 1);
     const escS = new THREE.Vector3(1, 1, 1);
     const ejeY = new THREE.Vector3(0, 1, 0);
+    // Escala PROPIA para las piezas. `escI` NO se puede tocar: lo comparte el
+    // bucle de los pájaros (`vuelanLosPajaros`), que lo da por hecho a
+    // (1,1,1) y no lo escribe nunca; si `pintaMundo` lo mutara, los pájaros
+    // saldrían escalados en silencio.
+    const escPieza = new THREE.Vector3(1, 1, 1);
     const colorMio = new THREE.Color(0x7fb0ff);
     const cacheColorDueno = new Map();
 
@@ -1328,12 +1414,33 @@ export default function Mundo() {
           if (!par) continue;
           const wx = bx + z.x;
           const wy = by + z.y;
-          if (PIEZAS[z.t]?.solido) solidos.push({ x: wx, y: wy, r: PIEZAS[z.t].solido });
+          const def = PIEZAS[z.t];
+          // Variación por instancia. Un parque son 7-11 árboles clonados
+          // píxel a píxel, mismo ángulo y mismo tamaño, y eso es lo que hace
+          // que un bosque se lea como papel pintado. El giro y la escala
+          // salen de un hash de la POSICIÓN, así que son deterministas: los
+          // mismos datos dan el mismo mundo en todos los clientes, sin tocar
+          // el formato guardado {t,x,y,r,c} ni pedirle nada al servidor.
+          // Solo la naturaleza: una casa, un banco o una mesa se colocan a
+          // propósito, y torcerlos 20° se lee como descuido, no como bosque.
+          // Las de rejilla y las de suelo quedan fuera por definición: tienen
+          // que casar unas con otras.
+          const suelta = def.cat === 'naturaleza' && !def.rejilla && !def.suelo;
+          let giro = (z.r || 0) * (Math.PI / 2);
+          let escala = 1;
+          if (suelta) {
+            const hx = Math.round(wx * 10);
+            const hy = Math.round(wy * 10);
+            giro += (hash2(hx, hy) - 0.5) * 0.78; // ±22°
+            escala = 0.88 + hash2(hy + 7919, hx + 104729) * 0.24; // 0,88..1,12
+          }
+          if (def.solido) solidos.push({ x: wx, y: wy, r: def.solido * escala });
           // un pelín enterrada: en pendiente, mejor que el borde bajo se hunda
           // a que el alto flote
           posI.set(wx, alturaEn(wx, wy) - 0.12, -wy);
-          rotI.setFromAxisAngle(ejeY, (z.r || 0) * (Math.PI / 2));
-          mtx.compose(posI, rotI, escI);
+          rotI.setFromAxisAngle(ejeY, giro);
+          escPieza.set(escala, escala, escala);
+          mtx.compose(posI, rotI, escPieza);
           const i = cont[z.t];
           if (i >= MAX_INST) continue;
           for (const p of par.partes) {
