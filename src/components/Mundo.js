@@ -375,6 +375,27 @@ function conAltura(mat, { tinta = false, viento = false, normales = false, nubes
                float linea = 1.0 - smoothstep(0.022 - wj, 0.022 + wj, junta);
                diffuseColor.rgb *= mix(0.94, 1.05, hash21(floor(lp)));
                diffuseColor.rgb *= 0.96 + 0.09 * ruido(vMundoXZ * 1.6);
+               // Y la escala que faltaba. Lo de arriba varía por LOSA (2,4 m)
+               // y por GRANO (60 cm): las dos se promedian a diez metros, así
+               // que de lejos la plaza volvía a ser un beige liso —y en la
+               // vista de llegada es media pantalla—. El suelo de hierba sí
+               // tiene sus manchas grandes de 19 y 6,5 m; la piedra no tenía
+               // ninguna. Dos octavas anchas (18 y 6 m), y la ancha además
+               // enfría el tono además de bajarlo: una explanada al sol no se
+               // ensucia solo de gris, se apaga por zonas.
+               // La escala importa más que la amplitud: a 18 m de onda sobre
+               // una plaza de 40 m visibles esto salía un DEGRADADO, no una
+               // textura, y a diez metros seguía leyéndose lisa. Las manchas
+               // que se ven son de 8 m; la de 2,6 rompe la fila de losas sin
+               // llegar al grano, que ya está a 60 cm; y la de 20 solo
+               // desnivela el conjunto para que ninguna zona sea «el beige».
+               float manchaL = ruido(vMundoXZ * 0.125);
+               diffuseColor.rgb *= 0.91 + 0.18 * manchaL;
+               diffuseColor.rgb *= 0.95 + 0.10 * ruido(vMundoXZ * 0.38 + 11.0);
+               diffuseColor.rgb *= 0.96 + 0.08 * ruido(vMundoXZ * 0.05 + 41.0);
+               // La zona apagada además se enfría: una explanada al sol no se
+               // ensucia solo de gris.
+               diffuseColor.rgb *= mix(vec3(0.97, 0.985, 1.02), vec3(1.0), manchaL);
                diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.60, 0.55, 0.45), linea * 0.5);`
             : ''
         }
@@ -818,7 +839,29 @@ function prng(seed) {
   };
 }
 function hash2(x, y) {
-  return ((Math.imul(x, 73856093) ^ Math.imul(y, 19349663)) >>> 0) / 4294967296;
+  // El XOR de dos multiplicaciones es un hash ESPACIAL: sirve para repartir
+  // en cubos, no para sacar números independientes. Sin un paso de mezcla al
+  // final, dos celdas vecinas dan casi el mismo valor —medido, la
+  // autocorrelación a paso 1 era 0,90— así que el desvío de la hierba, que
+  // sale de aquí, cambiaba poquísimo de una celda a la siguiente: en vez de
+  // dispersarse, la rejilla entera se desplazaba en bloque y las matas se
+  // leían como HILERAS EN DIAGONAL, un campo arado. Se veía a simple vista en
+  // la casa de muestra y en el parque, y ni ensanchar el desvío a celda y
+  // media lo arreglaba, porque el problema no era cuánto se desplazaba sino
+  // que vecinas se desplazaban IGUAL.
+  // El finalizador de MurmurHash3 (fmix32) son tres multiplicaciones más y
+  // deja la autocorrelación en -0,01. Todo lo que reparte cosas por el mundo
+  // cuelga de aquí —el giro y el tamaño de los árboles, el verde de cada
+  // copa, la fase de respiración— así que todo eso mejora de paso; y como
+  // sigue siendo determinista por posición, el mundo sale igual en todos los
+  // clientes y no toca nada de lo guardado.
+  let h = Math.imul(x, 73856093) ^ Math.imul(y, 19349663);
+  h ^= h >>> 16;
+  h = Math.imul(h, 2246822507);
+  h ^= h >>> 13;
+  h = Math.imul(h, 3266489909);
+  h ^= h >>> 16;
+  return (h >>> 0) / 4294967296;
 }
 // Ruido de valor 2D en JS: el mismo que `ruido()` en GLSL, para repartir
 // cosas por el mundo sin que se vea la rejilla. Un producto de dos senos,
