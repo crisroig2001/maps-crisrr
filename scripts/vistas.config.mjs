@@ -73,10 +73,10 @@ export const VISTAS = [
   },
   {
     id: 'catalogo',
-    desc: 'La hoja de contacto del catálogo: TODAS las piezas a escala real, por categorías, con el avatar al lado. Aquí se ve de un golpe si una pieza está mal escalada o desentona con las demás.',
-    x: 45,
+    desc: 'La hoja de contacto del catálogo: TODAS las piezas a escala real, por categorías, con el avatar al lado. Aquí se ve de un golpe si una pieza está mal escalada o desentona con las demás. El encuadre va con el número de piezas: con la calle son 56 y 8 filas, y con 6 filas se salían por abajo.',
+    x: 52,
     y: -45,
-    d: 118,
+    d: 165,
     pol: 40,
     az: 180,
     extra: 'muestrario=1',
