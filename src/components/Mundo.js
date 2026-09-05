@@ -18,6 +18,7 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { PARCELA_M, parcelaDe, claveParcela, parseParcela, centroParcela } from '../lib/parcela';
 import { PIEZAS, CATEGORIAS, COLORES, PELOS, PIELES, MAX_PIEZAS, MAX_NOMBRE, MAX_MENSAJE, MENSAJE_MS, EMOTES, limpiaMensaje } from '../lib/piezas';
 import { perfil, guardaPerfil, gustaVisto, guardaGustaVisto, silenciados, silencia, quitaSilencio } from '../lib/jugador';
+import { CORRO_MAX, CORRO_CERCA_M, CORRO_AVISO_M } from '../lib/corro';
 import { tipoParcela, conSuelo, cauce, distRio, rioEsteX as rioEsteXEnEscena, rioSurY as rioSurYEnEscena, GLSL_CAUCE, RIO_ANCHO, NIVEL_AGUA, LECHO, BANDA_AGUA } from '../lib/paisaje';
 const LECHO_G = LECHO.toFixed(1);
 
@@ -658,6 +659,13 @@ export default function Mundo() {
   const [editando, setEditando] = useState(false); // la misma hoja, ya presentado
   const [panelVecinos, setPanelVecinos] = useState(false);
   const [vecinos, setVecinos] = useState({ cerca: [], callados: [] });
+  // --- el corro: con quién estás hablando ---
+  // {k, a: anfitrión, ab: abierto, m: [{id, n}]} o null si andas suelto
+  const [corro, setCorro] = useState(null);
+  const [invitaciones, setInvitaciones] = useState([]); // quién quiere hablar contigo
+  const [llamadas, setLlamadas] = useState([]); // quién llama a la puerta de TU corro
+  // la ficha de alguien a quien has tocado en el mundo: {id, nombre, dist, ...}
+  const [ficha, setFicha] = useState(null);
   const [conectados, setConectados] = useState(1);
   // dónde está el avatar: {clave, dueno, mia, libre, n}
   const [donde, setDonde] = useState(null);
@@ -682,6 +690,14 @@ export default function Mundo() {
     const t = setInterval(() => setVecinos(engineRef.current?.vecinos() || { cerca: [], callados: [] }), 1500);
     return () => clearInterval(t);
   }, [panelVecinos]);
+
+  // La ficha de un vecino se refresca como la hoja de vecinos: la distancia
+  // que pone cambia mientras uno de los dos anda, y una congelada engaña.
+  useEffect(() => {
+    if (!ficha) return;
+    const t = setInterval(() => setFicha((f) => (f ? engineRef.current?.fichaDe(f.id) || null : null)), 900);
+    return () => clearInterval(t);
+  }, [ficha?.id]);
 
   function avisa(msg) {
     setToast({ msg, on: true });
@@ -2111,6 +2127,7 @@ export default function Mundo() {
     const nodos = new Map(); // id → <div> del nombre
     function creaOtro(id, datos) {
       const figura = creaFigura(datos.c, datos.p, datos.s);
+      figura.grupo.userData.id = id; // para saber a quién se ha tocado
       scene.add(figura.grupo);
       const o = {
         figura,
@@ -2122,6 +2139,8 @@ export default function Mundo() {
         dice: null, // lo que dice ahora mismo, si dice algo
         diceT: 0, // ... y cuándo lo dijo: distingue lo nuevo de lo repetido
         gestoT: 0,
+        corro: datos.k || null, // en qué corro anda, si anda en uno
+        aparte: false, // habla en su corro: se ve que habla, no lo que dice
         o: { x: datos.x, y: datos.y, h: alturaEn(datos.x, datos.y), rumbo: datos.r, fase: 0, amp: 0, andando: false, faseResp: faseDeId(id) },
         objetivo: { x: datos.x, y: datos.y, rumbo: datos.r },
       };
@@ -2139,6 +2158,296 @@ export default function Mundo() {
       if (el) {
         el.remove();
         nodos.delete(id);
+      }
+    }
+
+    // --- el corro: el círculo en el suelo ---
+    // Que dos personas estén hablando tiene que VERSE en el mundo, no solo en
+    // una lista: un corro se dibuja como un círculo de luz en el suelo que
+    // abarca a los que están dentro, con un aro a los pies de cada uno. Desde
+    // lejos se lee «ahí hay una conversación» antes de meterse en ella, y
+    // desde dentro se ve quién está y quién no.
+    //
+    // El círculo NO tiene un sitio fijo: se calcula en cada fotograma del
+    // centro y la separación de los que se ven, así que se abre cuando entra
+    // alguien y se estrecha cuando el grupo se junta. Como un corro de verdad.
+    let corroMio = null; // {k, a: anfitrión, ab: abierto, m: [{id, n}]}
+    const corrosCerca = new Map(); // k → {a, n, ab, c} de los corros a la vista
+    const llamando = new Set(); // quién llama a la puerta del mío (solo lo sabe el anfitrión)
+    const grupoCorros = new THREE.Group();
+    scene.add(grupoCorros);
+    // Como el marco de parcela: la geometría ya viene tumbada, así el shader
+    // de altura sube la Y del MUNDO y el círculo se ciñe a la colina. Si se
+    // tumbara el mesh (rotation.x), el shader subiría la Y del anillo, que
+    // tras girarla ya no es la vertical, y el círculo saldría escorado.
+    const aroPlano = (r0, r1, n) => {
+      const g = new THREE.RingGeometry(r0, r1, n, r0 > 0 ? 1 : 2);
+      g.rotateX(-Math.PI / 2);
+      return g;
+    };
+    const geoAro = aroPlano(0.88, 1, 72);
+    const geoLuz = aroPlano(0, 1, 48);
+    const geoPie = aroPlano(0.38, 0.58, 26);
+    // El tuyo en azul (el color de lo tuyo en todo el mundo: tu marco, tu
+    // nombre) y los demás en ámbar cálido, que sobre la hierba se lee y no se
+    // confunde con el tuyo.
+    //
+    // Lo de dentro se pinta SUMANDO luz en vez de tapando: un velo de color
+    // sobre la arena de la plaza la deja gris, como una mancha; sumando, el
+    // suelo se aclara y el corro se lee como un claro iluminado lo mismo
+    // sobre la hierba que sobre la losa.
+    const matCorro = (color, opacity, luz) =>
+      conAltura(
+        new THREE.MeshBasicMaterial({
+          color,
+          transparent: true,
+          opacity,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+          blending: luz ? THREE.AdditiveBlending : THREE.NormalBlending,
+        })
+      );
+    const matAro = { mio: matCorro(0x2f6fed, 0.85), otro: matCorro(0xf59027, 0.85) };
+    const matLuz = { mio: matCorro(0x6fa4ff, 0.2, true), otro: matCorro(0xffc46b, 0.2, true) };
+    const corrosVista = new Map(); // k → {grupo, aro, luz, pies: Map(id → Mesh), mio}
+    let firmaCorros = '';
+
+    // Quién anda en cada corro, de los que se ven desde aquí (yo incluido).
+    function genteDeCorros() {
+      const m = new Map();
+      const mete = (k, id) => {
+        if (!k) return;
+        const l = m.get(k) || m.set(k, []).get(k);
+        if (!l.includes(id)) l.push(id);
+      };
+      if (corroMio) mete(corroMio.k, jugador.id);
+      for (const [id, o] of otros) mete(o.corro, id);
+      return m;
+    }
+
+    // Los aros se rehacen solo cuando cambia QUIÉN está en cada corro (entra
+    // alguien, se va, aparece por el horizonte): en el fotograma normal solo
+    // se mueven, que es lo barato.
+    function sincronizaCorros(gente) {
+      const firma = [...gente]
+        .map(([k, ids]) => k + ':' + [...ids].sort().join(','))
+        .sort()
+        .join('|');
+      if (firma === firmaCorros) return;
+      firmaCorros = firma;
+      for (const [k, v] of corrosVista) {
+        if (gente.has(k)) continue;
+        grupoCorros.remove(v.grupo);
+        corrosVista.delete(k);
+      }
+      for (const [k, ids] of gente) {
+        const mio = k === corroMio?.k;
+        let v = corrosVista.get(k);
+        if (v && v.mio !== mio) {
+          grupoCorros.remove(v.grupo);
+          corrosVista.delete(k);
+          v = null;
+        }
+        if (!v) {
+          const grupo = new THREE.Group();
+          const aro = new THREE.Mesh(geoAro, matAro[mio ? 'mio' : 'otro']);
+          const luz = new THREE.Mesh(geoLuz, matLuz[mio ? 'mio' : 'otro']);
+          // sobre el marco de parcela (0,07) y la losa de plaza (0,04): si no,
+          // en la plaza el círculo se pelearía con el suelo
+          aro.position.y = 0.15;
+          luz.position.y = 0.11;
+          for (const m of [aro, luz]) {
+            m.frustumCulled = false;
+            // por encima de la mancha de contacto de los avatares (que va a
+            // 3): los dos son transparentes y sin escribir profundidad, así
+            // que el orden lo tiene que decir alguien
+            m.renderOrder = 4;
+          }
+          grupo.add(luz, aro);
+          grupoCorros.add(grupo);
+          v = { grupo, aro, luz, pies: new Map(), mio };
+          corrosVista.set(k, v);
+        }
+        for (const [id, pie] of v.pies) {
+          if (ids.includes(id)) continue;
+          v.grupo.remove(pie);
+          v.pies.delete(id);
+        }
+        for (const id of ids) {
+          if (v.pies.has(id)) continue;
+          const pie = new THREE.Mesh(geoPie, matAro[mio ? 'mio' : 'otro']);
+          pie.position.y = 0.16; // un pelo sobre el círculo grande: donde se cruzan, no parpadean
+          pie.frustumCulled = false;
+          pie.renderOrder = 4;
+          v.grupo.add(pie);
+          v.pies.set(id, pie);
+        }
+      }
+    }
+
+    // A cuánto estás del corro: al centro de LOS DEMÁS, la misma cuenta que
+    // hace el servidor para sacarte. Sirve para avisar ANTES de que pase.
+    let lejosDelCorro = 0;
+    let avisadoLejos = false;
+    function colocaCorros(tms) {
+      // Lo normal es que no haya ningún corro a la vista, y esto va en CADA
+      // fotograma: antes de montar mapas y firmas se sale por la puerta de
+      // atrás, que es un recorrido por los vecinos sin reservar nada.
+      if (!corroMio && corrosVista.size === 0) {
+        let alguno = false;
+        for (const o of otros.values())
+          if (o.corro) {
+            alguno = true;
+            break;
+          }
+        if (!alguno) return;
+      }
+      const gente = genteDeCorros();
+      sincronizaCorros(gente);
+      // el círculo respira despacio, como una conversación en marcha; el
+      // pulso va en el material, que es compartido: una cuenta para todos
+      const pulso = 0.72 + Math.sin(tms * 0.0026) * 0.16;
+      matAro.mio.opacity = pulso;
+      matAro.otro.opacity = pulso * 0.85;
+      lejosDelCorro = 0;
+      for (const [k, ids] of gente) {
+        const v = corrosVista.get(k);
+        if (!v) continue;
+        let sx = 0;
+        let sy = 0;
+        let n = 0;
+        let sxOtros = 0;
+        let syOtros = 0;
+        let nOtros = 0;
+        for (const id of ids) {
+          const o = id === jugador.id ? yo : otros.get(id)?.o;
+          if (!o) continue;
+          sx += o.x;
+          sy += o.y;
+          n++;
+          if (id !== jugador.id) {
+            sxOtros += o.x;
+            syOtros += o.y;
+            nOtros++;
+          }
+        }
+        // un corro del que no se ve a nadie (todos fuera del radio de la
+        // presencia) no se pinta, pero tampoco se borra: volverá
+        if (!n) {
+          v.grupo.visible = false;
+          continue;
+        }
+        v.grupo.visible = true;
+        const cx = sx / n;
+        const cy = sy / n;
+        let r = 2.4;
+        for (const id of ids) {
+          const o = id === jugador.id ? yo : otros.get(id)?.o;
+          if (o) r = Math.max(r, Math.hypot(o.x - cx, o.y - cy) + 1.6);
+        }
+        v.aro.position.x = cx;
+        v.aro.position.z = -cy;
+        v.aro.scale.set(r, 1, r);
+        v.luz.position.copy(v.aro.position);
+        v.luz.position.y = 0.11;
+        v.luz.scale.set(r, 1, r);
+        for (const [id, pie] of v.pies) {
+          const o = id === jugador.id ? yo : otros.get(id)?.o;
+          pie.visible = !!o;
+          if (!o) continue;
+          pie.position.x = o.x;
+          pie.position.z = -o.y;
+        }
+        if (v.mio && nOtros) lejosDelCorro = Math.hypot(sxOtros / nOtros - yo.x, syOtros / nOtros - yo.y);
+      }
+    }
+
+    // Lo que llega del sondeo sobre el corro. El servidor manda el ESTADO
+    // (quién está dentro, quién espera en la puerta), no los sucesos: los
+    // avisos salen de compararlo con lo que había, que es lo que aguanta un
+    // sondeo perdido sin contar dos veces lo mismo ni quedarse mudo.
+    let invitaPrev = new Set();
+    let llamaPrev = new Set();
+    let corroPrev = '';
+    const mismos = (a, b) => a.size === b.size && [...a].every((x) => b.has(x));
+    const MOTIVOS = {
+      llamando: 'Has llamado a la puerta: espera a que te dejen entrar',
+      lejos: 'Tenéis que estar más cerca para eso',
+      lleno: 'El corro está lleno: caben ' + CORRO_MAX,
+      ya: 'Ya estáis en el mismo corro',
+      no_esta: 'Esa persona ya no anda por aquí',
+      no_hay: 'Ese corro ya no existe',
+      no_estas: 'No estás en ningún corro',
+      no_anfitrion: 'La puerta la abre quien empezó el corro',
+      sin_invitacion: 'Esa invitación ya ha caducado',
+      no_llama: 'Ya no llama a la puerta',
+    };
+    function cuentaAlLector(txt) {
+      if (dichosRef.current) dichosRef.current.textContent = txt;
+    }
+    function llegaCorro(j, pedido) {
+      const antes = corroMio;
+      corroMio = j.corro || null;
+      corrosCerca.clear();
+      for (const c of j.corros || []) corrosCerca.set(c.k, c);
+      // a un silenciado no se le contesta a la puerta: silenciar es dejar de
+      // verle, y una invitación suya es justo lo que no se quiere ver
+      const inv = (j.invita || []).filter((v) => !callados.has(v.de));
+      const llaman = (j.llaman || []).filter((v) => !callados.has(v.de));
+      llamando.clear();
+      for (const v of llaman) llamando.add(v.de);
+
+      // Solo se toca el estado de React cuando ha CAMBIADO algo: el sondeo va
+      // cada 1,5 s y una lista nueva en cada uno repintaría la interfaz
+      // entera cuarenta veces por minuto para nada.
+      const idsInv = new Set(inv.map((v) => v.de));
+      if (!mismos(idsInv, invitaPrev)) {
+        for (const v of inv)
+          if (!invitaPrev.has(v.de)) {
+            avisa(v.n + ' quiere hablar contigo');
+            cuentaAlLector(v.n + ' quiere hablar contigo');
+          }
+        invitaPrev = idsInv;
+        setInvitaciones(inv);
+      }
+      const idsLlaman = new Set(llaman.map((v) => v.de));
+      if (!mismos(idsLlaman, llamaPrev)) {
+        for (const v of llaman)
+          if (!llamaPrev.has(v.de)) {
+            avisa(v.n + ' llama a la puerta del corro');
+            cuentaAlLector(v.n + ' llama a la puerta del corro');
+          }
+        llamaPrev = idsLlaman;
+        setLlamadas(llaman);
+      }
+      const fCorro = corroMio ? corroMio.k + '|' + corroMio.ab + '|' + corroMio.m.map((v) => v.id).join(',') : '';
+      if (fCorro !== corroPrev) {
+        const eranIds = antes ? antes.m.map((v) => v.id) : [];
+        corroPrev = fCorro;
+        setCorro(corroMio);
+        if (corroMio && (!antes || antes.k !== corroMio.k)) {
+          const otrosN = corroMio.m.filter((v) => v.id !== jugador.id).map((v) => v.n);
+          avisa('Estáis de corro: ' + otrosN.join(', ') + '. Lo que digáis no sale de aquí');
+          cuentaAlLector('Estás en un corro con ' + otrosN.join(', '));
+          setChatOpen(true); // lo primero que se querrá hacer es hablar
+        } else if (!corroMio && antes) {
+          // el servidor no dice por qué te has salido: lo sabe el cliente,
+          // que es el que mide cuánto te has alejado
+          const lejos = lejosDelCorro > CORRO_AVISO_M;
+          avisa(lejos ? 'Te has alejado: has salido del corro' : 'Se ha deshecho el corro');
+          cuentaAlLector('Ya no estás en el corro');
+        } else if (corroMio && antes) {
+          for (const v of corroMio.m) if (!eranIds.includes(v.id) && v.id !== jugador.id) avisa(v.n + ' se ha unido al corro');
+          for (const v of antes.m) if (!corroMio.m.some((w) => w.id === v.id)) avisa(v.n + ' ha salido del corro');
+        }
+      }
+      // lo que salga de lo que TÚ has pedido: el servidor manda el motivo y
+      // aquí se dice con palabras, que «no_anfitrion» no se lo lee nadie
+      if (pedido && j.corroR) {
+        if (j.corroR === 'ok') {
+          if (pedido.a === 'invita') avisa('Se lo has pedido: a ver si te contesta');
+          else if (pedido.a === 'echa') avisa('Le has sacado del corro');
+        } else avisa(MOTIVOS[j.corroR] || 'No se ha podido');
       }
     }
 
@@ -2288,8 +2597,18 @@ export default function Mundo() {
       if (yoP.nombre) pinta('yo', yoP.nombre, miDice && Date.now() - miDice.t < MENSAJE_MS ? miDice.txt : null, yo.x, yo.y, yo.h, true);
       for (const [id, o] of otros) {
         const callado = callados.has(id);
-        pinta(id, callado ? 'silenciado' : o.nombre, callado ? null : o.dice, o.o.x, o.o.y, o.o.h, false);
-        nodos.get(id)?.classList.toggle('callado', callado);
+        // Tres burbujas distintas: lo que dice (si lo oyes), el «…» de quien
+        // habla en un corro que no es el tuyo —se ve que habla, no lo que
+        // dice, como al pasar al lado de dos que charlan— y el «✋» de quien
+        // llama a la puerta del tuyo, que solo le sale al anfitrión.
+        const llama = llamando.has(id);
+        const dice = callado ? null : llama ? '✋ quiere entrar' : o.dice || (o.aparte ? '…' : null);
+        pinta(id, callado ? 'silenciado' : o.nombre, dice, o.o.x, o.o.y, o.o.h, false);
+        const el = nodos.get(id);
+        if (!el) continue;
+        el.classList.toggle('callado', callado);
+        el.classList.toggle('aparte', !callado && !llama && !o.dice && o.aparte);
+        el.classList.toggle('llama', llama);
       }
       for (const g of gestos) {
         const o = g.id === 'yo' ? yo : otros.get(g.id)?.o;
@@ -2500,6 +2819,61 @@ export default function Mundo() {
       }
       return null;
     }
+    // A quién se ha tocado. Primero el rayo, que es exacto; y si falla, quien
+    // caiga más cerca en PANTALLA: un avatar a 30 m ocupa cuatro píxeles y un
+    // dedo mide bastante más, así que sin esta segunda pasada tocar a alguien
+    // en el móvil sería imposible. Solo cuenta a los que están cerca de
+    // verdad: si no, un toque en el suelo para andar se comería a un vecino
+    // lejano que pase por delante.
+    const pProy = new THREE.Vector3();
+    function quienBajo(sx, sy) {
+      ndc.set((sx / vpW) * 2 - 1, -(sy / vpH) * 2 + 1);
+      rayo.setFromCamera(ndc, camera);
+      const figuras = [...otros.values()].map((o) => o.figura.grupo);
+      for (const h of rayo.intersectObjects(figuras, true)) {
+        let n = h.object;
+        while (n && !n.userData.id) n = n.parent;
+        if (n?.userData.id) return n.userData.id;
+      }
+      let quien = null;
+      let cerca = 38;
+      for (const [id, o] of otros) {
+        if (Math.hypot(o.o.x - yo.x, o.o.y - yo.y) > 45) continue;
+        pProy.set(o.o.x, o.o.h + ALTO_AVATAR * 0.6, -o.o.y).project(camera);
+        if (pProy.z > 1) continue;
+        const d = Math.hypot((pProy.x * 0.5 + 0.5) * vpW - sx, (-pProy.y * 0.5 + 0.5) * vpH - sy);
+        if (d < cerca) {
+          cerca = d;
+          quien = id;
+        }
+      }
+      return quien;
+    }
+
+    // Lo que hace falta para la ficha de alguien: quién es, a cuánto está y
+    // qué se puede hacer con él (hablarle, llamar a su corro, silenciarle).
+    function fichaDe(id) {
+      const o = otros.get(id);
+      if (!o) return null;
+      const suyo = o.corro ? corrosCerca.get(o.corro) : null;
+      return {
+        id,
+        nombre: o.nombre,
+        color: o.color,
+        dist: Math.round(Math.hypot(o.o.x - yo.x, o.o.y - yo.y)),
+        callado: callados.has(id),
+        corro: o.corro || null,
+        abierto: !!suyo?.ab,
+        cuantos: suyo?.c || 0,
+        conmigo: !!(corroMio && o.corro === corroMio.k),
+        anfitrion: !!(corroMio && corroMio.a === jugador.id),
+        tengoCorro: !!corroMio,
+        // en un corro cerrado la puerta es del anfitrión; en uno abierto,
+        // invita cualquiera de dentro
+        puedoInvitar: !corroMio || !!corroMio.ab || corroMio.a === jugador.id,
+      };
+    }
+
     function onBaja(e) {
       if (e.isPrimary) punteros = 0;
       punteros++;
@@ -2550,8 +2924,19 @@ export default function Mundo() {
       if (Math.hypot(e.clientX - tq.x, e.clientY - tq.y) > 12 || performance.now() - tq.t > 900) return;
       if (obraClave) colocaEn(e.clientX, e.clientY);
       else {
+        // tocar a alguien abre su ficha (hablarle, unirte a su corro,
+        // silenciarle); tocar el suelo, como siempre, lleva andando allí
+        const quien = quienBajo(e.clientX, e.clientY);
+        if (quien) {
+          setFicha(fichaDe(quien));
+          setInfoOpen(false); // la ficha va donde la hoja de «cómo funciona»
+          return;
+        }
         const p = sueloEn(e.clientX, e.clientY);
-        if (p) yo.destino = p;
+        if (p) {
+          yo.destino = p;
+          setFicha(null); // te vas: la ficha de quien mirabas sobra
+        }
       }
     }
     function onCancela() {
@@ -2783,6 +3168,11 @@ export default function Mundo() {
     // siguiente ciclo.
     let porDecir = null;
     let porGesticular = null;
+    // lo del corro (invitar, aceptar, salir…) viaja igual que lo que se dice:
+    // montado en el sondeo, que se adelanta, y sin ruta propia. La presencia
+    // vive en memoria y en Next cada ruta puede acabar con SU copia del
+    // módulo: solo es de fiar en la ruta que la escribe.
+    let porCorro = null;
     let miDice = null; // lo mío se pinta ya, sin esperar a la respuesta
     let esperaDicho = null;
     // Lo dicho sale AHORA, o en cuanto se pueda. Si se acaba de sondear se
@@ -2808,13 +3198,15 @@ export default function Mundo() {
       if (!p.nombre) return; // hasta que no te presentes, no sales en el mundo
       const dicho = porDecir;
       const gesto = porGesticular;
+      const pedido = porCorro;
       porDecir = null;
       porGesticular = null;
+      porCorro = null;
       try {
         const r = await fetch('/api/presencia', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ jugador: p.id, nombre: p.nombre, color: p.color, p: p.pelo, s: p.piel, x: Math.round(yo.x * 10) / 10, y: Math.round(yo.y * 10) / 10, r: Math.round(yo.rumbo * 100) / 100, m: dicho || undefined, e: gesto || undefined, ...extra }),
+          body: JSON.stringify({ jugador: p.id, nombre: p.nombre, color: p.color, p: p.pelo, s: p.piel, x: Math.round(yo.x * 10) / 10, y: Math.round(yo.y * 10) / 10, r: Math.round(yo.rumbo * 100) / 100, m: dicho || undefined, e: gesto || undefined, corro: pedido || undefined, ...extra }),
         });
         if (!r.ok) return null;
         const j = await r.json();
@@ -2831,9 +3223,11 @@ export default function Mundo() {
           if (!o) o = creaOtro(d.id, d);
           o.objetivo = { x: d.x, y: d.y, rumbo: d.r };
           o.visto = ahora;
+          const callado = callados.has(d.id);
+          o.corro = d.k || null;
+          o.aparte = !!d.h && !callado; // habla en su corro: se ve que habla, no lo que dice
           // el instante es lo que distingue «lo ha dicho ahora» de «lo mismo
           // por tercer sondeo»: sin él, un gesto se repetiría tres veces
-          const callado = callados.has(d.id);
           if ((d.mt || 0) !== o.diceT) {
             o.dice = callado ? null : d.m || null;
             o.diceT = d.mt || 0;
@@ -2846,6 +3240,7 @@ export default function Mundo() {
         }
         for (const [id, o] of otros) if (!vistos.has(id) && ahora - o.visto > 9000) quitaOtro(id);
         setConectados(j.conectados || 1);
+        llegaCorro(j, pedido);
         return j;
       } catch {
         return null; // sin red
@@ -2893,12 +3288,19 @@ export default function Mundo() {
         yo: Math.round(avatar.bd.rotation.z * 100) / 100,
         otros: Object.fromEntries([...otros.values()].map((o) => [o.nombre, Math.round(o.figura.bd.rotation.z * 100) / 100])),
       }),
-      // dónde cae en pantalla un punto del mundo (diagnóstico)
-      proyecta: (x, y) => {
-        const v = new THREE.Vector3(x, alturaEn(x, y), -y).project(camera);
+      // dónde cae en pantalla un punto del mundo, opcionalmente a `dy` metros
+      // del suelo (diagnóstico: con dy se apunta al cuerpo de un avatar y no
+      // a sus pies)
+      proyecta: (x, y, dy = 0) => {
+        const v = new THREE.Vector3(x, alturaEn(x, y) + dy, -y).project(camera);
         return { sx: (v.x * 0.5 + 0.5) * vpW, sy: (-v.y * 0.5 + 0.5) * vpH };
       },
       seleccion: () => (seleccion ? { ...seleccion.z } : null),
+      // el corro en el que andas y los que se dibujan en el suelo, para la
+      // prueba de extremo a extremo
+      corro: () => (corroMio ? { k: corroMio.k, anfitrion: corroMio.a, abierto: !!corroMio.ab, m: corroMio.m.map((v) => v.n) } : null),
+      corros: () => [...corrosVista.keys()],
+      quien: (nombre) => [...otros.entries()].find(([, o]) => o.nombre === nombre)?.[0] || null,
       // qué piezas hay bajo un punto de pantalla (diagnóstico)
       bajo: (sx, sy) => {
         ndc.set((sx / vpW) * 2 - 1, -(sy / vpH) * 2 + 1);
@@ -2953,6 +3355,15 @@ export default function Mundo() {
         if (!j) return 'red';
         return j.reporte === 'ok' ? null : j.reporte || 'red';
       },
+      // --- el corro ---
+      // Una sola puerta para todo (invitar, aceptar, llamar, dejar entrar,
+      // salir): lo que se pide viaja montado en el sondeo, con el mismo
+      // formato que entiende el servidor, y la respuesta llega por él.
+      pideCorro(acc) {
+        porCorro = acc;
+        sacaLoDicho();
+      },
+      fichaDe,
       construye(clave, cb) {
         vaciaGuardado();
         acabaArrastre();
@@ -3260,6 +3671,19 @@ export default function Mundo() {
         colocaFigura(o.figura, s);
       }
 
+      // los corros se dibujan DESPUÉS de mover a todo el mundo: el círculo
+      // se calcula de dónde está cada uno ahora, así que se abre y se cierra
+      // solo según se junta o se separa la gente
+      colocaCorros(t);
+      // y se avisa antes de que el servidor te saque: un corro que se rompe
+      // sin decir nada parece un fallo, no una consecuencia de haberte ido
+      if (corroMio && lejosDelCorro > CORRO_AVISO_M) {
+        if (!avisadoLejos) {
+          avisadoLejos = true;
+          avisa('Te estás alejando del corro: vuelve o te saldrás');
+        }
+      } else avisadoLejos = false;
+
       // el suelo sigue al avatar a saltos de parcela: la trama no resbala
       suelo.position.x = Math.round(yo.x / L) * L;
       suelo.position.z = -Math.round(yo.y / L) * L;
@@ -3386,6 +3810,10 @@ export default function Mundo() {
           p.mesh.dispose();
         }
       }
+      geoAro.dispose();
+      geoLuz.dispose();
+      geoPie.dispose();
+      for (const m of [...Object.values(matAro), ...Object.values(matLuz)]) m.dispose();
       for (const nb of nubes) nb.m.geometry.dispose();
       matNube.dispose();
       hierba.dispose();
@@ -3534,17 +3962,59 @@ export default function Mundo() {
   function onSilencia(v) {
     engineRef.current?.silenciaA(v.id, v.nombre);
     refrescaVecinos();
+    if (ficha?.id === v.id) refrescaFicha(v.id);
     avisa('Silenciado. No verás lo que diga ni su nombre');
   }
   function onEscucha(v) {
     engineRef.current?.hablaCon(v.id);
     refrescaVecinos();
+    if (ficha?.id === v.id) refrescaFicha(v.id);
   }
   async function onReporta(v) {
     const err = await engineRef.current?.reportaA(v.id);
     if (err === 'ya') avisa('Ya lo habías reportado hace poco');
     else if (err) avisa('No se ha podido enviar el reporte');
     else avisa('Reportado. Lo mirará una persona; de momento, mejor silénciale');
+  }
+
+  // --- el corro: hablar con quien te encuentres ---
+  // Todo pasa por la misma puerta del motor, que lo manda montado en el
+  // sondeo de presencia; lo que salga de ello llega por el sondeo y lo
+  // cuenta el aviso de abajo.
+  const pideCorro = (acc) => engineRef.current?.pideCorro(acc);
+  const refrescaFicha = (id) => setFicha(engineRef.current?.fichaDe(id) || null);
+  function onHablar(v) {
+    pideCorro({ a: 'invita', q: v.id });
+    setFicha(null);
+  }
+  function onLlamaAlCorro(v) {
+    pideCorro({ a: 'llama', q: v.corro });
+    setFicha(null);
+  }
+  function onAcepta(v) {
+    pideCorro({ a: 'acepta', q: v.de });
+    setInvitaciones((l) => l.filter((x) => x.de !== v.de));
+  }
+  // «Ahora no» quita la tarjeta al momento: el servidor se entera en el
+  // sondeo, pero quien la ha rechazado no tiene por qué seguir viéndola
+  function onAhoraNo(v) {
+    pideCorro({ a: 'no', q: v.de });
+    setInvitaciones((l) => l.filter((x) => x.de !== v.de));
+    setLlamadas((l) => l.filter((x) => x.de !== v.de));
+  }
+  function onAdmite(v) {
+    pideCorro({ a: 'admite', q: v.de });
+    setLlamadas((l) => l.filter((x) => x.de !== v.de));
+  }
+  function onEcha(v) {
+    pideCorro({ a: 'echa', q: v.id });
+    setFicha(null);
+  }
+  function onSaleCorro() {
+    pideCorro({ a: 'sale' });
+  }
+  function onAbreCorro() {
+    pideCorro({ a: 'abre', v: !corro?.ab });
   }
 
   async function onGusta() {
@@ -3727,7 +4197,115 @@ export default function Mundo() {
             <b>Habla con quien te encuentres</b> con el botón 💬: lo que digas sale en una burbuja sobre tu cabeza y lo ve quien esté cerca, y los gestos son de un toque. No se guarda nada: la burbuja se desvanece y ahí acaba.
           </p>
           <p>
+            <b>Para hablar con alguien en concreto, tócale</b> en el mundo: sale su ficha y desde ahí le pides hablar. Si acepta, hacéis un <b>corro</b>: un círculo de luz en el suelo que os rodea a los dos y que ve todo el mundo, para saber que ahí hay una conversación. Lo que se diga dentro solo lo leéis los de dentro; los de fuera ven un «…» sobre vuestras cabezas, no lo que decís.
+          </p>
+          <p>
+            <b>Y si llega alguien más</b>, toca a uno del corro y <b>llama a la puerta</b>: le sale el aviso a quien empezó el corro, que le deja entrar o no. Quien lo empezó puede dejarlo <b>abierto</b>, y entonces se une quien pase. Caben {CORRO_MAX}. Si te alejas más de {CORRO_AVISO_M} m del resto te sales solo, como cuando te vas de una conversación.
+          </p>
+          <p>
             <b>Todo se dibuja en tu GPU.</b> El servidor solo guarda qué hay en cada parcela y quién anda cerca.
+          </p>
+        </div>
+      )}
+
+      {presentado && !obra && (corro || invitaciones.length > 0 || llamadas.length > 0) && (
+        <div className="ui corro-zona">
+          {corro && (
+            <div className="corro-cab glass">
+              <i className="punto" />
+              <b>Corro</b>
+              <span className="gente">{corro.m.map((v) => (v.id === yo?.id ? 'tú' : v.n)).join(' · ')}</span>
+              {corro.a === yo?.id && (
+                <button
+                  className="btn-sec"
+                  onClick={onAbreCorro}
+                  title={corro.ab ? 'Cualquiera que pase puede unirse' : 'Para entrar hay que llamar y que tú abras'}
+                >
+                  {corro.ab ? '🔓 Abierto' : '🔒 Con puerta'}
+                </button>
+              )}
+              <button className="btn-sec" onClick={onSaleCorro}>
+                Salir
+              </button>
+            </div>
+          )}
+          {invitaciones.map((v) => (
+            <div className="aviso glass" key={'i' + v.de}>
+              <span>
+                <b>{v.n}</b> quiere hablar contigo
+              </span>
+              <button className="btn-principal" onClick={() => onAcepta(v)}>
+                Aceptar
+              </button>
+              <button className="btn-sec" onClick={() => onAhoraNo(v)}>
+                Ahora no
+              </button>
+            </div>
+          ))}
+          {llamadas.map((v) => (
+            <div className="aviso glass" key={'l' + v.de}>
+              <span>
+                ✋ <b>{v.n}</b> quiere entrar en el corro
+              </span>
+              <button className="btn-principal" onClick={() => onAdmite(v)}>
+                Dejar entrar
+              </button>
+              <button className="btn-sec" onClick={() => onAhoraNo(v)}>
+                Ahora no
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {presentado && !obra && ficha && (
+        <div className="ui hoja glass ficha">
+          <div className="ficha-cab">
+            <i style={{ background: COLORES[ficha.color ?? 0] }} />
+            <b className={ficha.callado ? 'callado' : ''}>{ficha.callado ? 'silenciado' : ficha.nombre}</b>
+            <button className="cerrar" onClick={() => setFicha(null)} aria-label="Cerrar">
+              ✕
+            </button>
+          </div>
+          <p className="nota">
+            A {ficha.dist} m
+            {ficha.conmigo
+              ? ' · está en tu corro'
+              : ficha.corro
+                ? ficha.abierto
+                  ? ' · en un corro abierto de ' + ficha.cuantos
+                  : ' · en un corro de ' + ficha.cuantos + ', con puerta'
+                : ''}
+          </p>
+          {/* de lejos no se le habla a nadie: el botón se apaga y se dice
+              por qué, en vez de dejar que el servidor conteste que no */}
+          {!ficha.conmigo && !ficha.corro && ficha.puedoInvitar && (
+            <button className="btn-principal ancho" onClick={() => onHablar(ficha)} disabled={ficha.dist > CORRO_CERCA_M}>
+              💬 {ficha.tengoCorro ? 'Invitar a tu corro' : 'Hablar con ' + ficha.nombre}
+            </button>
+          )}
+          {!ficha.conmigo && !ficha.corro && !ficha.puedoInvitar && <p className="nota">Para invitar a alguien, que abra la puerta quien empezó el corro.</p>}
+          {!ficha.conmigo && ficha.corro && (
+            <button className="btn-principal ancho" onClick={() => onLlamaAlCorro(ficha)} disabled={ficha.dist > CORRO_CERCA_M}>
+              {ficha.abierto ? '👋 Unirte a su corro' : '✋ Llamar a su corro'}
+            </button>
+          )}
+          {!ficha.conmigo && ficha.dist > CORRO_CERCA_M && <p className="nota">Está lejos: acércate a menos de {CORRO_CERCA_M} m para hablarle.</p>}
+          {ficha.conmigo && ficha.anfitrion && (
+            <button className="btn-sec peligro ancho" onClick={() => onEcha(ficha)}>
+              Sacarle del corro
+            </button>
+          )}
+          <div className="fila-botones">
+            <button className="btn-sec" onClick={() => (ficha.callado ? onEscucha(ficha) : onSilencia(ficha))}>{ficha.callado ? 'Escuchar' : 'Silenciar'}</button>
+            <button className="btn-sec peligro" onClick={() => onReporta(ficha)}>
+              Reportar
+            </button>
+          </div>
+          <p className="nota">
+            {ficha.corro && !ficha.conmigo
+              ? 'Lo que hablan en su corro no lo lees: se ve que hablan, no lo que dicen.'
+              : 'En un corro solo os leéis los que estáis dentro, y se ve en el suelo quién está hablando con quién.'}
           </p>
         </div>
       )}
@@ -3879,14 +4457,17 @@ export default function Mundo() {
                   </button>
                 ))}
               </div>
+              {/* que se vea SIEMPRE a dónde va lo que escribes: dentro de un
+                  corro, solo a los de dentro */}
+              {corro && <span className="solo-corro glass">🔒 Lo que digas solo lo lee el corro</span>}
               <form className="decir" onSubmit={onDecir}>
                 <input
                   ref={decirRef}
                   type="text"
                   maxLength={MAX_MENSAJE}
-                  placeholder="Di algo…"
+                  placeholder={corro ? 'Di algo al corro…' : 'Di algo…'}
                   autoComplete="off"
-                  aria-label="Lo que dices"
+                  aria-label={corro ? 'Lo que dices al corro' : 'Lo que dices'}
                   onKeyDown={(e) => {
                     if (e.key === 'Escape') {
                       e.currentTarget.blur();

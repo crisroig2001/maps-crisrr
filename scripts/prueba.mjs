@@ -1,6 +1,8 @@
 // Prueba de extremo a extremo con dos jugadores (npm run prueba, con la app
 // servida en npm run dev): presentación, andar, ver al
-// otro, hablar y que el otro lo lea, silenciar y reportar, reclamar una
+// otro, hablar y que el otro lo lea, hacer CORRO (tocar a alguien, pedirle
+// hablar, que acepte, que lo que se digan no lo lea quien pase y que un
+// tercero tenga que llamar a la puerta), silenciar y reportar, reclamar una
 // parcela, construir, que el otro lo vea, y que pueda saber de quién es y
 // darle a me gusta.
 import { chromium } from 'playwright';
@@ -114,14 +116,109 @@ for (const [n, pg] of [['Ana', ana], ['Bea', bea]]) {
 console.log('aspecto:', aspectos);
 await bea.screenshot({ path: path.join(OUT, 'm3b-bea-lee-a-ana.png') });
 
+// EL CORRO: Ana toca a Bea en el mundo, le pide hablar, Bea acepta y a partir
+// de ahí lo que se dicen NO lo lee quien pase. Se comprueba lo que hace que
+// esto sea un corro y no un chat: que las dos lo tengan, que se dibuje el
+// círculo en el suelo, y que un tercero vea que hablan pero no lo que dicen.
+const posBea = await bea.evaluate(() => window.__mundo.pos());
+await ana.evaluate(([x, y]) => window.__mundo.mueve(x, y - 5), [posBea.x, posBea.y]);
+await ana.evaluate(() => window.__mundo.sondea());
+await bea.evaluate(() => window.__mundo.sondea());
+await ana.waitForTimeout(2500);
+// se toca el CUERPO de Bea (a metro y pico del suelo), no sus pies
+const enPantalla = await ana.evaluate(([x, y]) => window.__mundo.proyecta(x, y, 1.1), [posBea.x, posBea.y]);
+await ana.mouse.click(enPantalla.sx, enPantalla.sy);
+await ana.waitForSelector('.ficha', { state: 'attached', timeout: 15000 });
+console.log('ficha que abre Ana al tocar a Bea:', (await ana.textContent('.ficha-cab')).trim(), '|', (await ana.textContent('.ficha .nota')).trim());
+await pulsa(ana, '.ficha .btn-principal.ancho');
+// a Bea le sale la tarjeta de «Ana quiere hablar contigo»
+await bea.waitForSelector('.corro-zona .aviso', { state: 'attached', timeout: 20000 });
+console.log('a Bea le llega:', (await bea.textContent('.corro-zona .aviso')).trim());
+await pulsa(bea, '.corro-zona .aviso .btn-principal');
+const esperaCorro = (pg) =>
+  pg.waitForFunction(() => window.__mundo.corro() !== null, null, { timeout: 20000, polling: 300 }).then(
+    () => true,
+    () => false
+  );
+const [corroAna, corroBea] = [await esperaCorro(ana), await esperaCorro(bea)];
+console.log('corro de Ana:', corroAna ? JSON.stringify(await ana.evaluate(() => window.__mundo.corro())) : 'NINGUNO');
+console.log('corro de Bea:', corroBea ? JSON.stringify(await bea.evaluate(() => window.__mundo.corro())) : 'NINGUNO');
+console.log('círculos dibujados en el suelo:', await ana.evaluate(() => window.__mundo.corros().length), '(Ana)', await bea.evaluate(() => window.__mundo.corros().length), '(Bea)');
+
+// Ana dice algo dentro del corro: Bea lo lee entero...
+await ana.$eval('.chat .decir input', (i) => (i.value = 'esto solo lo lees tú'));
+await pulsa(ana, '.chat .decir button[type=submit]');
+// los dos sondeos se fuerzan: una pestaña de fondo se queda sin fotogramas y
+// el sondeo normal va con el bucle de dibujo
+await ana.evaluate(() => window.__mundo.sondea());
+await bea.waitForTimeout(700);
+await bea.evaluate(() => window.__mundo.sondea());
+await bea
+  .waitForFunction(() => [...document.querySelectorAll('#rotulos .rotulo .dice')].some((e) => !e.hidden && e.textContent.includes('solo lo lees')), null, { timeout: 15000, polling: 300 })
+  .catch(() => {});
+const enCorro = await bea.$$eval('#rotulos .rotulo .dice', (els) => els.filter((e) => !e.hidden).map((e) => e.textContent));
+console.log('Bea, dentro del corro, lee:', enCorro.length ? enCorro : 'NADA');
+
+// ...y un tercero que pasa por al lado ve que habla, pero no lo que dice. Va
+// por la API y no abriendo un tercer mundo: tres escenas con sombras a la vez
+// dejan sin fotogramas al render por software. Mira ANTES de las capturas:
+// una captura con render por software tarda segundos y la burbuja dura nueve.
+const CID = 'cccccccccccccccc';
+const sondeaCid = (extra, donde) =>
+  ana.evaluate(
+    async ([id, x, y, ex]) =>
+      (
+        await fetch('/api/presencia', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ jugador: id, nombre: 'Cid', x, y, r: 0, ...ex }),
+        })
+      ).json(),
+    [CID, donde ? donde[0] : posBea.x + 3, donde ? donde[1] : posBea.y, extra || {}]
+  );
+const deFuera = await sondeaCid();
+const veAna = (deFuera.cerca || []).find((d) => d.n === 'Ana');
+console.log('un tercero ve a Ana:', veAna ? (veAna.m ? 'LE LEE «' + veAna.m + '»' : veAna.h ? 'habla, pero no lo que dice (bien)' : 'callada') : 'NO LA VE');
+console.log('corros que ve el tercero:', JSON.stringify(deFuera.corros || []));
+
+// El tercero llama a la puerta: el aviso le sale a QUIEN EMPEZÓ EL CORRO, que
+// es quien decide. Es lo que hace que un corro tenga puerta.
+const k = (await ana.evaluate(() => window.__mundo.corro()))?.k;
+await ana.screenshot({ path: path.join(OUT, 'm3d-corro.png') });
+await bea.screenshot({ path: path.join(OUT, 'm3e-corro-bea.png') });
+const llamada = await sondeaCid({ corro: { a: 'llama', q: k } });
+console.log('el tercero llama a la puerta:', llamada.corroR);
+await ana.evaluate(() => window.__mundo.sondea());
+await ana.waitForSelector('.corro-zona .aviso', { state: 'attached', timeout: 20000 });
+console.log('a Ana (anfitriona) le sale:', (await ana.textContent('.corro-zona .aviso')).trim());
+await pulsa(ana, '.corro-zona .aviso .btn-principal');
+await ana.waitForTimeout(2000);
+await sondeaCid();
+const trasAdmitir = await ana.evaluate(() => window.__mundo.corro());
+console.log('corro tras dejarle entrar:', trasAdmitir ? trasAdmitir.m.join(', ') : 'NINGUNO');
+await ana.screenshot({ path: path.join(OUT, 'm3f-corro-de-tres.png') });
+
+// y se deshace: el tercero se va lejos (si se queda al lado, es él quien sale
+// en la hoja de vecinos del paso siguiente) y cada una sale del suyo
+await sondeaCid({ corro: { a: 'sale' } }, [900000, 900000]);
+await pulsa(bea, '.corro-cab .btn-sec:has-text("Salir")');
+await pulsa(ana, '.corro-cab .btn-sec:has-text("Salir")');
+await ana.waitForTimeout(2500);
+await bea.evaluate(() => window.__mundo.sondea());
+await bea.waitForTimeout(1500);
+console.log('tras salir: Ana', (await ana.evaluate(() => window.__mundo.corro())) ? 'SIGUE EN EL CORRO' : 'suelta', '| Bea', (await bea.evaluate(() => window.__mundo.corro())) ? 'SIGUE EN EL CORRO' : 'suelta');
+
 // Silenciar y reportar. Bea abre la hoja de vecinos, silencia a Ana y la
 // reporta; luego Ana dice otra cosa y a Bea no le tiene que llegar ni el
 // texto ni el nombre. El reporte guarda lo que Ana estaba diciendo SEGÚN EL
 // SERVIDOR, que es lo que hace que no se pueda inventar.
 await pulsa(bea, '.cabecera .conectados');
-await bea.waitForSelector('.vecinos li', { state: 'attached', timeout: 15000 });
-console.log('Bea, en la hoja de vecinos:', (await bea.textContent('.vecinos li')).trim());
-await pulsa(bea, '.vecinos li .btn-sec');
+// por su NOMBRE y no la primera fila: la lista va por distancia y con alguien
+// más cerca se silenciaría a quien no es
+const filaAna = '.vecinos li:has-text("Ana")';
+await bea.waitForSelector(filaAna, { state: 'attached', timeout: 15000 });
+console.log('Bea, en la hoja de vecinos:', (await bea.textContent(filaAna)).trim());
+await pulsa(bea, filaAna + ' .btn-sec');
 await bea.waitForTimeout(400);
 await ana.$eval('.chat .decir input', (i) => (i.value = 'esto ya no lo lee Bea'));
 await pulsa(ana, '.chat .decir button[type=submit]');
@@ -129,7 +226,9 @@ await pulsa(ana, '.chat .decir button[type=submit]');
 // dejarla sin fotogramas, que es lo que mueve el sondeo normal
 await ana.evaluate(() => window.__mundo.sondea());
 await bea.waitForTimeout(2500); // que le llegue al servidor y Bea sondee
-await pulsa(bea, '.vecinos li .btn-sec.peligro');
+// ya silenciada, su fila pone «silenciado» y no «Ana»: eso es justo lo que
+// se está probando, así que la de reportar se busca por ahí
+await pulsa(bea, '.vecinos li:has-text("silenciado") .btn-sec.peligro');
 await bea.waitForTimeout(1000);
 console.log('tras reportar:', (await bea.textContent('.toast')).trim());
 await bea.screenshot({ path: path.join(OUT, 'm3c-bea-silencia-a-ana.png') });

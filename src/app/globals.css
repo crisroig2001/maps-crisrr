@@ -106,6 +106,29 @@ body {
   border-radius: 0 0 3px 0;
   transform: translateX(-50%) rotate(45deg);
 }
+/* Quien habla en un corro que no es el tuyo: se ve que habla (un «…» que
+   late), no lo que dice. Es lo mismo que pasa al pasar al lado de dos que
+   charlan, y es lo que hace que un corro se note desde fuera. */
+.rotulo.aparte .dice {
+  background: rgba(255, 255, 255, 0.78);
+  color: var(--ink-2);
+  letter-spacing: 2px;
+  padding: 5px 12px;
+  animation: charla 1.6s ease-in-out infinite;
+}
+.rotulo.aparte .dice::after { background: rgba(255, 255, 255, 0.78); }
+@keyframes charla { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
+/* quien llama a la puerta de TU corro: solo lo ves tú, que eres quien abre */
+.rotulo.llama .dice {
+  background: #fff3dd;
+  color: #8a5a12;
+  border: 1px solid rgba(214, 149, 30, 0.35);
+}
+.rotulo.llama .dice::after { background: #fff3dd; }
+@media (prefers-reduced-motion: reduce) {
+  .rotulo.aparte .dice { animation: none; opacity: 0.85; }
+}
+
 /* cartel de parcela: de quién es esa casa y a cuánta gente le gusta, flotando
    sobre ella. El punto lleva el color del marco que la parcela tiene pintado
    en el suelo, así el cartel y el suelo dicen lo mismo. */
@@ -388,6 +411,90 @@ body {
   white-space: nowrap;
 }
 
+/* el corro: la barra de «estás hablando con» y las tarjetas de quien quiere
+   entrar, apiladas bajo la cabecera. Van en el mismo sitio que la cabecera de
+   obras (no se puede construir y estar de corro a la vez) para que arriba en
+   el centro sea siempre «en qué estás». */
+.corro-zona {
+  top: 66px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100vw - 20px);
+}
+.corro-cab {
+  padding: 7px 8px 7px 14px;
+  border-radius: 99px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--ink-2);
+  max-width: 100%;
+}
+.corro-cab b { color: var(--accent); }
+.corro-cab .gente {
+  color: var(--ink);
+  font-weight: 800;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* el punto azul es el mismo color que el círculo del suelo: la barra y el
+   mundo dicen lo mismo */
+.corro-cab .punto {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--accent);
+  animation: late 1.6s ease-in-out infinite;
+}
+.corro-cab .btn-sec { padding: 7px 11px; font-size: 12px; flex: none; }
+.aviso {
+  padding: 8px 8px 8px 14px;
+  border-radius: 99px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--ink-2);
+  max-width: 100%;
+}
+.aviso b { color: var(--ink); font-weight: 800; }
+.aviso > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.aviso .btn-principal { padding: 8px 13px; font-size: 12.5px; flex: none; }
+.aviso .btn-sec { padding: 8px 11px; font-size: 12px; flex: none; }
+
+/* la ficha de alguien a quien has tocado en el mundo: quién es, a cuánto
+   está y qué puedes hacer con él. Va donde la hoja de «cómo funciona», que
+   es el sitio de lo que se lee sin dejar de ver el mundo. */
+.ficha { top: 170px; }
+.ficha-cab { display: flex; align-items: center; gap: 8px; }
+.ficha-cab i { width: 14px; height: 14px; border-radius: 50%; border: 1px solid rgba(43, 52, 64, 0.2); flex: none; }
+.ficha-cab b { font-size: 15px; font-weight: 800; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ficha-cab .cerrar {
+  margin-left: auto;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--ink-2);
+  padding: 4px 6px;
+  border-radius: 8px;
+}
+.ficha-cab .cerrar:focus-visible { outline: 2px solid var(--accent); }
+.ficha .nota { margin: 8px 0 0; font-size: 12px; line-height: 1.5; color: var(--ink-2); font-weight: 600; }
+.ficha .btn-principal.ancho, .ficha .btn-sec.ancho { width: 100%; margin-top: 10px; }
+.ficha .btn-principal:disabled { opacity: 0.45; box-shadow: none; cursor: default; }
+.ficha .fila-botones { margin-top: 8px; }
+.ficha .fila-botones .btn-sec { flex: 1; }
+
 /* modo construir: cabecera arriba, panel de piezas a la derecha (o una hoja
    abajo en el móvil) y barra de la pieza seleccionada */
 .deco-cab {
@@ -556,6 +663,11 @@ body {
   }
   .sel-bar .pista { display: none; }
   .deco-cab { font-size: 11.5px; padding: 7px 12px; }
+  .corro-zona { max-width: calc(100vw - 12px); gap: 6px; }
+  .corro-cab, .aviso { font-size: 11.5px; padding: 6px 6px 6px 11px; }
+  .corro-cab .btn-sec, .aviso .btn-sec, .aviso .btn-principal { padding: 7px 9px; font-size: 11.5px; }
+  /* la ficha, a lo ancho de la pantalla y bajo los botones de la derecha */
+  .ficha { top: 164px; left: 8px; right: 8px; width: auto; }
 }
 
 /* toast + carga */
@@ -636,6 +748,15 @@ body {
 }
 .chat .emote:active { transform: scale(0.9); }
 .chat .emote:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* dentro de un corro, lo que escribes NO lo lee quien pase: se dice aquí,
+   pegado a la caja, que es donde se mira al escribir */
+.chat .solo-corro {
+  padding: 5px 12px;
+  border-radius: 99px;
+  font-size: 11.5px;
+  font-weight: 800;
+  color: var(--accent);
+}
 .chat .decir { display: flex; gap: 6px; width: 100%; }
 .chat .decir input {
   flex: 1;

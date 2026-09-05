@@ -117,9 +117,40 @@ servidor solo guarda qué hay en cada parcela y quién anda cerca.
   Un sondeo de 1,5 s sería poco para mover avatares, pero para hablar sobra.
   **No se guarda nada**: ni en disco ni en un registro; la burbuja se
   desvanece y ahí se acaba. El texto entra acotado (80 caracteres, sin
-  caracteres de control) y se pinta con `textContent`, nunca como marcado.
+  caracteres de control) y se pinta con `textContent`, nunca como marcado. Eso
+  es hablar **a quien pase**; para hablar con alguien en concreto está el
+  **corro**, más abajo.
+- **El corro**: hablar con alguien en concreto, y que se vea. Hasta ahora lo
+  que decías lo oía todo el que pasara, y dos personas juntas no se
+  distinguían de dos que se han cruzado. Un **corro** es un grupo hablando
+  **en un sitio**: se dibuja en el suelo un **círculo de luz** que abarca a
+  los que están dentro, con un aro a los pies de cada uno, y el círculo se
+  abre y se estrecha solo, en cada fotograma, según se junta o se separa la
+  gente. Desde lejos se lee «ahí hay una conversación» antes de meterse en
+  ella. Lo que se dice dentro **solo lo leen los de dentro**; los de fuera ven
+  un «…» sobre sus cabezas: que hablan, no lo que dicen, igual que al pasar al
+  lado de dos que charlan. **Se empieza tocando a alguien** en el mundo (el
+  rayo, y si falla, quien caiga más cerca en pantalla: un avatar a 30 m ocupa
+  cuatro píxeles y un dedo mide más): sale su **ficha** —quién es, a cuánto
+  está, y hablarle, silenciarle o reportarle— y desde ahí le pides hablar. Si
+  acepta, hay corro. **Entrar tiene puerta**: quien llega toca a uno de dentro
+  y **llama**, y el aviso le sale a **quien empezó el corro**, que le deja
+  entrar o no (y mientras, al anfitrión le sale un «✋ quiere entrar» sobre su
+  cabeza, en el mundo). El anfitrión puede dejarlo **abierto**, y entonces se
+  une quien pase, que es lo que hace falta en una fiesta en la plaza; también
+  puede sacar a alguien. Caben `CORRO_MAX` (8). Y un corro está en un sitio:
+  si te alejas más de `CORRO_RADIO_M` (20 m) del resto **sales solo**, con un
+  aviso antes a los 15, porque irse de una conversación es irse. Todo viaja
+  **montado en el sondeo de presencia**, sin ruta ni infraestructura nuevas
+  (`src/lib/corro.js` para las reglas compartidas, los mapas en memoria en
+  `src/lib/mundo.js`), y **no se guarda nada**: un corro que se deshace no ha
+  existido para nadie. El servidor manda el ESTADO (quién está dentro, quién
+  espera en la puerta) y no los sucesos: los avisos salen de compararlo con lo
+  que había, que es lo que aguanta un sondeo perdido sin contar dos veces lo
+  mismo ni quedarse mudo.
 - **Silenciar y reportar**: tocando «N personas en el mundo» se abre la hoja
-  de **vecinos**, con quien anda cerca y a qué distancia. **Silenciar** es lo
+  de **vecinos**, con quien anda cerca y a qué distancia (y tocando a alguien
+  en el mundo, su ficha, que lleva lo mismo). **Silenciar** es lo
   primero que protege a alguien y no necesita ni servidor ni cuentas: es tu
   decisión sobre tu pantalla, vive en tu dispositivo (`localStorage`) y a un
   silenciado dejas de verle lo que dice, sus gestos y **su nombre**, que
@@ -142,7 +173,8 @@ servidor solo guarda qué hay en cada parcela y quién anda cerca.
   algo. **Las cuentas son lo que falta** para que esto sea moderación de
   verdad.
 - **Presencia**: cada 1,5 s el cliente manda su posición a `POST
-  /api/presencia` y recibe a quien esté a menos de 400 m. Los demás se
+  /api/presencia` y recibe a quien esté a menos de 400 m; por ahí viajan
+  también lo que dices, los gestos, los reportes y el corro. Los demás se
   interpolan hacia su última posición conocida, así que se les ve andar y no
   saltar. Es presencia **por sondeo**: sin infraestructura nueva (el servidor
   es Next.js standalone) y suficiente para un mundo con decenas de personas.
@@ -308,13 +340,23 @@ que un árbol). **Si añades una pieza, pasa esto y commitea el PNG.**
 
 `npm run prueba` es la otra mitad: dos jugadores de verdad en dos pestañas
 (Ana y Bea) que se presentan, andan, se ven, **se hablan** (Ana dice algo y
-hace un gesto, y se comprueba que a Bea le llegan), **se silencian** (Bea
+hace un gesto, y se comprueba que a Bea le llegan), **hacen corro** (Ana toca
+a Bea en el mundo, le pide hablar, Bea acepta, y se comprueba que las dos
+tienen el corro, que se dibuja el círculo en el suelo, que Bea lee lo que Ana
+dice dentro y que un tercero que pasa ve que habla pero no lo que dice; luego
+ese tercero **llama a la puerta** y el aviso le sale a Ana, que es quien lo
+empezó, y le deja entrar), **se silencian** (Bea
 silencia a Ana y la reporta, y se comprueba que deja de verle el nombre y lo
 que dice, y que el reporte queda guardado con lo que Ana decía), reclaman un
 solar,
 construyen, comprueban que el otro lo ve y que el servidor lo guardó, y Bea
 entra en la parcela de Ana, ve de quién es y le da a me gusta. Deja capturas de
 cada paso en `OUT` (por defecto, el directorio actual).
+
+El tercero del corro no abre una tercera pestaña, sino que sondea la API a
+mano: tres mundos con sombras a la vez dejan sin fotogramas al render por
+software. Y al acabar se manda lejos, que si no es él quien sale primero en la
+hoja de vecinos del paso siguiente.
 
 Reclama una parcela, así que para volver a pasarla hay que **borrar `.data/` y
 reiniciar `npm run dev`**: el mundo vive en memoria y borrar el fichero no
@@ -334,7 +376,9 @@ se baje otro.
 1. ✅ Mundo, avatar, presencia por sondeo, parcelas y construcción con piezas
 2. ✅ Que el mundo se note habitado: el avatar a escala de persona, hablar con
    burbujas y gestos, el cartel de quién es cada casa y el me gusta, pelo y
-   piel propios con perfil que se puede cambiar, y silenciar y reportar
+   piel propios con perfil que se puede cambiar, silenciar y reportar, y el
+   **corro**: tocar a alguien para hablar solo con él, un círculo en el suelo
+   que enseña quién habla con quién, y una puerta que abre quien lo empezó
 3. **Cuentas de usuario** ← lo siguiente. Hoy el id es del dispositivo y se
    puede falsificar, y de ahí cuelga todo lo demás: la propiedad de una parcela
    es «quien tenga ese localStorage», bloquear a alguien cuesta lo que vaciarlo
