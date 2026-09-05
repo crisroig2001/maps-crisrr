@@ -371,7 +371,7 @@ function conViento(mat) {
   mat.onBeforeCompile = (sh) => {
     sh.uniforms.tiempo = uTiempo;
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nuniform float tiempo;')
+      .replace('#include <common>', '#include <common>\nuniform float tiempo;\nvarying vec2 vInst;')
       .replace(
         '#include <begin_vertex>',
         `#include <begin_vertex>
@@ -380,9 +380,34 @@ function conViento(mat) {
         #else
           vec3 wv = (modelMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
         #endif
+        vInst = wv.xz;
         float alto = smoothstep(1.5, 6.0, position.y);
         transformed.x += sin(tiempo * 1.1 + wv.x * 0.2 + wv.z * 0.15) * 0.18 * alto;
         transformed.z += cos(tiempo * 0.9 + wv.x * 0.12 - wv.z * 0.2) * 0.12 * alto;`
+      );
+    // Cada copa, su verde. El giro y la escala ya salían de un hash de la
+    // posición, pero el COLOR no: once árboles de un parque eran once veces
+    // exactamente el mismo verde, y eso es lo que hace que un bosque se lea
+    // como papel pintado por mucho que las siluetas cambien. Va por el mismo
+    // camino —un hash de dónde está la pieza— así que sale igual en todas las
+    // pantallas y no cuesta ni un byte ni una llamada de dibujo.
+    // Solo lo VERDE: se mide cuánto le gana el verde al rojo y al azul, así
+    // que el tronco, la maceta y el mástil de la bandera se quedan como
+    // están. Y el desvío es de matiz además de brillo: unas copas tiran a
+    // amarillo de sol y otras a verde azulado de sombra, que es lo que se ve
+    // en una arboleda de verdad.
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying vec2 vInst;')
+      .replace(
+        '#include <color_fragment>',
+        `#include <color_fragment>
+        {
+          float hI = fract(sin(dot(floor(vInst * 4.0), vec2(12.9898, 78.233))) * 43758.545);
+          float verdor = smoothstep(0.0, 0.10, diffuseColor.g - max(diffuseColor.r, diffuseColor.b));
+          diffuseColor.rgb *= mix(1.0, 0.88 + hI * 0.26, verdor);
+          diffuseColor.r *= mix(1.0, 0.93 + hI * 0.16, verdor);
+          diffuseColor.b *= mix(1.0, 1.08 - hI * 0.17, verdor);
+        }`
       );
     parcheaNiebla(sh);
   };
@@ -1117,7 +1142,15 @@ export default function Mundo() {
     });
     const cielo = new THREE.Mesh(new THREE.SphereGeometry(1000, 40, 20), matCielo);
     cielo.frustumCulled = false;
-    cielo.renderOrder = -1000;
+    // Al FINAL de los opacos, no al principio. Con `renderOrder = -1000` la
+    // cúpula se pintaba primero y su fragment —un atan2, una textura, media
+    // docena de smoothstep y el ruido del horizonte— corría en el 100 % de
+    // los píxeles de la pantalla para que casi todos se sobrescribieran
+    // después con el suelo. Pintándola la última, el test de profundidad
+    // descarta lo que ya tiene geometría delante y el shader solo corre en el
+    // cielo que de verdad se ve. No escribe profundidad, así que lo
+    // transparente que va detrás no se entera.
+    cielo.renderOrder = 1000;
     scene.add(cielo);
     scene.fog = new THREE.Fog(NIEBLA, NIEBLA_DESDE, NIEBLA_HASTA);
 
@@ -1471,6 +1504,13 @@ export default function Mundo() {
     // para que el lado mayor en planta mida `ancho` metros y se deja el
     // origen en el centro de la planta, a ras de suelo.
     const cargador = new GLTFLoader();
+    // Las cuatro casas del City Kit apuntan al MISMO Textures/colormap.png,
+    // pero cada .glb trae su referencia y el cargador le hace una textura y un
+    // material nuevos a cada una: cuatro copias de la misma imagen subidas a
+    // la GPU y cuatro programas donde bastaba uno. Se comparte por la URL de
+    // la imagen, que es lo que de verdad las iguala.
+    const materialesAtlas = new Map();
+
     async function cargaModelo(def) {
       const gltf = await cargador.loadAsync('/modelos/' + def.glb + '.glb');
       const raiz = gltf.scene;
@@ -1561,9 +1601,25 @@ export default function Mundo() {
       // el 0). Así el día del cambio no se mueve ni un píxel de lo que hay, y
       // el resto de la paleta sí repinta de verdad.
       if (teñibles.length) partes.push({ geo: mergeGeometries(teñibles, false), mat: def.viento ? matTinteViento : matTinte, tinte: true, base: baseTinte });
+      // La clave para compartir: la URI de la imagen dentro del .glb. No vale
+      // `tex.image.src` —el cargador usa ImageBitmap y no tiene src— ni
+      // `tex.name`, que en los kits de Kenney es «colormap» en TODOS aunque
+      // el atlas del City Kit y el del Nature Kit sean imágenes distintas.
+      // Solo se comparte cuando el modelo trae UNA imagen, que es el caso de
+      // los kits con atlas; con varias no se puede saber cuál es cuál desde
+      // aquí y cada una se queda con su material.
+      const imgs = gltf.parser?.json?.images;
+      const claveAtlas = imgs?.length === 1 && imgs[0].uri ? imgs[0].uri : null;
       for (const [tex, gs] of conTextura) {
-        tex.colorSpace = THREE.SRGBColorSpace;
-        partes.push({ geo: mergeGeometries(gs, false), mat: conNiebla(new THREE.MeshToonMaterial({ map: tex, gradientMap: rampa })) });
+        const clave = claveAtlas || tex.uuid;
+        let matAtlas = materialesAtlas.get(clave);
+        if (!matAtlas) {
+          tex.colorSpace = THREE.SRGBColorSpace;
+          tex.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+          matAtlas = conNiebla(new THREE.MeshToonMaterial({ map: tex, gradientMap: rampa }));
+          materialesAtlas.set(clave, matAtlas);
+        }
+        partes.push({ geo: mergeGeometries(gs, false), mat: matAtlas });
       }
       const caja = new THREE.Box3();
       for (const p of partes) {
