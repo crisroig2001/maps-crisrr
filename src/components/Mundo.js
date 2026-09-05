@@ -44,9 +44,17 @@ const CIELO_CALIMA = 0xd8eeff;
 const CIELO_NUBES = 0xffe5c4;
 const NIEBLA = 0xd8eeff;
 const NIEBLA_DESDE = 60;
-const NIEBLA_HASTA = 380;
+const NIEBLA_HASTA = 325; // satura antes de los 384 m en que se acaba el plano del suelo
 const SUELO_M = 16 * L; // el plano del suelo que sigue al avatar: 768 m
 const RADIO_PARCELAS = 6; // se piden (2r+1)² parcelas alrededor: 13×13
+const ANCHO_PASEO = 15; // la losa del paseo es una banda, no la parcela entera
+// El sembrado del campo: fuera de lo público no había NADA, así que el mundo
+// era una pradera lisa con casas sueltas. Rejilla fija del mundo, decidida por
+// hash: no ocupa un byte en el servidor y sale igual en todas las pantallas.
+const CELDA_CAMPO = 18;
+const RADIO_CAMPO = 190;
+// Lo que crece solo. Nada de casas ni de mobiliario: esto es monte.
+const SIEMBRA = ['arbol', 'arbol', 'roble', 'pino', 'arbusto', 'arbusto', 'roca', 'rocas', 'tronco', 'flores', 'flores-amarillas', 'flores-moradas', 'setas'];
 
 const BLANCO = new THREE.Color(0xffffff);
 const TRONCO = new THREE.Color(0x8d6a4a);
@@ -62,6 +70,10 @@ const POSTE = new THREE.Color(0x7a828c);
 const LUZ = new THREE.Color(0xffe38f);
 const MASTIL = new THREE.Color(0xefe9dc);
 const ARENA = new THREE.Color(0xeadcb9);
+const TIERRA = new THREE.Color(0x9c7a56);
+const LOSA = new THREE.Color(0xded6c4);
+const METAL = new THREE.Color(0x8e97a2);
+const CARBON = new THREE.Color(0x4a4a52);
 const CRISTAL = new THREE.Color(0xc6e5f3);
 // pelo y piel: la variedad de los vecinos. El índice viene del perfil (y de
 // la presencia, para los demás); el color, de la paleta compartida.
@@ -156,7 +168,12 @@ const GLSL_NIEBLA = `
   vec3 nHSV = rgb2hsv(gl_FragColor.rgb);
   nHSV.z = mix(nHSV.z, 0.88, nieblaF);
   nHSV.y = mix(nHSV.y, 0.12, nieblaF);
-  gl_FragColor.rgb = mix(hsv2rgb(nHSV), fogColor, nieblaF * nieblaF * 0.5);
+  // El 0.5 de antes era un TOPE del 50 %: por lejos que estuviera algo nunca
+  // acababa del color del cielo, así que a 380 m el terreno aterrizaba en
+  // ~(214,231,226) contra una calima de (216,238,255) y quedaba una raya
+  // horizontal de 29 niveles de azul justo donde se corta el plano. El
+  // cuadrado ya evita que lo cercano se lave; el tope sobraba.
+  gl_FragColor.rgb = mix(hsv2rgb(nHSV), fogColor, nieblaF * nieblaF);
 #endif`;
 function parcheaNiebla(sh) {
   sh.fragmentShader = sh.fragmentShader.replace('#include <fog_pars_fragment>', '#include <fog_pars_fragment>\n' + GLSL_HSV).replace('#include <fog_fragment>', GLSL_NIEBLA);
@@ -179,7 +196,7 @@ function conNiebla(mat) {
 //   cesped: el verde del suelo se calcula aquí con ruido a varias escalas
 //          (dos verdes a manchas grandes, calvas más claras y matas más
 //          oscuras), como el terreno de la referencia
-function conAltura(mat, { tinta = false, viento = false, normales = false, nubes = false, cesped = false } = {}) {
+function conAltura(mat, { tinta = false, viento = false, normales = false, nubes = false, cesped = false, pie = false, rio = false } = {}) {
   mat.onBeforeCompile = (sh) => {
     sh.uniforms.tiempo = uTiempo;
     sh.uniforms.tNubes = uNubes;
@@ -224,7 +241,10 @@ function conAltura(mat, { tinta = false, viento = false, normales = false, nubes
         }`
       );
     sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', '#include <common>\nuniform float tiempo;\nuniform sampler2D tNubes;\nvarying float vAltura;\nvarying vec2 vMundoXZ;' + (cesped ? GLSL_RUIDO : ''))
+      .replace(
+        '#include <common>',
+        '#include <common>\nuniform float tiempo;\nuniform sampler2D tNubes;\nvarying float vAltura;\nvarying vec2 vMundoXZ;' + (cesped || rio ? GLSL_RUIDO : '') + (tinta || rio ? GLSL_CAUCE : '')
+      )
       // la hierba es de doble cara y three le da la vuelta a la normal en
       // la cara trasera: la mitad de cada mata salía a oscuras. La normal
       // se queda mirando arriba, se vea por donde se vea.
@@ -232,6 +252,13 @@ function conAltura(mat, { tinta = false, viento = false, normales = false, nubes
       .replace(
         '#include <color_fragment>',
         `#include <color_fragment>
+        ${
+          // `tipoParcela` mira `paseo` ANTES que `rio`, así que 3/0, 4/0 y
+          // 5/0 salen «paseo» aunque el río las cruce: había piedra beige
+          // bajando el talud y tapizando el lecho a los dos lados del puente.
+          // El borde se rompe con ruido para que no sea un recorte de tijera.
+          rio ? 'if (cauce(vMundoXZ.x, -vMundoXZ.y) > 0.10 + ruido(vMundoXZ * 0.5) * 0.10) discard;' : ''
+        }
         ${
           cesped
             ? `float rA = ruido(vMundoXZ * 0.03);
@@ -244,7 +271,33 @@ function conAltura(mat, { tinta = false, viento = false, normales = false, nubes
                diffuseColor.rgb *= cesped;`
             : ''
         }
-        ${tinta ? 'diffuseColor.rgb *= mix(vec3(0.86, 0.93, 0.8), vec3(1.06, 1.04, 0.92), clamp((vAltura - 0.2) / 3.0, 0.0, 1.0)); diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.78, 0.72, 0.55), clamp((-0.2 - vAltura) / 2.0, 0.0, 1.0));' : ''}
+        ${
+          tinta
+            ? `// lo alto se aclara y lo bajo se apaga: eso se queda
+               diffuseColor.rgb *= mix(vec3(0.86, 0.93, 0.8), vec3(1.06, 1.04, 0.92), clamp((vAltura - 0.2) / 3.0, 0.0, 1.0));
+               // La arena iba por ALTURA ABSOLUTA (bajo y = -0,2), y como la
+               // pradera baja hasta -0,85 sin que haya río, salían manchas
+               // amarillentas por el campo lejos de cualquier agua: el 6,2 %
+               // del terreno sin cauce. Ahora va por lo que de verdad la
+               // explica: estar cerca del NIVEL DEL AGUA *y* dentro del
+               // cauce. El factor de cauce no es decorativo — sin él, cada
+               // hondonada de la pradera dispararía la arena igual que antes.
+               float cSuelo = cauce(vMundoXZ.x, -vMundoXZ.y);
+               float sob = vAltura - ${NIVEL_AGUA.toFixed(2)};
+               float arena = (1.0 - smoothstep(0.0, 1.1, sob)) * smoothstep(0.02, 0.15, cSuelo);
+               diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.80, 0.74, 0.57), arena);
+               // y el fondo del río, limo: más oscuro y menos saturado
+               diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.44, 0.46, 0.36), (1.0 - smoothstep(-0.6, 0.05, sob)) * smoothstep(0.02, 0.2, cSuelo));`
+            : ''
+        }
+        ${
+          // La mata se oscurece hacia la base: sin eso, 3.000 quads con el
+          // mismo tono de arriba abajo flotan un dedo sobre el suelo. Es el
+          // mismo problema de contacto que las piezas, multiplicado por mil,
+          // y son tres instrucciones. `vMapUv` y no `vUv`: desde r152 cada
+          // mapa lleva su varying, y este material tiene `map`.
+          pie ? 'diffuseColor.rgb *= mix(0.55, 1.0, smoothstep(0.0, 0.45, vMapUv.y));' : ''
+        }
         ${
           nubes
             ? `float nb1 = texture2D(tNubes, vMundoXZ / 380.0 + vec2(tiempo * 0.0035, tiempo * 0.0018)).r;
@@ -255,7 +308,7 @@ function conAltura(mat, { tinta = false, viento = false, normales = false, nubes
       );
     parcheaNiebla(sh);
   };
-  mat.customProgramCacheKey = () => 'altura' + (tinta ? 't' : '') + (viento ? 'v' : '') + (normales ? 'n' : '') + (nubes ? 'c' : '') + (cesped ? 'g' : '');
+  mat.customProgramCacheKey = () => 'altura' + (tinta ? 't' : '') + (viento ? 'v' : '') + (normales ? 'n' : '') + (nubes ? 'c' : '') + (cesped ? 'g' : '') + (pie ? 'p' : '') + (rio ? 'r' : '');
   return mat;
 }
 // Las copas se mecen: un vaivén lento proporcional a la altura sobre el
@@ -340,7 +393,7 @@ function prisma(g, n, r, y0, y1, color, r1 = r, cx = 0, cz = 0) {
 // árbol, arbustos, nubes, cabezas. Las normales son las de la esfera, así
 // que la luz recorre la forma en degradado en vez de a cortes.
 const cacheEsferas = new Map();
-function esfera(g, cx, cy, cz, r, color, sy = 1, detalle = 10) {
+function esfera(g, cx, cy, cz, r, color, sy = 1, detalle = 10, colorAbajo = null) {
   const k = detalle;
   let base = cacheEsferas.get(k);
   if (!base) {
@@ -351,7 +404,9 @@ function esfera(g, cx, cy, cz, r, color, sy = 1, detalle = 10) {
   const n = base.getAttribute('normal').array;
   for (let i = 0; i < p.length; i += 3) {
     g.pos.push(cx + p[i] * r, cy + p[i + 1] * r * sy, cz + p[i + 2] * r);
-    vert(g, color, n[i], n[i + 1], n[i + 2]);
+    // con `colorAbajo`, el color va por la ALTURA de la normal: la esfera
+    // sale clara arriba y en sombra abajo sin necesidad de luces
+    vert(g, colorAbajo ? colorAbajo.clone().lerp(color, n[i + 1] * 0.5 + 0.5) : color, n[i], n[i + 1], n[i + 2]);
   }
 }
 // tejado a cuatro aguas sobre un rectángulo: alero en y0, cumbrera (paralela
@@ -408,6 +463,68 @@ function geometriaPieza(tipo) {
     prisma(F, 8, 0.45, 1.0, 2.6, PIEDRA_C);
     prisma(F, 12, 1.3, 2.6, 2.9, PIEDRA_C);
     prisma(F, 12, 1.1, 2.9, 3.0, AGUA);
+  } else if (tipo === 'caseta') {
+    // La silueta que faltaba entre la tienda (3,2 m) y las casas (6,4 m).
+    // `tejado()` llevaba desde el City Kit sin que lo llamara nadie.
+    caja(T, -2.5, 0, -2, 2.5, 2.2, 2, BLANCO);
+    tejado(F, -2.7, -2.2, 2.7, 2.2, 2.2, 3.5, 0.35, TEJA);
+    caja(F, -0.45, 0, 1.95, 0.45, 1.75, 2.1, MADERA);
+    caja(F, 1.1, 1.1, 1.95, 1.9, 1.7, 2.05, CRISTAL);
+  } else if (tipo === 'cobertizo') {
+    // Bajo y largo: lo contrario de las cuatro casas, que son todas bloque
+    // de 8 m con tejado a dos aguas.
+    caja(T, -4, 0, -1.8, 4, 2, 1.8, BLANCO);
+    tejado(F, -4.2, -2, 4.2, 2, 2, 2.9, 3.4, MADERA);
+    caja(F, -3.9, 0, 1.75, -2.6, 1.9, 1.85, MADERA);
+    caja(F, 2.6, 0, 1.75, 3.9, 1.9, 1.85, MADERA);
+  } else if (tipo === 'tendedero') {
+    // La pieza con más alma del jardín y la más barata: dos postes, tres
+    // tiras y unas cuantas cajas de ropa, que son las que se tiñen.
+    prisma(F, 6, 0.07, 0, 1.9, MADERA, 0.06, -1.7, 0);
+    prisma(F, 6, 0.07, 0, 1.9, MADERA, 0.06, 1.7, 0);
+    for (const z of [-0.18, 0, 0.18]) caja(F, -1.7, 1.82, z - 0.015, 1.7, 1.85, z + 0.015, MASTIL);
+    const ropa = [
+      [-1.35, 0.5, -0.18],
+      [-0.7, 0.62, 0],
+      [-0.05, 0.46, 0.18],
+      [0.6, 0.58, -0.18],
+      [1.2, 0.52, 0],
+    ];
+    for (const [x, alto, z] of ropa) caja(T, x - 0.26, 1.82 - alto, z - 0.02, x + 0.26, 1.8, z + 0.02, BLANCO);
+  } else if (tipo === 'arenero') {
+    caja(F, -1.5, 0, -1.5, 1.5, 0.28, 1.5, MADERA);
+    caja(F, -1.28, 0.18, -1.28, 1.28, 0.34, 1.28, ARENA);
+  } else if (tipo === 'buzon') {
+    prisma(F, 6, 0.07, 0, 1.05, MADERA, 0.06);
+    caja(T, -0.22, 1.05, -0.16, 0.22, 1.45, 0.16, BLANCO);
+    caja(F, 0.22, 1.15, -0.04, 0.34, 1.35, 0.04, TEJA);
+  } else if (tipo === 'barbacoa') {
+    prisma(F, 8, 0.34, 0, 0.75, METAL, 0.3);
+    prisma(F, 12, 0.52, 0.75, 0.92, CARBON, 0.5);
+    prisma(F, 12, 0.55, 0.92, 1.0, METAL, 0.55);
+    caja(F, 0.5, 0.9, -0.05, 1.1, 0.96, 0.05, METAL);
+  } else if (tipo === 'losa' || tipo === 'patio' || tipo === 'patio-g') {
+    // Suelo que se DIBUJA. Hasta ahora la categoría eran tres piezas y
+    // ninguna hacía una forma: un patio de 12 × 12 salían 9 toques a 4 m de
+    // rejilla y el 6 % del presupuesto de la parcela. Estas son geometría
+    // generada, así que se TESELAN de verdad (una losa por baldosa) en vez de
+    // estirar una textura, que es lo que pasaría escalando un modelo.
+    const lado = tipo === 'losa' ? 4 : tipo === 'patio' ? 8 : 12;
+    const n = lado / 4;
+    const b = lado / 2;
+    for (let i = 0; i < n; i++) {
+      for (let j = 0; j < n; j++) {
+        const x = -b + i * 4;
+        const z = -b + j * 4;
+        // junta de 12 cm y baldosas de altura ligeramente distinta: sin eso
+        // es una lámina lisa y se lee como una pegatina
+        const h = 0.1 + ((i * 3 + j * 7) % 3) * 0.012;
+        caja(T, x + 0.06, 0, z + 0.06, x + 3.94, h, z + 3.94, BLANCO);
+      }
+    }
+  } else if (tipo === 'parterre') {
+    caja(F, -2, 0, -2, 2, 0.16, 2, MADERA);
+    caja(F, -1.82, 0.1, -1.82, 1.82, 0.22, 1.82, TIERRA);
   } else if (tipo === 'bandera') {
     prisma(F, 6, 0.1, 0, 7.5, MASTIL, 0.07);
     T.pos.push(0.1, 7.4, 0, 0.1, 6.2, 0, 2.6, 6.8, 0);
@@ -454,7 +571,11 @@ function geometriaNube(rnd) {
   const n = 4 + Math.floor(rnd() * 3);
   for (let i = 0; i < n; i++) {
     const r = 6 + rnd() * 7;
-    esfera(g, (i - n / 2) * 8 + rnd() * 4, rnd() * 3, rnd() * 6 - 3, r, i % 2 ? NUBE : NUBE_SOMBRA, 0.55, 8);
+    // Antes el color alternaba por ÍNDICE (i % 2) y salía una salchicha a
+    // franjas a lo largo, aunque el comentario dijera «blancas arriba y
+    // lavanda abajo». Ahora va por la altura de la normal, que es lo que
+    // decía. Y se reparten en volumen, no en fila.
+    esfera(g, (i - n / 2) * 6 + rnd() * 5, rnd() * 3, rnd() * 8 - 4, r, NUBE, 0.55, 8, NUBE_SOMBRA);
   }
   return aGeo(g);
 }
@@ -471,6 +592,33 @@ function colorDueno(id) {
 // referencia es todo verde hierba, con el follaje en la familia del suelo.
 // Así que los verdes azulados del follaje se llevan a ese tono (los demás
 // colores, tal cual).
+// Lo que hace de verdad `acercaVerde` es girar el matiz de todo lo que caiga
+// entre 0,36 y 0,52, y eso tiene dos fallos gordos:
+//   · `stone` está en 0,5208 y SE SALVA POR 0,0008, así que la roca, las
+//     piedras del camino y el pretil del puente se quedan en #b8e2e8, un cian
+//     de hielo: el color más frío de la escena, en el suelo, en un mundo de
+//     tarde de verano y encima peleado con la plaza, que es beige cálido.
+//   · `leafsGreen` (#29c9ab) y `grass` (#2cd8b8) acaban los dos en el MISMO
+//     verde, así que de los cuatro verdes del kit sale uno y medio.
+// La tabla los pone por nombre, en la familia del césped del shader (que va
+// de 84° a 103° de matiz) pero separados entre sí.
+// OJO: `wood` y `woodDark` NO entran. Cada uno aparece con DOS colores
+// distintos en el kit (wood es #e59964 en banco/mesa/maceta y #ff8e62 en
+// cartel/hoguera/puente), así que meterlos aquí QUITARÍA variedad justo
+// donde la hay. Lo que no esté en la tabla sigue pasando por `acercaVerde`.
+const PALETA_KIT = {
+  leafsGreen: '#60c342',   // #29c9ab -> luminancia 0.646 vs 0.646
+  grass: '#7ccb4c',   // #2cd8b8 -> luminancia 0.694 vs 0.695
+  plant: '#60c859',   // #2ed193 -> luminancia 0.666 vs 0.666
+  leafsDark: '#47a938',   // #2ba6aa -> luminancia 0.549 vs 0.550
+  stone: '#e1d9c9',   // #b8e2e8 -> luminancia 0.853 vs 0.853
+  stoneDark: '#bcae96',   // #9ab5ba -> luminancia 0.687 vs 0.689
+};
+// Se gira el MATIZ y se conserva la LUMINANCIA relativa de cada color del kit
+// (0,2126 R + 0,7152 G + 0,0722 B), no su claridad HSL: un turquesa y un verde
+// con la misma L se ven con brillos muy distintos, porque el turquesa suma
+// verde Y azul. Igualando la claridad, el pino —que es `leafsDark` entero— se
+// iba a casi negro.
 function acercaVerde(c) {
   const hsl = {};
   c.getHSL(hsl);
@@ -604,9 +752,46 @@ export default function Mundo() {
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    // El mapa de sombras se repinta BAJO DEMANDA. Quieto y orbitando —que es
+    // todo el modo obra— se estaba repintando un 2048×2048 cada fotograma
+    // para dar exactamente la misma imagen. Quien lo pide: que ande el avatar
+    // (más de 0,25 m), que cambie el mundo, que se mueva un vecino, o que
+    // haya un gesto o un salto en marcha.
+    renderer.shadowMap.autoUpdate = false;
+    renderer.shadowMap.needsUpdate = true;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.06;
     const params = new URLSearchParams(window.location.search);
+    // El banco visual necesita un mundo QUIETO: de `uTiempo` cuelgan la hierba,
+    // las copas, las sombras de nube, el agua, los cúmulos y los pájaros, así
+    // que con el reloj libre dos capturas de la MISMA escena ya salen
+    // distintas y el porcentaje de la hoja de contactos se vuelve un número
+    // que se aprende a ignorar. Con `?t=12` el reloj del mundo se para en ese
+    // segundo y el diff vuelve a decir la verdad. Ojo: solo congela el reloj
+    // del DIBUJO; el del movimiento (`dt`) sigue siendo el de verdad, que si
+    // no el avatar no andaría.
+    const tFijo = parseFloat(params.get('t'));
+    const RELOJ_FIJO = Number.isFinite(tFijo);
+    // `?muestrario=1`: en vez del mundo, TODAS las piezas del catálogo en una
+    // rejilla, por categorías y con el avatar al lado de cada fila como vara
+    // de medir. Es la única forma de ver de un golpe que el pino es 5,6 veces
+    // el avatar mientras la palmera es 2,6, o que un mueble del Furniture Kit
+    // desentona con el Nature Kit. Va por el mismo camino que el resto
+    // (`creaInstancias`), así que lo que se ve aquí es exactamente lo que se
+    // ve en el mundo: mismas luces, misma rampa, mismo ACES.
+    const MUESTRARIO = params.get('muestrario') === '1';
+    // `?miniatura=<tipo>`: UNA pieza, cámara ortográfica fija y fondo liso,
+    // para generar las miniaturas de la paleta con el MOTOR DE VERDAD. Las de
+    // ahora son los previews que reparte Kenney: tres kits, tres encuadres,
+    // seis tamaños distintos (y cuatro no son ni cuadradas), con el objeto
+    // ocupando del 3 % al 100 % del lienzo. El resultado es que la escala
+    // sale INVERTIDA —una silla se dibuja tres veces más grande que un
+    // árbol— y el color no es el del mundo. La marca `zoom` del catálogo es
+    // un parche booleano contra una ocupación que va del 3 % al 100 %, así
+    // que no arregla nada.
+    const MINIATURA = params.get('miniatura');
+    const MUESTRA_PASO = 15; // la casona mide 13 m: con menos, se pisan
+    const MUESTRA_COLS = 7;
     const jugador = perfil();
 
     // --- escena, cielo y niebla ---
@@ -680,6 +865,7 @@ export default function Mundo() {
         cHorizonte: { value: new THREE.Color(CIELO_HORIZONTE) },
         cCalima: { value: new THREE.Color(CIELO_CALIMA) },
         cNubes: { value: new THREE.Color(CIELO_NUBES) },
+        uSol: { value: SOL },
       },
       vertexShader: `
         varying vec3 vDir;
@@ -694,6 +880,7 @@ export default function Mundo() {
         uniform vec3 cHorizonte;
         uniform vec3 cCalima;
         uniform vec3 cNubes;
+        uniform vec3 uSol;
         varying vec3 vDir;
         float ajusta(float v, float a, float b) { return clamp((v - a) / (b - a), 0.0, 1.0); }
         void main() {
@@ -710,6 +897,35 @@ export default function Mundo() {
           float e = 1.0 - nubes;
           nubes = 1.0 - e * e * e;
           color = mix(color, cNubes, nubes);
+          // La silueta del horizonte. Entre el suelo, que se desvanece en la
+          // niebla, y la banda de cúmulos no había NADA: dos capas de lectura
+          // y un hueco en medio. Esto son dos crestas pintadas en la cúpula
+          // con armónicos ENTEROS sobre el acimut, que es lo que hace que
+          // cierren sin costura en el meridiano.
+          // Es una LÍNEA DE ARBOLADO, no una cordillera: en un mundo llano de
+          // colinas de ±3 m por el que se puede andar, una sierra alpina sería
+          // un telón de fondo ajeno. Muy desaturada, y la calima que viene
+          // justo después le come la base, que es lo que la manda al fondo.
+          float ang = d.y > -0.2 ? atan(d.z, d.x) : 0.0;
+          float g = fwidth(d.y) * 1.4 + 0.0008;
+          // capa lejana: apenas insinuada, más alta
+          float cLejos = 0.045 + 0.014 * sin(ang * 3.0 + 0.7) + 0.007 * sin(ang * 7.0 + 2.1);
+          color = mix(color, vec3(0.72, 0.80, 0.82), smoothstep(cLejos + g, cLejos - g, d.y) * 0.5);
+          // capa cercana: el arbolado, con armónicos altos y poca amplitud
+          float cCerca = 0.025 + 0.008 * sin(ang * 7.0 + 1.3) + 0.005 * sin(ang * 13.0 + 0.4) + 0.003 * sin(ang * 23.0);
+          color = mix(color, vec3(0.66, 0.77, 0.68), smoothstep(cCerca + g, cCerca - g, d.y) * 0.75);
+
+          // El velo del sol. NO un disco: el sol está a 44,1° de altura y el
+          // borde de arriba del encuadre no pasa de 17°, así que un disco o
+          // un halo radial quedan fuera de cuadro SIEMPRE. Lo que sí se ve en
+          // cualquier encuadre alcanzable es el acimut: la mitad suroeste del
+          // horizonte se calienta y la noreste se queda fría, que es la
+          // lectura de tarde. Hasta ahora la cúpula era idéntica en las cuatro
+          // direcciones y el mundo no sabía dónde tenía el sol.
+          float az = dot(normalize(d.xz), normalize(uSol.xz));
+          float velo = pow(max(az, 0.0), 3.0) * (1.0 - ajusta(d.y, 0.0, 0.45)) * 0.22;
+          color = mix(color, vec3(1.0, 0.95, 0.86), velo);
+          color = min(color, vec3(1.0)); // la cúpula no lleva tone mapping: sin esto recortaría plano
           color = mix(color, cCalima, ajusta(d.y, 0.06, -0.04));
           gl_FragColor = vec4(color, 1.0);
           #include <colorspace_fragment>
@@ -731,14 +947,44 @@ export default function Mundo() {
     const sol = new THREE.DirectionalLight(SOL_COLOR, SOL_FUERZA);
     sol.castShadow = true;
     sol.shadow.mapSize.set(2048, 2048);
-    Object.assign(sol.shadow.camera, { left: -75, right: 75, top: 75, bottom: -75, near: 20, far: 420 });
-    sol.shadow.bias = -0.0003;
-    sol.shadow.normalBias = 0.5;
+    const LADO_SOMBRA = 150; // lado de la caja de sombras, en metros
+    // El lado de la caja manda sobre el resto: 150 m con 2048 px son 7,3 cm
+    // por téxel, y el sesgo se mide en TÉXELES, no en metros a ojo.
+    Object.assign(sol.shadow.camera, { left: -LADO_SOMBRA / 2, right: LADO_SOMBRA / 2, top: LADO_SOMBRA / 2, bottom: -LADO_SOMBRA / 2, near: 110, far: 290 });
+    // `near/far` ceñidos: la luz está a 200 m del target y la caja, que es
+    // perpendicular al rayo, abarca ±77 m de profundidad sobre suelo llano
+    // (±75 / sin 44,1° × cos 44,1°). 110..290 deja margen para el relieve
+    // (−0,85 a +3,25) y la pieza más alta (la torre, 13,5 m) sin recortar
+    // nada. Lo que se gana: el rango pasa de 400 m a 180, así que el MISMO
+    // `bias` normalizado vale menos de la mitad en metros.
+    sol.shadow.bias = -0.0005; // ≈ 4,5 cm a lo largo del rayo
+    // Un `normalBias` de 0,5 m corría la sombra de TODO 0,52 m al noreste
+    // (0,5 × √(0,5² + 0,55²) / 0,72, que es la proyección del sol sobre el
+    // suelo): peter-panning de manual. Una silla mide 0,45 y una maceta 0,4,
+    // así que su sombra quedaba ENTERA separada de la pieza; y el avatar son
+    // esferas de 0,24 de radio, o sea que su sombra propia —la cabeza sobre
+    // el torso, el brazo sobre el costado— era imposible y el muñeco salía
+    // como una calcomanía plana. Era la mitad de la sensación de «flotante».
+    // Lo que hace falta de verdad es kilo y medio de téxel:
+    sol.shadow.normalBias = (1.5 * LADO_SOMBRA) / 2048;
     scene.add(sol);
     scene.add(sol.target);
+    // Dónde estaba el avatar la última vez que se pintó la sombra: si la caja
+    // no se ha movido lo bastante, la sombra de antes vale.
+    let sombraEn = null;
+    function pideSombras() {
+      renderer.shadowMap.needsUpdate = true;
+      sombraEn = null;
+    }
     function sigueElSol(x, h, y) {
       sol.target.position.set(x, h, -y);
       sol.position.copy(sol.target.position).addScaledVector(SOL, 200);
+      // La caja de sombras va con el avatar, así que en cuanto anda un poco
+      // el mapa ya no sirve. 0,25 m es medio paso: por debajo no se nota.
+      if (!sombraEn || Math.hypot(x - sombraEn.x, y - sombraEn.y) > 0.25) {
+        renderer.shadowMap.needsUpdate = true;
+        sombraEn = { x, y };
+      }
     }
 
     // --- rampa toon: la luz cae a escalones ---
@@ -752,7 +998,19 @@ export default function Mundo() {
       const d = new Uint8Array(n);
       for (let i = 0; i < n; i++) {
         const t = i / (n - 1);
-        const v = t < 0.53 ? 0.16 : t < 0.9 ? 0.86 : 1.0;
+        // Cuatro escalones y con wrap. El corte de antes estaba en t = 0,53,
+        // que es N·L = 0,06: JUSTO en el terminador y sin envolver, así que
+        // cada esfera del mundo —el avatar son cinco, las copas son esferas,
+        // la torre y la fuente son prismas de doce lados— se partía por la
+        // mitad con un borde recto y duro. El 0,44 mete el wrap (la luz da la
+        // vuelta un poco por detrás del canto) y la franja 0,44..0,56 es el
+        // escalón de media luz que no existía, que es EL rasgo de las rampas
+        // pintadas a mano.
+        // El tercer corte se queda en 0,88 y no en 0,86 a propósito: el suelo
+        // tiene N·L ≈ 0,70, o sea t = 0,85, y con el corte en 0,86 medio
+        // terreno saltaría de escalón y todas las capturas se aclararían de
+        // golpe.
+        const v = t < 0.44 ? 0.18 : t < 0.56 ? 0.46 : t < 0.88 ? 0.88 : 1.0;
         d[i] = Math.round(v * 255);
       }
       const tex = new THREE.DataTexture(d, n, 1, THREE.RedFormat);
@@ -840,18 +1098,72 @@ export default function Mundo() {
     // El terreno se hunde bajo el río (cauce), así que el plano solo se ve
     // donde el suelo queda por debajo: en los ríos. Unas olas pequeñas en el
     // vertex shader para que no sea una lámina muerta.
-    const matAgua = new THREE.MeshToonMaterial({ color: 0x6db9e6, gradientMap: rampa, transparent: true, opacity: 0.86 });
+    // El agua sabe lo HONDA que es. `altura()` es la misma función que levanta
+    // el terreno, así que restándola al nivel del agua sale la profundidad en
+    // metros, por píxel y sin ningún pase extra ni depth buffer. De ahí sale
+    // todo: el color (turquesa en la orilla, azul en el centro), la ESPUMA, y
+    // sobre todo la opacidad — poniéndola a 0 en la orilla, la arista dura
+    // contra el terreno se disuelve sola, que es el «depth-based softening»
+    // sin buffer de profundidad. Y no hace falta salir de MeshToonMaterial:
+    // `diffuseColor` se inicializa como vec4(diffuse, opacity), así que
+    // escribiendo `.a` dentro de <color_fragment> hay opacidad por píxel y
+    // `parcheaNiebla` sigue intacto.
+    const matAgua = new THREE.MeshToonMaterial({ color: 0x6db9e6, gradientMap: rampa, transparent: true, opacity: 1 });
     matAgua.onBeforeCompile = (sh) => {
       sh.uniforms.tiempo = uTiempo;
+      sh.uniforms.uSol = { value: SOL };
       sh.vertexShader = sh.vertexShader
-        .replace('#include <common>', '#include <common>\nuniform float tiempo;\n' + GLSL_CAUCE)
+        .replace('#include <common>', '#include <common>\nuniform float tiempo;\nvarying vec2 vXZ;\n' + GLSL_CAUCE)
         .replace(
           '#include <begin_vertex>',
           `#include <begin_vertex>
           vec4 wpa = modelMatrix * vec4(transformed, 1.0);
+          vXZ = wpa.xz;
           transformed.y += sin(tiempo * 1.4 + wpa.x * 0.35 + wpa.z * 0.2) * 0.07 + sin(tiempo * 0.9 - wpa.z * 0.5) * 0.05;
           // fuera de la banda del río, el agua se hunde: no hay lagos en los valles
           if (distRioG(wpa.x, -wpa.z) > ${BANDA_AGUA.toFixed(1)}) transformed.y -= 60.0;`
+        );
+      sh.fragmentShader = sh.fragmentShader
+        .replace('#include <common>', '#include <common>\nuniform float tiempo;\nuniform vec3 uSol;\nvarying vec2 vXZ;\n' + GLSL_ALTURA)
+        .replace(
+          '#include <color_fragment>',
+          `#include <color_fragment>
+          float prof = ${NIVEL_AGUA.toFixed(2)} - altura(vXZ);
+          vec3 someroC = vec3(0.42, 0.78, 0.80);
+          vec3 hondoC = vec3(0.10, 0.36, 0.62);
+          diffuseColor.rgb = mix(someroC, hondoC, smoothstep(0.0, 1.8, prof));
+          // espuma: una banda en el primer palmo de agua, con el borde
+          // rompiéndose despacio para que no sea una línea de goma
+          float borde = 0.10 + 0.06 * sin(vXZ.x * 0.7 + tiempo * 0.8) + 0.05 * sin(vXZ.y * 0.9 - tiempo * 0.6);
+          float espuma = smoothstep(borde + 0.16, borde, prof) * smoothstep(0.0, 0.04, prof);
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.93, 0.98, 1.0), espuma * 0.85);
+          // el 0 en la orilla es lo que disuelve la arista contra el terreno
+          diffuseColor.a = mix(0.0, 0.95, smoothstep(0.0, 1.2, prof));`
+        )
+        .replace(
+          '#include <opaque_fragment>',
+          `#include <opaque_fragment>
+          {
+            // Olas EN EL FRAGMENT, no en el vertex: el plano tiene un vértice
+            // cada 8 m y el río mide 18 m de banda, así que las olas del
+            // vertex shader (lambda 15,6 y 12,6 m) van por debajo de Nyquist
+            // y lo que se veía no era una ola, era aliasing en movimiento.
+            // Derivada cerrada de dos senos de lambda 4-8 m, por píxel.
+            float a1 = vXZ.x * 0.8 + vXZ.y * 0.45 + tiempo * 1.6;
+            float a2 = vXZ.x * 0.35 - vXZ.y * 1.1 - tiempo * 1.1;
+            vec3 N = normalize(vec3(-(0.05 * 0.8 * cos(a1) + 0.04 * 0.35 * cos(a2)), 1.0, -(0.05 * 0.45 * cos(a1) - 0.04 * 1.1 * cos(a2))));
+            vec3 wp = vec3(vXZ.x, ${NIVEL_AGUA.toFixed(2)}, vXZ.y);
+            vec3 V = normalize(cameraPosition - wp);
+            vec3 H = normalize(normalize(uSol) + V);
+            // el step() es lo que lo hace cartoon: un brillo con borde, no un
+            // degradado de plástico
+            float esp = step(0.55, pow(max(dot(N, H), 0.0), 60.0));
+            // fresnel contra un color de horizonte constante: acotado a 0,6
+            // porque si domina, el agua pierde sus dos bandas toon
+            float F = min(0.6, 0.02 + 0.98 * pow(1.0 - max(dot(N, V), 0.0), 5.0));
+            gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(0.79, 0.92, 1.0), F * gl_FragColor.a);
+            gl_FragColor.rgb += esp * 0.5 * gl_FragColor.a;
+          }`
         );
       parcheaNiebla(sh);
     };
@@ -906,7 +1218,7 @@ export default function Mundo() {
         if (p.tinte) m.setColorAt(0, BLANCO); // hace falta tocarlo una vez para que exista
         m.userData.tipo = t;
         grupoPiezas.add(m);
-        par.partes.push({ mesh: m, tinte: !!p.tinte });
+        par.partes.push({ mesh: m, tinte: !!p.tinte, base: p.base || null });
       }
       mallas[t] = par;
     }
@@ -933,6 +1245,13 @@ export default function Mundo() {
       const raiz = gltf.scene;
       raiz.updateMatrixWorld(true);
       const lisas = [];
+      const teñibles = []; // los materiales que el jugador puede pintar
+      // `tinte` en el catálogo puede ser `true` (piezas generadas) o el NOMBRE
+      // del material del .glb que se pinta (o una lista). `cargaModelo` ya
+      // trocea por `groups` y agrupa por material, así que mandar uno a su
+      // propia parte son cuatro líneas.
+      const pintables = new Set(typeof def.tinte === 'string' ? [def.tinte] : Array.isArray(def.tinte) ? def.tinte : []);
+      let baseTinte = null; // el color original, que es lo que se usa con c = 0
       const conTextura = new Map(); // textura → [geometrías]
       raiz.traverse((o) => {
         if (!o.isMesh) return;
@@ -958,7 +1277,8 @@ export default function Mundo() {
             const col = new Float32Array(n * 3);
             // Kenney exporta los colores de material en sRGB aunque glTF los
             // pide lineales: sin esta conversión todo sale lavado y pálido
-            const c = acercaVerde((m.color || BLANCO).clone()).convertSRGBToLinear();
+            const dePaletaKit = PALETA_KIT[m.name];
+            const c = (dePaletaKit ? new THREE.Color(dePaletaKit) : acercaVerde((m.color || BLANCO).clone())).convertSRGBToLinear();
             for (let i = 0; i < n; i++) {
               col[i * 3] = c.r;
               col[i * 3 + 1] = c.g;
@@ -966,12 +1286,50 @@ export default function Mundo() {
             }
             g.setAttribute('color', new THREE.BufferAttribute(col, 3));
             g.deleteAttribute('uv');
-            lisas.push(g);
+            if (pintables.has(m.name)) {
+              // El color del material NO se hornea tal cual: se guarda
+              // RELATIVO al primero de los teñibles, que pasa a ser blanco.
+              // Así el vértice conserva la relación entre tonos (la valla
+              // tiene su listón claro y su poste oscuro) y el color de verdad
+              // lo pone `instanceColor`. Es lo que permite repintar la pieza
+              // de arriba abajo en vez de multiplicar un pastel sobre un
+              // naranja, que apenas se notaba.
+              if (!baseTinte) baseTinte = c.clone();
+              const rel = c.clone();
+              rel.r /= Math.max(baseTinte.r, 0.001);
+              rel.g /= Math.max(baseTinte.g, 0.001);
+              rel.b /= Math.max(baseTinte.b, 0.001);
+              for (let i = 0; i < n; i++) {
+                col[i * 3] = rel.r;
+                col[i * 3 + 1] = rel.g;
+                col[i * 3 + 2] = rel.b;
+              }
+              teñibles.push(g);
+            } else lisas.push(g);
           }
         }
       });
       const partes = [];
-      if (lisas.length) partes.push({ geo: mergeGeometries(lisas, false), mat: matFijo });
+      // Las copas se mecen. `conViento` ya existía, ya estaba calibrado para
+      // esto (`smoothstep(1.5, 6.0, position.y)`, que es justo la altura de un
+      // árbol) y su propio comentario decía «las copas se mecen», pero
+      // `CON_VIENTO` solo tenía la bandera y el bucle que lo aplicaba se
+      // saltaba todo lo que tuviera `glb`. Un mundo donde la hierba ondea a
+      // los pies y las copas de 8-10 m están clavadas se lee como un decorado.
+      // La sombra se queda quieta, y con 0,18 m de amplitud no se echa de menos.
+      if (lisas.length) partes.push({ geo: mergeGeometries(lisas, false), mat: def.viento ? matFijoViento : matFijo });
+      // La parte teñible conserva su color de vértice original y el tinte se
+      // MULTIPLICA encima. Es lo que hace que el cambio sea compatible: todo
+      // lo que ya está guardado lleva `c` a 0 —`validaPiezas` lo fuerza— así
+      // que si el vértice se pusiera a blanco, el día del cambio todas las
+      // vallas del mundo se volverían color arena. Con el tinte normalizado a
+      // luminancia 1, `c: 0` deja la pieza casi como estaba y los demás
+      // tintes la desplazan de tono sin apagarla.
+      // `base` es el color con el que vino la pieza: es lo que se pinta con
+      // c = 0, que es lo que lleva TODO lo ya guardado (`validaPiezas` fuerza
+      // el 0). Así el día del cambio no se mueve ni un píxel de lo que hay, y
+      // el resto de la paleta sí repinta de verdad.
+      if (teñibles.length) partes.push({ geo: mergeGeometries(teñibles, false), mat: def.viento ? matTinteViento : matTinte, tinte: true, base: baseTinte });
       for (const [tex, gs] of conTextura) {
         tex.colorSpace = THREE.SRGBColorSpace;
         partes.push({ geo: mergeGeometries(gs, false), mat: conNiebla(new THREE.MeshToonMaterial({ map: tex, gradientMap: rampa })) });
@@ -1012,6 +1370,13 @@ export default function Mundo() {
     });
 
     const coloresTinte = COLORES.map((h) => new THREE.Color(h));
+    // La misma paleta pero con luminancia 1: para multiplicar sobre un color
+    // que ya existe (las piezas de .glb) en vez de pintar sobre blanco.
+    const coloresTinteLin = COLORES.map((h) => new THREE.Color(h).convertSRGBToLinear());
+    // Con qué se pinta una parte: si la pieza vino con color propio (las de
+    // .glb) el índice 0 lo devuelve tal cual, y del 1 en adelante repinta.
+    // Las piezas generadas no tienen base: su vértice ya es blanco.
+    const tinteDe = (parte, c) => (parte.base ? (c ? coloresTinteLin[c] || parte.base : parte.base) : coloresTinte[c] || coloresTinte[0]);
 
     // --- hierba: matas que se mecen, alrededor del avatar ---
     const texHierba = (() => {
@@ -1065,7 +1430,7 @@ export default function Mundo() {
     // miles de planos y su sombra no se echa de menos
     const matHierba = conAltura(
       new THREE.MeshToonMaterial({ map: texHierba, alphaTest: 0.5, side: THREE.DoubleSide, gradientMap: rampa }),
-      { viento: true, nubes: true }
+      { viento: true, nubes: true, pie: true }
     );
     const hierba = new THREE.InstancedMesh(geoHierba, matHierba, MAX_HIERBA);
     hierba.count = 0;
@@ -1079,10 +1444,20 @@ export default function Mundo() {
     // --- nubes ---
     const rndNubes = prng(11);
     const nubes = [];
-    const matNube = new THREE.MeshBasicMaterial({ vertexColors: true, fog: false, transparent: true, opacity: 0.92 });
+    // `toneMapped: false` porque la cúpula tampoco pasa por ACES: con él el
+    // blanco de la nube caía a 228 mientras los cúmulos pintados de la cúpula
+    // se quedaban en 255, y las dos familias de nube no casaban.
+    // Opacas: las esferas se solapan DENTRO de la misma malla, así que con
+    // `transparent` las circunferencias de intersección se veían como cortes
+    // duros. Y con la niebla puesta (a 110 m de alto, nieblaF ≈ 0,19) no hace
+    // falta desvanecido propio.
+    const matNube = new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: false });
     for (let i = 0; i < 7; i++) {
       const m = new THREE.Mesh(geometriaNube(rndNubes), matNube);
-      m.frustumCulled = false;
+      // Las siete estaban alineadas al mismo eje X y se veía: cada una a su
+      // aire. Y sin `frustumCulled = false`, que eran 7 mallas dibujándose
+      // aunque mirases al suelo; three les calcula la envolvente sola.
+      m.rotation.y = rndNubes() * Math.PI * 2;
       nubes.push({ m, ox: (rndNubes() - 0.5) * 520, oz: (rndNubes() - 0.5) * 520, h: 95 + rndNubes() * 45, v: 1.2 + rndNubes() * 1.4 });
       scene.add(m);
     }
@@ -1152,7 +1527,16 @@ export default function Mundo() {
       return tex;
     })();
     // con segmentos: el shader los sube al terreno y el marco se ciñe a la colina
-    const geoParcela = new THREE.PlaneGeometry(L, L, 12, 12);
+    // 10 y no 12: el suelo son 768 m en 160 tramos = 4,80 m por tramo, y el
+    // plano se engancha a múltiplos de 48 m (que son 10 × 4,80). Con 10
+    // tramos la parcela mide 48 / 10 = 4,80 y sus vértices caen EXACTAMENTE
+    // sobre los del suelo, así que las dos mallas se levantan a la misma
+    // altura en el vertex shader y la losa deja de hundirse o de asomar en
+    // pendiente (con 12 tramos, 4,00 m, el desfase llegaba al metro largo en
+    // el talud del río). Lo comparten `plazas`, `marcos` y `marcoObra`, así
+    // que arregla de paso los marcos que flotaban sobre la orilla. Y encima
+    // son menos vértices: 121 por parcela en vez de 169.
+    const geoParcela = new THREE.PlaneGeometry(L, L, 10, 10);
     geoParcela.rotateX(-Math.PI / 2);
     const MAX_PARC = (RADIO_PARCELAS * 2 + 3) ** 2;
     const marcos = new THREE.InstancedMesh(
@@ -1167,7 +1551,7 @@ export default function Mundo() {
     scene.add(marcos);
     const plazas = new THREE.InstancedMesh(
       geoParcela,
-      conAltura(new THREE.MeshToonMaterial({ color: 0xdfd0b2, gradientMap: rampa }), { normales: true, nubes: true }),
+      conAltura(new THREE.MeshToonMaterial({ color: 0xdfd0b2, gradientMap: rampa }), { normales: true, nubes: true, rio: true }),
       MAX_PARC
     );
     plazas.count = 0;
@@ -1215,6 +1599,13 @@ export default function Mundo() {
     const escI = new THREE.Vector3(1, 1, 1);
     const escS = new THREE.Vector3(1, 1, 1);
     const ejeY = new THREE.Vector3(0, 1, 0);
+    // Escala PROPIA para las piezas. `escI` NO se puede tocar: lo comparte el
+    // bucle de los pájaros (`vuelanLosPajaros`), que lo da por hecho a
+    // (1,1,1) y no lo escribe nunca; si `pintaMundo` lo mutara, los pájaros
+    // saldrían escalados en silencio.
+    const escPieza = new THREE.Vector3(1, 1, 1);
+    // ... y otra para la losa del paseo, por lo mismo: `escI` no se toca.
+    const escPaseo = new THREE.Vector3(1, 1, 1);
     const colorMio = new THREE.Color(0x7fb0ff);
     const cacheColorDueno = new Map();
 
@@ -1225,6 +1616,112 @@ export default function Mundo() {
     const origen = {};
     // lo que no se puede atravesar: [{x, y, r}] en metros del mundo
     let solidos = [];
+    // Siembra el campo alrededor del avatar. Va sobre las MISMAS mallas
+    // instanciadas que las piezas de los jugadores, así que no añade ni un
+    // draw call: solo instancias. No entra en `solidos` (no vas a chocarte con
+    // el monte) ni en `origen` (no se puede tocar ni seleccionar: no es de
+    // nadie), y la comprobación de `origen` ya iba con `?.`, así que las
+    // instancias sin dueño simplemente no responden al rayo.
+    // Una sola pieza en el origen, para la miniatura.
+    const cajaMini = new THREE.Box3();
+    function pintaMiniatura(cont) {
+      const par = mallas[MINIATURA];
+      if (!par) return;
+      posI.set(0, 0, 0);
+      rotI.setFromAxisAngle(ejeY, 0);
+      escPieza.set(1, 1, 1);
+      mtx.compose(posI, rotI, escPieza);
+      cajaMini.makeEmpty();
+      for (const q of par.partes) {
+        q.mesh.setMatrixAt(0, mtx);
+        if (q.tinte) q.mesh.setColorAt(0, tinteDe(q, Number(params.get('c')) || 0));
+        q.geo = q.geo || q.mesh.geometry;
+        q.mesh.geometry.computeBoundingBox();
+        cajaMini.union(q.mesh.geometry.boundingBox);
+      }
+      cont[MINIATURA] = 1;
+    }
+
+    // La hoja de contactos del catálogo: cada pieza en su celda, ordenadas
+    // por categoría y en el orden del catálogo, todas con giro 0 y escala 1
+    // para que se comparen de verdad.
+    function pintaMuestrario(cont) {
+      let k = 0;
+      for (const cat of Object.keys(CATEGORIAS)) {
+        for (const t of Object.keys(PIEZAS)) {
+          if (PIEZAS[t].cat !== cat) continue;
+          const par = mallas[t];
+          if (!par) { k++; continue; }
+          const cx = (k % MUESTRA_COLS) * MUESTRA_PASO;
+          const cy = -Math.floor(k / MUESTRA_COLS) * MUESTRA_PASO;
+          const i = cont[t];
+          if (i < MAX_INST) {
+            posI.set(cx, alturaEn(cx, cy) - 0.12, -cy);
+            rotI.setFromAxisAngle(ejeY, 0);
+            escPieza.set(1, 1, 1);
+            mtx.compose(posI, rotI, escPieza);
+            for (const q of par.partes) {
+              q.mesh.setMatrixAt(i, mtx);
+              if (q.tinte) q.mesh.setColorAt(i, tinteDe(q, (k * 3) % COLORES.length));
+            }
+            cont[t] = i + 1;
+          }
+          k++;
+        }
+      }
+    }
+
+    let campoCentro = null;
+    function siembraCampo(cont) {
+      if (MUESTRARIO || MINIATURA) return;
+      const cx = Math.round(yo.x / CELDA_CAMPO);
+      const cy = Math.round(yo.y / CELDA_CAMPO);
+      campoCentro = { cx, cy };
+      const n = Math.ceil(RADIO_CAMPO / CELDA_CAMPO);
+      for (let i = -n; i <= n; i++) {
+        for (let j = -n; j <= n; j++) {
+          const gx = cx + i;
+          const gy = cy + j;
+          const h = hash2(gx * 31 + 5, gy * 17 + 11);
+          // A masas y claros: una onda lenta decide dónde hay monte y dónde
+          // pradera. Sin ella sale un bosque uniforme, que es tan artificial
+          // como no tener nada.
+          const wx = (gx + hash2(gx * 3, gy * 13) - 0.5) * CELDA_CAMPO;
+          const wy = (gy + hash2(gx * 29, gy * 7) - 0.5) * CELDA_CAMPO;
+          const masa = 0.3 + 0.26 * Math.sin(wx * 0.006 + 1.1) * Math.sin(wy * 0.005 - 0.4);
+          if (h > masa) continue;
+          if (Math.hypot(wx - yo.x, wy - yo.y) > RADIO_CAMPO) continue;
+          // ni en el agua ni en su orilla, ni en lo público, ni en lo de nadie
+          if (distRio(wx, wy).d < RIO_ANCHO + 6) continue;
+          const p = parcelaDe(wx, wy);
+          const tipo = tipoParcela(p.px, p.py);
+          if (tipo !== 'campo' && tipo !== 'residencial' && tipo !== 'parque') continue;
+          const pc = parcelas.get(claveParcela(p.px, p.py));
+          if (pc && pc.o && pc.o !== 'mundo') continue; // la parcela de alguien se respeta
+          // en lo residencial, mucho más flojo: es donde la gente construye y
+          // una parcela no puede venir con un bosque puesto
+          if (tipo === 'residencial' && h > masa * 0.45) continue;
+          const t = SIEMBRA[Math.floor(hash2(gy * 101 + 3, gx * 61 + 9) * SIEMBRA.length) % SIEMBRA.length];
+          const par = mallas[t];
+          if (!par) continue;
+          const i2 = cont[t];
+          if (i2 >= MAX_INST) continue;
+          const escala = 0.85 + hash2(gx * 71, gy * 53) * 0.3;
+          posI.set(wx, alturaEn(wx, wy) - 0.12, -wy);
+          rotI.setFromAxisAngle(ejeY, hash2(gx * 13, gy * 41) * Math.PI * 2);
+          escPieza.set(escala, escala, escala);
+          mtx.compose(posI, rotI, escPieza);
+          for (const q of par.partes) {
+            q.mesh.setMatrixAt(i2, mtx);
+            // si no se fija, la instancia arrastra el tinte de quien ocupara
+            // ese índice antes
+            if (q.tinte) q.mesh.setColorAt(i2, tinteDe(q, 0));
+          }
+          cont[t] = i2 + 1;
+        }
+      }
+    }
+
     function pintaMundo() {
       const cont = {};
       for (const t in mallas) {
@@ -1241,8 +1738,19 @@ export default function Mundo() {
         const by = p.py * L;
         const cen = centroParcela(p.px, p.py);
         if (pc.o === 'mundo') {
-          if (conSuelo(tipoParcela(p.px, p.py)) && nPlazas < MAX_PARC) {
-            mtx.makeTranslation(cen.x, 0.04, -cen.y);
+          const tipoP = tipoParcela(p.px, p.py);
+          if (conSuelo(tipoP) && nPlazas < MAX_PARC) {
+            // La plaza es una plaza y se queda entera. El PASEO no: recibía
+            // una losa de piedra de 48 × 48 m, así que eran 624 m de
+            // explanada beige con un camino de 4 m por el medio, las farolas
+            // plantadas en piedra vacía y ni una mata de hierba. Un paseo es
+            // una banda: 15 m deja las farolas de ±6 m sobre piedra y los
+            // árboles de ±11 m sobre hierba, que es justo lo que se busca.
+            posI.set(cen.x, 0.04, -cen.y);
+            rotI.identity();
+            if (tipoP === 'paseo') escPaseo.set(p.py === 0 ? 1 : ANCHO_PASEO / L, 1, p.py === 0 ? ANCHO_PASEO / L : 1);
+            else escPaseo.set(1, 1, 1);
+            mtx.compose(posI, rotI, escPaseo);
             plazas.setMatrixAt(nPlazas++, mtx);
           }
         } else if (pc.o && nMarcos < MAX_PARC) {
@@ -1259,32 +1767,67 @@ export default function Mundo() {
           }
           marcos.setColorAt(nMarcos++, col);
         }
-        for (const z of pc.d || []) {
+        for (const z of MUESTRARIO || MINIATURA ? [] : pc.d || []) {
           const par = mallas[z.t];
           if (!par) continue;
           const wx = bx + z.x;
           const wy = by + z.y;
-          if (PIEZAS[z.t]?.solido) solidos.push({ x: wx, y: wy, r: PIEZAS[z.t].solido });
+          const def = PIEZAS[z.t];
+          // Variación por instancia. Un parque son 7-11 árboles clonados
+          // píxel a píxel, mismo ángulo y mismo tamaño, y eso es lo que hace
+          // que un bosque se lea como papel pintado. El giro y la escala
+          // salen de un hash de la POSICIÓN, así que son deterministas: los
+          // mismos datos dan el mismo mundo en todos los clientes, sin tocar
+          // el formato guardado {t,x,y,r,c} ni pedirle nada al servidor.
+          // Solo la naturaleza: una casa, un banco o una mesa se colocan a
+          // propósito, y torcerlos 20° se lee como descuido, no como bosque.
+          // Las de rejilla y las de suelo quedan fuera por definición: tienen
+          // que casar unas con otras.
+          const suelta = def.cat === 'naturaleza' && !def.rejilla && !def.suelo;
+          let giro = (z.r || 0) * (Math.PI / 2);
+          let escala = 1;
+          if (suelta) {
+            const hx = Math.round(wx * 10);
+            const hy = Math.round(wy * 10);
+            giro += (hash2(hx, hy) - 0.5) * 0.78; // ±22°
+            escala = 0.88 + hash2(hy + 7919, hx + 104729) * 0.24; // 0,88..1,12
+          }
+          if (def.solido) solidos.push({ x: wx, y: wy, r: def.solido * escala });
           // un pelín enterrada: en pendiente, mejor que el borde bajo se hunda
           // a que el alto flote
           posI.set(wx, alturaEn(wx, wy) - 0.12, -wy);
-          rotI.setFromAxisAngle(ejeY, (z.r || 0) * (Math.PI / 2));
-          mtx.compose(posI, rotI, escI);
+          rotI.setFromAxisAngle(ejeY, giro);
+          escPieza.set(escala, escala, escala);
+          mtx.compose(posI, rotI, escPieza);
           const i = cont[z.t];
           if (i >= MAX_INST) continue;
           for (const p of par.partes) {
             p.mesh.setMatrixAt(i, mtx);
-            if (p.tinte) p.mesh.setColorAt(i, coloresTinte[z.c] || coloresTinte[0]);
+            if (p.tinte) p.mesh.setColorAt(i, tinteDe(p, z.c | 0));
           }
           origen[z.t][i] = { clave, z };
           cont[z.t] = i + 1;
         }
       }
+      // ANTES del bucle que fija los `count`: si no, las instancias del campo
+      // se escriben pero no se dibujan.
+      if (MINIATURA) pintaMiniatura(cont);
+      else if (MUESTRARIO) pintaMuestrario(cont);
+      else siembraCampo(cont);
       for (const t in mallas) {
         for (const p of mallas[t].partes) {
           p.mesh.count = cont[t];
+          // Solo lo que se usa: `pintaMundo` corre en CADA pointermove del
+          // arrastre, y sin esto cada uno subía las 3.000 instancias enteras
+          // de las 33 mallas (192 KB × 33 = 6,3 MB por evento).
+          p.mesh.instanceMatrix.clearUpdateRanges();
+          p.mesh.instanceMatrix.addUpdateRange(0, cont[t] * 16);
           p.mesh.instanceMatrix.needsUpdate = true;
-          if (p.tinte) p.mesh.instanceColor.needsUpdate = true;
+          if (p.tinte) {
+            p.mesh.instanceColor.clearUpdateRanges();
+            p.mesh.instanceColor.addUpdateRange(0, cont[t] * 3);
+            p.mesh.instanceColor.needsUpdate = true;
+          }
           // la esfera envolvente del InstancedMesh se calcula UNA vez y se
           // queda: si se calculó con 0 instancias, el rayo de selección no
           // acierta nunca. Se invalida para que se rehaga al siguiente toque.
@@ -1292,6 +1835,7 @@ export default function Mundo() {
         }
       }
       pintaSeleccion();
+      pideSombras(); // ha cambiado lo que hay: la sombra de antes ya no vale
       marcos.count = nMarcos;
       marcos.instanceMatrix.needsUpdate = true;
       if (marcos.instanceColor) marcos.instanceColor.needsUpdate = true;
@@ -1329,7 +1873,14 @@ export default function Mundo() {
           const rodal = 0.32 + 0.3 * Math.sin(wx * 0.09 + wy * 0.05) * Math.sin(wy * 0.11 - wx * 0.04);
           if (h > rodal) continue;
           const p = parcelaDe(wx, wy);
-          if (conSuelo(tipoParcela(p.px, p.py))) continue;
+          const tipoH = tipoParcela(p.px, p.py);
+          // Antes se saltaba la parcela ENTERA, así que un paseo eran 48 m
+          // pelados. Ahora solo la banda de losa: la hierba llega al bordillo.
+          if (tipoH === 'plaza') continue;
+          if (tipoH === 'paseo') {
+            const dentro = p.py === 0 ? Math.abs(wy - (p.py * L + L / 2)) : Math.abs(wx - (p.px * L + L / 2));
+            if (dentro < ANCHO_PASEO / 2 + 0.6) continue;
+          }
           if (distRio(wx, wy).d < RIO_ANCHO + 2) continue;
           let tapada = false;
           for (const c of caminos) {
@@ -1356,6 +1907,43 @@ export default function Mundo() {
     // c, p, s: los índices del perfil (ropa, pelo, piel); los mismos que
     // viajan con la presencia, así que un vecino se ve igual en su pantalla y
     // en la tuya.
+    // La mancha de contacto: un degradado radial que se MULTIPLICA sobre el
+    // suelo. No es una sombra —la del sol ya cae al noreste— sino la oclusión
+    // de debajo del pie, que ninguna luz rellena. Sin ella, cuando la sombra
+    // proyectada se va lejos el muñeco vuelve a despegarse.
+    const texMancha = (() => {
+      const S = 64;
+      const cv = document.createElement('canvas');
+      cv.width = cv.height = S;
+      const c = cv.getContext('2d');
+      c.fillStyle = '#fff';
+      c.fillRect(0, 0, S, S);
+      c.clearRect(0, 0, S, S);
+      // El degradado va en el ALFA, no en el color: multiplicar con
+      // `MultiplyBlending` y `opacity` a la vez no compone (three saca
+      // `color * opacity` y encima le pasa el tone mapping, así que la
+      // mancha salía como un cuadrado claro). Con alfa y mezcla normal el
+      // resultado es el que se ve venir.
+      const g = c.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
+      g.addColorStop(0, 'rgba(60,78,104,0.55)');
+      g.addColorStop(0.45, 'rgba(60,78,104,0.34)');
+      g.addColorStop(1, 'rgba(60,78,104,0)');
+      c.fillStyle = g;
+      c.fillRect(0, 0, S, S);
+      const tex = new THREE.CanvasTexture(cv);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      return tex;
+    })();
+    const geoMancha = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
+    const matMancha = new THREE.MeshBasicMaterial({
+      map: texMancha,
+      transparent: true,
+      opacity: 0.5,
+      depthWrite: false,
+      fog: false,
+      toneMapped: false, // es oclusión, no luz: que ACES no la toque
+    });
+
     function creaFigura(c, p, s) {
       const grupo = new THREE.Group();
       const cuerpo = new THREE.Mesh(geometriaAvatar(dePaleta(coloresTinte, c), dePaleta(PELOS_3D, p), dePaleta(PIELES_3D, s)), matFijo);
@@ -1372,14 +1960,46 @@ export default function Mundo() {
         m.castShadow = true;
         m.receiveShadow = true;
       }
-      grupo.add(cuerpo, pi, pd, bi, bd);
-      return { grupo, cuerpo, pi, pd, bi, bd };
+      const mancha = new THREE.Mesh(geoMancha, matMancha);
+      mancha.scale.set(0.78, 1, 0.78);
+      mancha.position.y = 0.02;
+      mancha.renderOrder = 3; // por encima del marco de parcela y de la obra
+      grupo.add(cuerpo, pi, pd, bi, bd, mancha);
+      return { grupo, cuerpo, pi, pd, bi, bd, mancha };
     }
     const avatar = creaFigura(jugador.color, jugador.pelo, jugador.piel);
+    // --- modo miniatura: fuera todo menos la pieza ---
+    let camMini = null;
+    if (MINIATURA) {
+      suelo.visible = false;
+      agua.visible = false;
+      hierba.visible = false;
+      cielo.visible = false;
+      pajaros.visible = false;
+      marcos.visible = false;
+      plazas.visible = false;
+      marcoObra.visible = false;
+      for (const nb of nubes) nb.m.visible = false;
+      avatar.grupo.visible = false;
+      scene.fog = null;
+      scene.background = new THREE.Color(0xeaf3fb);
+      document.body.classList.add('miniatura');
+      // Ortográfica y SIEMPRE desde el mismo sitio: es lo que hace que dos
+      // miniaturas se puedan comparar. 45° de acimut y 60° de polar, que es
+      // el tres cuartos de toda la vida.
+      camMini = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 200);
+      const dir = new THREE.Vector3(Math.cos(Math.PI / 4), Math.tan(Math.PI / 6), Math.sin(Math.PI / 4)).normalize();
+      camMini.position.copy(dir).multiplyScalar(60);
+      camMini.lookAt(0, 0, 0);
+    }
     scene.add(avatar.grupo);
     sigueElSol(0, 0, 0);
     // posición en metros del mundo (y hacia el norte); rumbo en radianes
-    const yo = { x: L / 2, y: L / 2 - 12, h: 0, rumbo: 0, destino: null, fase: 0, andando: false };
+    // `faseResp` desplaza la respiración de cada figura: sin ella, dos
+    // vecinos parados suben y bajan a la vez y se ve la máquina. Sale del id,
+    // así que es la misma en todas las pantallas.
+    const faseDeId = (id) => (parseInt(String(id).slice(-4), 16) || 0) / 65535 * Math.PI * 2;
+    const yo = { x: L / 2, y: L / 2 - 12, h: 0, rumbo: 0, destino: null, fase: 0, amp: 0, andando: false, faseResp: faseDeId(jugador.id) };
     const px0 = parseFloat(params.get('x'));
     const py0 = parseFloat(params.get('y'));
     if (Number.isFinite(px0) && Number.isFinite(py0)) {
@@ -1391,9 +2011,31 @@ export default function Mundo() {
     // sale suave. Los brazos giran desde el hombro (que es donde está su
     // origen), así que basta con un ángulo por brazo.
     const GESTO_MS = 1500;
+    // Persigue un rumbo por el camino corto, con la constante de tiempo de
+    // siempre (1 - e^(-dt·k)): sirve para el avatar propio y para los vecinos.
+    function giraHacia(o, objetivo, dt) {
+      if (o.rumbo == null) { o.rumbo = objetivo; return; }
+      let d = objetivo - o.rumbo;
+      while (d > Math.PI) d -= Math.PI * 2;
+      while (d < -Math.PI) d += Math.PI * 2;
+      o.rumbo += d * (1 - Math.exp(-dt * 11));
+    }
+
     function colocaFigura(f, o) {
-      const salto = o.andando ? Math.abs(Math.sin(o.fase)) * 0.06 : 0;
-      const a = o.andando ? Math.sin(o.fase) * 0.65 : 0;
+      // `amp` va de 0 a 1 y de vuelta: es lo que hace que la zancada arranque
+      // y frene en vez de aparecer y desaparecer de un fotograma a otro.
+      const amp = o.amp != null ? o.amp : o.andando ? 1 : 0;
+      const salto = Math.abs(Math.sin(o.fase)) * 0.06 * amp;
+      const a = Math.sin(o.fase) * 0.65 * amp;
+      // Respiración: quieto, el muñeco era una estatua. Sube y baja un
+      // centímetro y se balancea un grado, con la fase desplazada por figura
+      // para que dos vecinos parados no respiren a la vez. NO se escala
+      // `f.cuerpo`: es la malla fusionada de cuerpo, cabeza, pelo y ojos, y
+      // los brazos son hermanos suyos, así que un 2 % en Y estiraría el
+      // cuello y despegaría los brazos.
+      const quieto = 1 - amp;
+      const tResp = uTiempo.value + (o.faseResp || 0);
+      const resp = Math.sin(tResp * 1.9) * 0.012 * quieto;
       f.pi.rotation.x = a;
       f.pd.rotation.x = -a;
       // los brazos van al contrario que las piernas, como al andar de verdad
@@ -1428,8 +2070,18 @@ export default function Mundo() {
       }
       f.bi.rotation.set(bix, 0, biz);
       f.bd.rotation.set(bdx, 0, bdz);
+      f.cuerpo.position.y = resp;
+      f.bi.position.y = 1.14 + resp;
+      f.bd.position.y = 1.14 + resp;
+      f.grupo.rotation.z = Math.sin(tResp * 0.42) * 0.018 * quieto;
       f.grupo.position.set(o.x, o.h + salto + brinco, -o.y);
       f.grupo.rotation.y = o.rumbo;
+      // la mancha se queda en el SUELO y se encoge con la altura del brinco:
+      // si subiera con el grupo, el muñeco llevaría la mancha pegada al pie
+      const alto = salto + brinco;
+      const k = Math.max(0, 1 - alto * 2.2);
+      f.mancha.position.y = 0.02 - alto;
+      f.mancha.scale.set(0.78 * (0.6 + 0.4 * k), 1, 0.78 * (0.6 + 0.4 * k));
     }
 
     // Cámara inicial: al sur del avatar, mirando al norte. Reproducible desde
@@ -1470,7 +2122,7 @@ export default function Mundo() {
         dice: null, // lo que dice ahora mismo, si dice algo
         diceT: 0, // ... y cuándo lo dijo: distingue lo nuevo de lo repetido
         gestoT: 0,
-        o: { x: datos.x, y: datos.y, h: alturaEn(datos.x, datos.y), rumbo: datos.r, fase: 0, andando: false },
+        o: { x: datos.x, y: datos.y, h: alturaEn(datos.x, datos.y), rumbo: datos.r, fase: 0, amp: 0, andando: false, faseResp: faseDeId(id) },
         objetivo: { x: datos.x, y: datos.y, rumbo: datos.r },
       };
       otros.set(id, o);
@@ -1683,9 +2335,18 @@ export default function Mundo() {
     // La pieza seleccionada: {clave, z}. Se selecciona tocándola, y la recién
     // colocada queda seleccionada para poder ajustarla al momento.
     let seleccion = null;
+    // El anillo se dibujaba con `depthTest: false`, así que su arco de detrás
+    // se pintaba POR ENCIMA de la casa que rodea: se veía una elipse azul
+    // cruzando la fachada. Con la prueba de profundidad puesta, ese arco queda
+    // detrás del edificio, que es lo que dice dónde está la pieza. No
+    // desaparece dentro del muro porque el radio (ancho × 0,6 + 0,4) deja
+    // 1,4 m de margen por fuera de la planta de una casa de 10 m.
+    // Y con `conAltura` se dobla con la colina en vez de quedarse plano a la
+    // altura del centro: por eso la posición en y es un dedo sobre CERO, y la
+    // altura la pone el vertex shader.
     const anillo = new THREE.Mesh(
-      new THREE.RingGeometry(0.82, 1, 48),
-      new THREE.MeshBasicMaterial({ color: 0x2f6fed, transparent: true, opacity: 0.9, side: THREE.DoubleSide, depthTest: false })
+      new THREE.RingGeometry(0.84, 1, 64),
+      conAltura(new THREE.MeshBasicMaterial({ color: 0x2f6fed, transparent: true, opacity: 0.85, side: THREE.DoubleSide, depthWrite: false }))
     );
     anillo.rotation.x = -Math.PI / 2;
     anillo.renderOrder = 3;
@@ -1702,7 +2363,7 @@ export default function Mundo() {
       const wx = p.px * L + seleccion.z.x;
       const wy = p.py * L + seleccion.z.y;
       const a = ((PIEZAS[seleccion.z.t]?.ancho || 3) * 0.6) + 0.4;
-      anillo.position.set(wx, alturaEn(wx, wy) + 0.25, -wy);
+      anillo.position.set(wx, 0.09, -wy);
       anillo.scale.set(a, a, 1);
       anillo.visible = true;
     }
@@ -2477,7 +3138,7 @@ export default function Mundo() {
       // software), el avatar no se teletransporta pero tampoco se arrastra
       const dt = Math.min(0.25, (t - tAnt) / 1000 || 0);
       tAnt = t;
-      uTiempo.value = t / 1000;
+      uTiempo.value = RELOJ_FIJO ? tFijo : t / 1000;
 
       // --- mover el avatar propio ---
       let mx = 0;
@@ -2544,8 +3205,12 @@ export default function Mundo() {
             yo.y = cy + Math.sign(yo.y - cy || 1) * (RIO_ANCHO + 1);
           }
         }
-        yo.rumbo = Math.atan2(dx, -dy); // el frente del avatar es +z (sur)
+        // El rumbo se persigue por el camino corto en vez de escribirse: un
+        // giro de 180° con el joystick era un pivote instantáneo, y es el
+        // gesto más frecuente en el móvil.
+        giraHacia(yo, Math.atan2(dx, -dy), dt); // el frente del avatar es +z (sur)
         yo.fase += dt * CADENCIA;
+        yo.amp = Math.min(1, (yo.amp || 0) + dt * 7);
         // la cámara va con él
         camera.position.x += yo.x - x0;
         camera.position.z -= yo.y - y0;
@@ -2554,7 +3219,12 @@ export default function Mundo() {
         if (yo.destino && Math.hypot(yo.x - x0, yo.y - y0) < paso * 0.2) yo.destino = null; // atascado: se para
         actualizaDonde(false);
       } else {
-        yo.fase = 0;
+        // La amplitud baja sola en vez de ponerse a cero de golpe: antes la
+        // pierna volvía de 37° a la vertical EN UN FOTOGRAMA al soltar la
+        // tecla. La fase sigue corriendo mientras queda amplitud, para que el
+        // paso termine en lugar de congelarse a medias.
+        yo.amp = Math.max(0, (yo.amp || 0) - dt * 4);
+        if (yo.amp > 0) yo.fase += dt * CADENCIA;
       }
       // sube y baja con la colina; la cámara acompaña
       const h = alturaEn(yo.x, yo.y);
@@ -2576,12 +3246,14 @@ export default function Mundo() {
           const paso = Math.min(d, Math.max(VELOCIDAD * 1.2 * dt, d * dt * 2));
           s.x += (dx / d) * paso;
           s.y += (dy / d) * paso;
-          s.rumbo = Math.atan2(dx, -dy);
+          giraHacia(s, Math.atan2(dx, -dy), dt);
           s.andando = true;
           s.fase += dt * CADENCIA;
+          s.amp = Math.min(1, (s.amp || 0) + dt * 7);
         } else {
           s.andando = false;
-          s.fase = 0;
+          s.amp = Math.max(0, (s.amp || 0) - dt * 4);
+          if (s.amp > 0) s.fase += dt * CADENCIA;
           s.rumbo = o.objetivo.rumbo;
         }
         s.h = alturaEn(s.x, s.y);
@@ -2603,8 +3275,54 @@ export default function Mundo() {
       cielo.position.copy(camera.position);
       vuelanLosPajaros(uTiempo.value);
 
+      // Lo que mueve BRAZOS Y PIERNAS también cambia la sombra, aunque el
+      // avatar no se desplace: andar, un gesto o un brinco. Si nada de eso
+      // pasa y nadie se ha movido, la sombra del fotograma anterior vale y
+      // nos ahorramos repintar un 2048×2048.
+      // El sembrado va con el avatar, y `pintaMundo` solo se dispara cuando
+      // cambian los DATOS, así que hay que repintarlo al cruzar de celda.
+      if (!MUESTRARIO && (!campoCentro || Math.abs(Math.round(yo.x / CELDA_CAMPO) - campoCentro.cx) > 0 || Math.abs(Math.round(yo.y / CELDA_CAMPO) - campoCentro.cy) > 0)) {
+        if (modelosListos) pintaMundo();
+      }
+
+      if (yo.andando || yo.gesto) pideSombras();
+      else for (const o of otros.values()) {
+        if (o.o.andando || o.o.gesto) { pideSombras(); break; }
+      }
+
       centraMapa(dt, yo.andando);
       controls.update();
+      if (camMini) {
+        // El encuadre sale del tamaño REAL de la pieza, con una ley
+        // sublineal: si fuera proporcional, una flor de 0,8 m saldría como
+        // una mota y la torre de 13,5 m llenaría el cuadro; y si todas
+        // ocuparan lo mismo, se pierde la escala, que es justo lo que pasa
+        // hoy. Así una casa se ve más grande que una silla, pero la silla
+        // se sigue viendo.
+        const tam = new THREE.Vector3();
+        cajaMini.getSize(tam);
+        // El encuadre es PROPORCIONAL a la pieza pero con el margen
+        // encogiéndose: una pieza pequeña se enmarca holgada (×2,4) y una
+        // grande, justa (×1,2). Así la casa se ve el doble de grande que la
+        // silla en la celda —la escala se lee— pero la silla sigue siendo
+        // legible en 64 px, que es lo que se perdía si el encuadre fuera
+        // proporcional a secas (la flor de 0,8 m saldría como una mota).
+        const alto = Math.max(tam.y, 0.2);
+        const grande = Math.max(alto, Math.hypot(tam.x, tam.z));
+        const margen = 2.9 * Math.pow(grande / 0.5, -0.26);
+        const h = (grande * Math.max(1.15, margen)) / 2;
+        camMini.left = -h;
+        camMini.right = h;
+        camMini.top = h;
+        camMini.bottom = -h;
+        // el centro de la pieza, no su base
+        const cen = new THREE.Vector3();
+        cajaMini.getCenter(cen);
+        camMini.lookAt(cen.x, cen.y, cen.z);
+        camMini.updateProjectionMatrix();
+        renderer.render(scene, camMini);
+        return;
+      }
       renderer.render(scene, camera);
       pintaNombres();
 
@@ -2977,10 +3695,17 @@ export default function Mundo() {
       <button className="ui btn-cuad b-info" aria-label="Cómo funciona" onClick={() => setInfoOpen((v) => !v)}>
         i
       </button>
-      <button className="ui btn-cuad b-plaza" aria-label="Ir a la plaza" title="Ir a la plaza" onClick={() => engineRef.current?.vaA('0/0')}>
-        ⛲
-      </button>
-      {miParcela && (
+      {/* En modo obra el panel de piezas los tapa por completo (mismo z-index
+          y más tarde en el DOM), pero seguían en el orden de tabulación: con
+          Tab se llegaba a «Ir a la plaza» y te sacaba de tu propia obra sin
+          haber visto el botón. Se ocultan como ya se hacen el chat y el
+          joystick. */}
+      {!obra && (
+        <button className="ui btn-cuad b-plaza" aria-label="Ir a la plaza" title="Ir a la plaza" onClick={() => engineRef.current?.vaA('0/0')}>
+          ⛲
+        </button>
+      )}
+      {!obra && miParcela && (
         <button className="ui btn-cuad b-casa" aria-label="Ir a mi parcela" title="Ir a mi parcela" onClick={() => engineRef.current?.vaA(miParcela)}>
           🏠
         </button>
@@ -3068,7 +3793,7 @@ export default function Mundo() {
             <div className="panel-cab">
               <button className="actual" onClick={() => setPanelAbierto((v) => !v)} aria-expanded={panelAbierto} aria-label="Elegir pieza">
                 {PIEZAS[herr]?.mini ? (
-                  <i className={'mini' + (PIEZAS[herr].zoom ? ' zoom' : '')}>
+                  <i className="mini">
                     <img src={'/miniaturas/' + herr + '.png'} alt="" />
                   </i>
                 ) : (
@@ -3095,7 +3820,7 @@ export default function Mundo() {
                   .map(([t, d]) => (
                     <button key={t} className={'pieza' + (herr === t ? ' on' : '')} onClick={() => eligeHerr(t)} aria-label={d.nombre} aria-pressed={herr === t} title={d.nombre}>
                       {d.mini ? (
-                        <i className={'mini' + (d.zoom ? ' zoom' : '')}>
+                        <i className="mini">
                           <img src={'/miniaturas/' + t + '.png'} alt="" />
                         </i>
                       ) : (

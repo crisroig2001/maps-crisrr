@@ -330,7 +330,7 @@ body {
   padding: 0;
 }
 .colores .color.on { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(47, 111, 237, 0.35); }
-.colores.mini .color { width: 24px; height: 24px; border-radius: 8px; }
+.colores.mini .color { width: 32px; height: 32px; border-radius: 10px; }
 
 .btn-principal {
   background: var(--accent);
@@ -408,7 +408,13 @@ body {
 }
 .deco-cab b { color: var(--accent); }
 
+/* El panel de piezas NO lleva desenfoque: en modo obra hay cinco capas de
+   `backdrop-filter: blur()` a la vez (panel, deco-cab, sel-bar, la caja del
+   chat y el joystick) sobre un canvas WebGL a dpr 2, y en un Android modesto
+   es de lo más caro que hay en composición. El panel es el rectángulo más
+   grande de los cinco, así que es el que más cuesta y el que menos se nota. */
 .panel {
+  backdrop-filter: none;
   top: 66px;
   right: 14px;
   bottom: 14px;
@@ -458,10 +464,12 @@ body {
   background: transparent;
   color: var(--ink-2);
   font: 800 12.5px/1 inherit;
-  padding: 9px 12px;
+  padding: 12px 14px; /* 36 px de alto: eran 30,5 */
   cursor: pointer;
 }
-.tab.on { background: #e8effd; border-color: rgba(47, 111, 237, 0.35); color: var(--accent); }
+/* El texto activo va a #1e4fb8 (7,0:1 sobre #e8effd). Con var(--accent),
+   que es #2f6fed, se quedaba en 3,94:1 con letra de 11-12,5 px. */
+.tab.on { background: #e8effd; border-color: rgba(47, 111, 237, 0.35); color: #1e4fb8; }
 .rejilla {
   flex: 1;
   min-height: 0;
@@ -485,15 +493,13 @@ body {
   font: 700 11px/1.15 inherit;
   text-align: center;
 }
-.pieza.on { background: #e8effd; border-color: var(--accent); color: var(--accent); }
+.pieza.on { background: #e8effd; border-color: var(--accent); color: #1e4fb8; }
 .pieza:focus-visible, .tab:focus-visible, .panel-cab .actual:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .mini { width: 64px; height: 64px; overflow: hidden; display: block; border-radius: 10px; }
 .mini img { width: 64px; height: 64px; object-fit: contain; display: block; }
 /* los previews del Nature Kit traen mucho aire: se amplían al centro */
-.mini.zoom img { width: 128px; height: 128px; margin: -32px; }
 .panel-cab .mini { width: 40px; height: 40px; border-radius: 8px; }
 .panel-cab .mini img { width: 40px; height: 40px; }
-.panel-cab .mini.zoom img { width: 80px; height: 80px; margin: -20px; }
 .emoji { font-size: 40px; line-height: 64px; height: 64px; }
 .panel-cab .emoji { font-size: 26px; line-height: 40px; height: 40px; }
 .panel-pie {
@@ -519,7 +525,10 @@ body {
 }
 .sel-bar .pista { font-size: 12px; font-weight: 800; color: var(--accent); white-space: nowrap; }
 .sel-bar .cruz { display: flex; gap: 4px; }
-.sel-bar .cruz .btn-sec { padding: 10px 12px; }
+/* 44 px: son las flechas de medio metro, o sea el control más fino que
+   hay, y en el móvil viven a 78 px del borde de abajo. 10 px de padding
+   dejaban el objetivo en 33. */
+.sel-bar .cruz .btn-sec { padding: 15px 16px; min-width: 44px; min-height: 44px; }
 .sel-bar .btn-principal { padding: 11px 16px; font-size: 14px; box-shadow: 0 6px 18px rgba(47, 111, 237, 0.35); }
 
 @media (max-width: 719px) {
@@ -537,7 +546,6 @@ body {
   .rejilla { grid-template-columns: repeat(4, 1fr); }
   .mini { width: 56px; height: 56px; }
   .mini img { width: 56px; height: 56px; }
-  .mini.zoom img { width: 112px; height: 112px; margin: -28px; }
   .emoji { font-size: 34px; line-height: 56px; height: 56px; }
   .sel-bar {
     left: 8px;
@@ -663,9 +671,10 @@ body {
   width: 120px;
   height: 120px;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.35);
-  border: 2px solid rgba(255, 255, 255, 0.7);
-  backdrop-filter: blur(6px);
+  /* Blanco al 35 % sobre el cielo (#caf0fe) era invisible. Oscuro y suave,
+     con el borde blanco marcando el círculo. */
+  background: rgba(43, 52, 64, 0.18);
+  border: 2px solid rgba(255, 255, 255, 0.85);
   touch-action: none;
   display: grid;
   place-items: center;
@@ -677,4 +686,18 @@ body {
   background: var(--card);
   box-shadow: 0 6px 18px rgba(43, 52, 64, 0.25);
   pointer-events: none;
+}
+
+/* Modo miniatura (?miniatura=<tipo>): solo la pieza, sin nada de interfaz.
+   Lo usa scripts/miniaturas.mjs para generar public/miniaturas/*.png con el
+   motor de verdad, para que la luz y el color sean los del mundo. */
+body.miniatura .ui,
+body.miniatura .cabecera,
+body.miniatura .paleta,
+body.miniatura .sel-bar,
+body.miniatura .chat,
+body.miniatura .joy,
+body.miniatura #rotulos,
+body.miniatura #vineta {
+  display: none !important;
 }

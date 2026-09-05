@@ -8,7 +8,8 @@
     "start": "next start",
     "vistas": "node scripts/capturas.mjs",
     "medidas": "node scripts/medidas.mjs",
-    "prueba": "node scripts/prueba.mjs"
+    "prueba": "node scripts/prueba.mjs",
+    "miniaturas": "node scripts/miniaturas.mjs"
   },
   "dependencies": {
     "next": "14.2.31",

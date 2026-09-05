@@ -71,6 +71,16 @@ export const VISTAS = [
     pol: 12,
     az: 180,
   },
+  {
+    id: 'catalogo',
+    desc: 'La hoja de contacto del catálogo: TODAS las piezas a escala real, por categorías, con el avatar al lado. Aquí se ve de un golpe si una pieza está mal escalada o desentona con las demás.',
+    x: 45,
+    y: -45,
+    d: 118,
+    pol: 40,
+    az: 180,
+    extra: 'muestrario=1',
+  },
 ];
 
 export const DIR_CAPTURAS = 'capturas';
