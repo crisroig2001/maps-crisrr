@@ -154,9 +154,15 @@ export function piezasPublicas(px, py) {
       { t: 'maceta', x: L / 2 - 4, y: L / 2 - 4, r: 0, c: 0 },
       { t: 'maceta', x: L / 2 + 4, y: L / 2 - 4, r: 0, c: 0 }
     );
+    // Los caminos que salen hacia los paseos. OJO CON EL GIRO: la losa
+    // (`camino.glb`, path_stone) mide 4,0 × 2,3 m, o sea que con r = 0 el
+    // lado LARGO va en x. Un tramo que avanza de 4 en 4 tiene que llevar sus
+    // 4 m en la dirección en que avanza, o entre losa y losa quedan 1,7 m de
+    // hierba y el camino sale a trozos: en x, r = 0; en y, r = 1. Es la misma
+    // regla que ya seguían las vallas de la casa de muestra.
     // los caminos que salen hacia los paseos
     for (let x = 2; x < L; x += 4) if (Math.abs(x - L / 2) > 9) out.push({ t: 'camino', x, y: L / 2, r: 0, c: 0 });
-    for (let y = 2; y < L / 2 - 9; y += 4) out.push({ t: 'camino', x: L / 2, y, r: 0, c: 0 });
+    for (let y = 2; y < L / 2 - 9; y += 4) out.push({ t: 'camino', x: L / 2, y, r: 1, c: 0 });
     return out;
   }
   if (tipo === 'paseo') {
@@ -167,7 +173,7 @@ export function piezasPublicas(px, py) {
       const y = horizontal ? L / 2 : i;
       // sobre el río va el puente; en la orilla, nada (ya lo hunde el cauce)
       const r = distRio(bx + x, by + y);
-      out.push({ t: r.d < RIO_ANCHO + 4 ? 'puente' : 'camino', x, y, r: horizontal ? 1 : 0, c: 0 });
+      out.push({ t: r.d < RIO_ANCHO + 4 ? 'puente' : 'camino', x, y, r: horizontal ? 0 : 1, c: 0 });
     }
     const lado = (k) => (horizontal ? { x: k, y: L / 2 } : { x: L / 2, y: k });
     const aparte = (p, d) => (horizontal ? { x: p.x, y: p.y + d } : { x: p.x + d, y: p.y });
@@ -235,7 +241,7 @@ export function piezasPublicas(px, py) {
       { t: 'calabaza', x: 10, y: L / 2 + 13.5, r: 1, c: 0 }
     );
     for (let x = 2; x < L / 2; x += 4) out.push({ t: 'camino', x, y: L / 2 - 8, r: 0, c: 0 });
-    out.push({ t: 'camino', x: L / 2, y: L / 2 - 4, r: 0, c: 0 });
+    out.push({ t: 'camino', x: L / 2, y: L / 2 - 4, r: 1, c: 0 });
     for (let i = 0; i < 12; i++) out.push({ t: 'valla', x: 2 + i * 4, y: 2, r: 0, c: 0 });
     for (let i = 0; i < 12; i++) out.push({ t: 'valla', x: 2 + i * 4, y: L - 2, r: 0, c: 0 });
     for (let i = 0; i < 11; i++) out.push({ t: 'valla', x: L - 2, y: 4 + i * 4, r: 1, c: 0 });
