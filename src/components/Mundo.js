@@ -607,6 +607,16 @@ export default function Mundo() {
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.06;
     const params = new URLSearchParams(window.location.search);
+    // El banco visual necesita un mundo QUIETO: de `uTiempo` cuelgan la hierba,
+    // las copas, las sombras de nube, el agua, los cúmulos y los pájaros, así
+    // que con el reloj libre dos capturas de la MISMA escena ya salen
+    // distintas y el porcentaje de la hoja de contactos se vuelve un número
+    // que se aprende a ignorar. Con `?t=12` el reloj del mundo se para en ese
+    // segundo y el diff vuelve a decir la verdad. Ojo: solo congela el reloj
+    // del DIBUJO; el del movimiento (`dt`) sigue siendo el de verdad, que si
+    // no el avatar no andaría.
+    const tFijo = parseFloat(params.get('t'));
+    const RELOJ_FIJO = Number.isFinite(tFijo);
     const jugador = perfil();
 
     // --- escena, cielo y niebla ---
@@ -2477,7 +2487,7 @@ export default function Mundo() {
       // software), el avatar no se teletransporta pero tampoco se arrastra
       const dt = Math.min(0.25, (t - tAnt) / 1000 || 0);
       tAnt = t;
-      uTiempo.value = t / 1000;
+      uTiempo.value = RELOJ_FIJO ? tFijo : t / 1000;
 
       // --- mover el avatar propio ---
       let mx = 0;
