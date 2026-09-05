@@ -19,7 +19,7 @@ import { PARCELA_M, parcelaDe, claveParcela, parseParcela, centroParcela } from 
 import { PIEZAS, CATEGORIAS, COLORES, PELOS, PIELES, MAX_PIEZAS, MAX_NOMBRE, MAX_MENSAJE, MENSAJE_MS, EMOTES, limpiaMensaje } from '../lib/piezas';
 import { perfil, guardaPerfil, gustaVisto, guardaGustaVisto, silenciados, silencia, quitaSilencio } from '../lib/jugador';
 import { CORRO_MAX, CORRO_CERCA_M, CORRO_AVISO_M, CORRO_LINEAS_VISTA } from '../lib/corro';
-import { tipoParcela, conSuelo, cauce, distRio, rioEsteX as rioEsteXEnEscena, rioSurY as rioSurYEnEscena, GLSL_CAUCE, RIO_ANCHO, NIVEL_AGUA, LECHO, BANDA_AGUA } from '../lib/paisaje';
+import { tipoParcela, conSuelo, cauce, distRio, rioEsteX as rioEsteXEnEscena, rioSurY as rioSurYEnEscena, GLSL_CAUCE, GLSL_FLUJO, RIO_ANCHO, NIVEL_AGUA, LECHO, BANDA_AGUA } from '../lib/paisaje';
 const LECHO_G = LECHO.toFixed(1);
 
 const L = PARCELA_M;
@@ -42,7 +42,8 @@ const HEMI_FUERZA = 1.55;
 const CIELO_CENIT = 0x248fd5;
 const CIELO_HORIZONTE = 0xcaf0fe;
 const CIELO_CALIMA = 0xd8eeff;
-const CIELO_NUBES = 0xffe5c4;
+const CIELO_NUBES = 0xfff1dc; // la coronilla, la que mira al sol
+const CIELO_NUBES_SOMBRA = 0xc3c8dd; // la panza, que solo ve el cielo y la hierba
 const NIEBLA = 0xd8eeff;
 const NIEBLA_DESDE = 60;
 const NIEBLA_HASTA = 325; // satura antes de los 384 m en que se acaba el plano del suelo
@@ -83,11 +84,11 @@ const PIELES_3D = PIELES.map((h) => new THREE.Color(h));
 const dePaleta = (paleta, i) => paleta[Number.isInteger(i) && i >= 0 && i < paleta.length ? i : 0];
 const OJO = new THREE.Color(0x2b3440);
 const PANTALON = new THREE.Color(0x56637a);
-const NUBE = new THREE.Color(0xffffff);
-const NUBE_SOMBRA = new THREE.Color(0xdfe3f5);
+const NUBE = new THREE.Color(0xfffaf0); // igual que la coronilla de la cúpula
+const NUBE_SOMBRA = new THREE.Color(0xbcc5df); // ... y la panza
 
 const MAX_INST = 3000; // instancias por parte de pieza en el mundo cargado
-const MAX_HIERBA = 3000;
+const MAX_HIERBA = 4200;
 const VELOCIDAD = 3.8; // m/s del avatar
 const CADENCIA = 12.5; // rad/s de la zancada: con VELOCIDAD da un paso de ~0,95 m
 
@@ -197,7 +198,7 @@ function conNiebla(mat) {
 //   cesped: el verde del suelo se calcula aquí con ruido a varias escalas
 //          (dos verdes a manchas grandes, calvas más claras y matas más
 //          oscuras), como el terreno de la referencia
-function conAltura(mat, { tinta = false, viento = false, normales = false, nubes = false, cesped = false, pie = false, rio = false } = {}) {
+function conAltura(mat, { tinta = false, viento = false, normales = false, nubes = false, cesped = false, pie = false, rio = false, piedra = false } = {}) {
   mat.onBeforeCompile = (sh) => {
     sh.uniforms.tiempo = uTiempo;
     sh.uniforms.tNubes = uNubes;
@@ -228,7 +229,19 @@ function conAltura(mat, { tinta = false, viento = false, normales = false, nubes
           vec4 wpos = modelMatrix * vec4(transformed, 1.0);
         #endif
         float hh = altura(wpos.xz);
-        transformed.y += hh;
+        // La altura se suma en espacio de OBJETO, así que la escala de la
+        // instancia la multiplica: hay que dividirla antes. Sin esto, una
+        // mata de hierba con escala 0,4 sobre un terreno de 2,5 m se plantaba
+        // a 1 m, o sea metro y medio BAJO tierra, y una de 1,18 flotaba medio
+        // metro. Como el tamaño de la mata es aleatorio, lo que se veía era
+        // una pradera con matas sueltas donde el azar había dado una escala
+        // cercana a 1: la mitad de la hierba del mundo estaba enterrada. Los
+        // marcos y las plazas no lo notaban porque van a escala 1 en y.
+        #ifdef USE_INSTANCING
+          transformed.y += hh / max(length(instanceMatrix[1].xyz), 0.0001);
+        #else
+          transformed.y += hh;
+        #endif
         vAltura = hh;
         vMundoXZ = wpos.xz;
         ${
@@ -237,14 +250,25 @@ function conAltura(mat, { tinta = false, viento = false, normales = false, nubes
                transformed.z += cos(tiempo * 1.3 + wpos.x * 0.17 - wpos.z * 0.3) * 0.08 * position.y;
                vec2 dAv = wpos.xz - uAvatar.xz;
                float lAv = length(dAv);
-               transformed.xz += (dAv / max(lAv, 0.001)) * (1.0 - smoothstep(0.15, 1.0, lAv)) * 0.45 * position.y;`
+               transformed.xz += (dAv / max(lAv, 0.001)) * (1.0 - smoothstep(0.15, 1.0, lAv)) * 0.45 * position.y;
+               // La mata se encoge con la distancia A LA CÁMARA hasta
+               // desaparecer. Una mata de 60 cm a 70 m ocupa dos píxeles: lo
+               // que se ve no es hierba, es un rascado que hierve al andar, y
+               // con la cámara alejada tapaba el prado entero. A la cámara y
+               // no al avatar: mirando un parque desde 60 m, la hierba de al
+               // lado del avatar está lejos de QUIEN MIRA aunque la tenga a
+               // los pies. Y de paso se acaba el pop del borde del sembrado,
+               // que hasta ahora aparecía a tamaño natural de golpe.
+               float lejos = smoothstep(40.0, 75.0, distance(cameraPosition.xz, wpos.xz));
+               transformed.y -= position.y * lejos;
+               transformed.xz *= 1.0 - lejos * 0.6;`
             : ''
         }`
       );
     sh.fragmentShader = sh.fragmentShader
       .replace(
         '#include <common>',
-        '#include <common>\nuniform float tiempo;\nuniform sampler2D tNubes;\nvarying float vAltura;\nvarying vec2 vMundoXZ;' + (cesped || rio ? GLSL_RUIDO : '') + (tinta || rio ? GLSL_CAUCE : '')
+        '#include <common>\nuniform float tiempo;\nuniform sampler2D tNubes;\nvarying float vAltura;\nvarying vec2 vMundoXZ;' + (cesped || rio || piedra ? GLSL_RUIDO : '') + (tinta || rio ? GLSL_CAUCE : '')
       )
       // la hierba es de doble cara y three le da la vuelta a la normal en
       // la cara trasera: la mitad de cada mata salía a oscuras. La normal
@@ -269,6 +293,17 @@ function conAltura(mat, { tinta = false, viento = false, normales = false, nubes
                vec3 cesped = mix(vec3(0.27, 0.55, 0.15), vec3(0.36, 0.60, 0.17), rA);
                cesped = mix(cesped, vec3(0.47, 0.70, 0.22), smoothstep(0.55, 0.8, rC) * smoothstep(0.35, 0.7, rB));
                cesped = mix(cesped, vec3(0.20, 0.45, 0.13), smoothstep(0.6, 0.85, rD) * 0.6);
+               // Una octava FINA (70 cm) que solo vive cerca. Las cuatro de
+               // arriba son manchas de 3 a 33 m: de lejos pintan el campo,
+               // pero a los pies del avatar el suelo es un degradado liso de
+               // acuarela. Y no puede estar siempre: a 70 m una mancha de
+               // 70 cm no llega a un píxel y lo que se ve no es hierba, es
+               // el suelo hirviendo al andar.
+               float rE = ruido(vMundoXZ * 1.4 + 21.0);
+               float cerca = 1.0 - smoothstep(16.0, 65.0, vFogDepth);
+               // no solo más clara: más SECA. Las calvas de una pradera de
+               // julio tiran a paja, no a un verde más luminoso.
+               cesped = mix(cesped, mix(vec3(0.26, 0.46, 0.14), vec3(0.66, 0.72, 0.30), rE), cerca * 0.45);
                diffuseColor.rgb *= cesped;`
             : ''
         }
@@ -292,6 +327,24 @@ function conAltura(mat, { tinta = false, viento = false, normales = false, nubes
             : ''
         }
         ${
+          piedra
+            ? `// Losas de 2,4 m en coordenadas del MUNDO, así que casan de una
+               // parcela a la de al lado. La plaza y el paseo eran 48 × 48 m
+               // de UN color liso: la mitad del encuadre de quien llega es
+               // una explanada beige sin nada que mirar.
+               vec2 lp = vMundoXZ / 2.4;
+               vec2 f = abs(fract(lp) - 0.5);
+               float junta = 0.5 - max(f.x, f.y);
+               // el ancho de la junta lo pone fwidth: se suaviza sola con la
+               // distancia en vez de centellear a 80 m
+               float wj = fwidth(junta) * 1.6 + 0.004;
+               float linea = 1.0 - smoothstep(0.022 - wj, 0.022 + wj, junta);
+               diffuseColor.rgb *= mix(0.94, 1.05, hash21(floor(lp)));
+               diffuseColor.rgb *= 0.96 + 0.09 * ruido(vMundoXZ * 1.6);
+               diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.60, 0.55, 0.45), linea * 0.5);`
+            : ''
+        }
+        ${
           // La mata se oscurece hacia la base: sin eso, 3.000 quads con el
           // mismo tono de arriba abajo flotan un dedo sobre el suelo. Es el
           // mismo problema de contacto que las piezas, multiplicado por mil,
@@ -309,7 +362,7 @@ function conAltura(mat, { tinta = false, viento = false, normales = false, nubes
       );
     parcheaNiebla(sh);
   };
-  mat.customProgramCacheKey = () => 'altura' + (tinta ? 't' : '') + (viento ? 'v' : '') + (normales ? 'n' : '') + (nubes ? 'c' : '') + (cesped ? 'g' : '') + (pie ? 'p' : '') + (rio ? 'r' : '');
+  mat.customProgramCacheKey = () => 'altura' + (tinta ? 't' : '') + (viento ? 'v' : '') + (normales ? 'n' : '') + (nubes ? 'c' : '') + (cesped ? 'g' : '') + (pie ? 'p' : '') + (rio ? 'r' : '') + (piedra ? 's' : '');
   return mat;
 }
 // Las copas se mecen: un vaivén lento proporcional a la altura sobre el
@@ -318,7 +371,7 @@ function conViento(mat) {
   mat.onBeforeCompile = (sh) => {
     sh.uniforms.tiempo = uTiempo;
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nuniform float tiempo;')
+      .replace('#include <common>', '#include <common>\nuniform float tiempo;\nvarying vec2 vInst;')
       .replace(
         '#include <begin_vertex>',
         `#include <begin_vertex>
@@ -327,9 +380,34 @@ function conViento(mat) {
         #else
           vec3 wv = (modelMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
         #endif
+        vInst = wv.xz;
         float alto = smoothstep(1.5, 6.0, position.y);
         transformed.x += sin(tiempo * 1.1 + wv.x * 0.2 + wv.z * 0.15) * 0.18 * alto;
         transformed.z += cos(tiempo * 0.9 + wv.x * 0.12 - wv.z * 0.2) * 0.12 * alto;`
+      );
+    // Cada copa, su verde. El giro y la escala ya salían de un hash de la
+    // posición, pero el COLOR no: once árboles de un parque eran once veces
+    // exactamente el mismo verde, y eso es lo que hace que un bosque se lea
+    // como papel pintado por mucho que las siluetas cambien. Va por el mismo
+    // camino —un hash de dónde está la pieza— así que sale igual en todas las
+    // pantallas y no cuesta ni un byte ni una llamada de dibujo.
+    // Solo lo VERDE: se mide cuánto le gana el verde al rojo y al azul, así
+    // que el tronco, la maceta y el mástil de la bandera se quedan como
+    // están. Y el desvío es de matiz además de brillo: unas copas tiran a
+    // amarillo de sol y otras a verde azulado de sombra, que es lo que se ve
+    // en una arboleda de verdad.
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying vec2 vInst;')
+      .replace(
+        '#include <color_fragment>',
+        `#include <color_fragment>
+        {
+          float hI = fract(sin(dot(floor(vInst * 4.0), vec2(12.9898, 78.233))) * 43758.545);
+          float verdor = smoothstep(0.0, 0.10, diffuseColor.g - max(diffuseColor.r, diffuseColor.b));
+          diffuseColor.rgb *= mix(1.0, 0.88 + hI * 0.26, verdor);
+          diffuseColor.r *= mix(1.0, 0.93 + hI * 0.16, verdor);
+          diffuseColor.b *= mix(1.0, 1.08 - hI * 0.17, verdor);
+        }`
       );
     parcheaNiebla(sh);
   };
@@ -549,40 +627,82 @@ const ALTO_AVATAR = 1.8;
 // por debajo al que anda por delante y no se sale por arriba con la cámara de
 // serie, que mira desde bastante alto.
 const ALTO_CARRETE = 2.6;
+// Cuánto se apaga una parte por debajo: la oclusión que ninguna luz rellena
+// —la barbilla sobre el pecho, la panza del cuerpo, la cara de dentro del
+// brazo— horneada en el color del vértice. Es gratis (el color ya viaja por
+// vértice) y es lo que separa el brazo del cuerpo cuando los dos son del
+// mismo color de ropa: sin ella el avatar de cerca es una calcomanía plana
+// de cinco bolas del mismo tono.
+const sombreado = (c, k) => c.clone().multiplyScalar(k);
 function geometriaAvatar(color, pelo, piel) {
   const g = nuevaGeo();
-  esfera(g, 0, 0.96, 0, 0.24, color, 1.4); // cuerpo
-  esfera(g, 0, 1.5, 0, 0.27, piel); // cabeza
-  esfera(g, 0, 1.6, -0.04, 0.28, pelo, 0.75); // pelo
+  // 14 lados y no 10: la silueta de la cabeza se veía poligonal de cerca, y
+  // son 400 vértices más en la única malla que se mira a un metro.
+  esfera(g, 0, 0.96, 0, 0.24, color, 1.4, 14, sombreado(color, 0.6)); // cuerpo
+  esfera(g, 0, 1.5, 0, 0.27, piel, 1, 14, sombreado(piel, 0.72)); // cabeza
+  esfera(g, 0, 1.6, -0.04, 0.28, pelo, 0.75, 14, sombreado(pelo, 0.66)); // pelo
   esfera(g, -0.1, 1.51, 0.23, 0.04, OJO, 1, 6); // ojos
   esfera(g, 0.1, 1.51, 0.23, 0.04, OJO, 1, 6);
+  // El brillo del ojo. Dos puntos negros son dos agujeros; con la chispa el
+  // ojo mira. Arriba y a la izquierda en los dos, que es de donde viene la
+  // luz del cielo.
+  esfera(g, -0.115, 1.525, 0.256, 0.015, BLANCO, 1, 5);
+  esfera(g, 0.085, 1.525, 0.256, 0.015, BLANCO, 1, 5);
   return aGeo(g);
 }
 // Los brazos van aparte, como las piernas: así se mueven al andar y al
 // saludar sin rehacer la geometría del cuerpo.
 function geometriaBrazo(color) {
   const g = nuevaGeo();
-  esfera(g, 0, -0.16, 0, 0.1, color, 1.9);
+  esfera(g, 0, -0.16, 0, 0.1, color, 1.9, 10, sombreado(color, 0.62));
   return aGeo(g);
 }
 function geometriaPierna() {
   const g = nuevaGeo();
-  esfera(g, 0, -0.29, 0, 0.12, PANTALON, 2.6, 6);
+  esfera(g, 0, -0.29, 0, 0.12, PANTALON, 2.6, 8, sombreado(PANTALON, 0.6));
   return aGeo(g);
 }
-// una nube: varias esferas aplastadas, blancas arriba y lavanda abajo
+// Una nube: bolas aplastadas, iluminadas como las de la cúpula (coronilla
+// al sol, panza en sombra de cielo), en dos pisos.
+// El piso de abajo es ancho y de bolas grandes: es la BASE PLANA que tiene
+// un cúmulo de verdad. Encima, bolas más pequeñas y hacia el sol, que es lo
+// que le da la coliflor. Con un solo piso de bolas del mismo tamaño la nube
+// era un montón de albóndigas: ni base ni copete.
 function geometriaNube(rnd) {
   const g = nuevaGeo();
-  const n = 4 + Math.floor(rnd() * 3);
-  for (let i = 0; i < n; i++) {
-    const r = 6 + rnd() * 7;
-    // Antes el color alternaba por ÍNDICE (i % 2) y salía una salchicha a
-    // franjas a lo largo, aunque el comentario dijera «blancas arriba y
-    // lavanda abajo». Ahora va por la altura de la normal, que es lo que
-    // decía. Y se reparten en volumen, no en fila.
-    esfera(g, (i - n / 2) * 6 + rnd() * 5, rnd() * 3, rnd() * 8 - 4, r, NUBE, 0.55, 8, NUBE_SOMBRA);
+  const largo = 16 + rnd() * 12;
+  const nBase = 4 + Math.floor(rnd() * 3);
+  for (let i = 0; i < nBase; i++) {
+    const u = (i + 0.5) / nBase - 0.5; // -0,5 .. 0,5 a lo largo
+    const r = (7.5 + rnd() * 3.5) * (1 - u * u * 0.9); // las de los extremos, menores
+    esferaNube(g, u * largo + (rnd() - 0.5) * 3, rnd() * 1.2, (rnd() - 0.5) * 7, r, 0.5);
+  }
+  const nAlto = 2 + Math.floor(rnd() * 3);
+  for (let i = 0; i < nAlto; i++) {
+    const u = (rnd() - 0.5) * 0.62;
+    const r = 5 + rnd() * 3.5;
+    esferaNube(g, u * largo, 3.5 + rnd() * 2.5, (rnd() - 0.5) * 4, r, 0.62);
   }
   return aGeo(g);
+}
+// Una bola de nube. El color no sale solo de mirar hacia arriba: se mezcla
+// con lo que le da el SOL, así que la cara suroeste se calienta y la noreste
+// se queda fría, igual que en la cúpula. Sin esto las dos familias de nube
+// —la banda pintada y estas— no contaban la misma tarde.
+function esferaNube(g, cx, cy, cz, r, sy) {
+  const base = nuevaGeo();
+  esfera(base, cx, cy, cz, r, NUBE, sy, 9);
+  const n = base.nor;
+  for (let i = 0; i < base.pos.length; i += 3) {
+    g.pos.push(base.pos[i], base.pos[i + 1], base.pos[i + 2]);
+    g.nor.push(n[i], n[i + 1], n[i + 2]);
+    const arriba = n[i + 1] * 0.5 + 0.5;
+    const alSol = Math.max(0, n[i] * SOL.x + n[i + 1] * SOL.y + n[i + 2] * SOL.z);
+    // dos escalones suaves, como la rampa toon del resto del mundo
+    const t = Math.min(1, arriba * 0.45 + alSol * 0.75);
+    const c = NUBE_SOMBRA.clone().lerp(NUBE, t * t * (3 - 2 * t));
+    g.col.push(c.r, c.g, c.b);
+  }
 }
 
 // color de dueño a partir del id: para pintar de quién es cada parcela sin
@@ -655,6 +775,21 @@ function prng(seed) {
 }
 function hash2(x, y) {
   return ((Math.imul(x, 73856093) ^ Math.imul(y, 19349663)) >>> 0) / 4294967296;
+}
+// Ruido de valor 2D en JS: el mismo que `ruido()` en GLSL, para repartir
+// cosas por el mundo sin que se vea la rejilla. Un producto de dos senos,
+// que es lo que había, dibuja un cuadriculado en diagonal: se le ve el
+// patrón en cuanto hay bastantes cosas repartidas.
+function ruido2(x, y) {
+  const i = Math.floor(x);
+  const j = Math.floor(y);
+  const fx = x - i;
+  const fy = y - j;
+  const sx = fx * fx * (3 - 2 * fx);
+  const sy = fy * fy * (3 - 2 * fy);
+  const ab = hash2(i, j) + (hash2(i + 1, j) - hash2(i, j)) * sx;
+  const cd = hash2(i, j + 1) + (hash2(i + 1, j + 1) - hash2(i, j + 1)) * sx;
+  return ab + (cd - ab) * sy;
 }
 
 export default function Mundo() {
@@ -868,6 +1003,13 @@ export default function Mundo() {
         }
         cumulos.push(bolas);
       }
+      // Tres pasadas, de la más baja y grande a la más alta y pequeña. El
+      // valor del canal NO es opacidad: es «cuánta luz le da». La pasada
+      // ancha y oscura pone la SILUETA (y con ella la panza en sombra), la
+      // media el cuerpo y la estrecha, subida hacia el sol, la coronilla
+      // iluminada. El shader las separa: el borde de la silueta decide dónde
+      // hay nube y el valor decide de qué color es. Antes las tres se
+      // aplastaban en una sola opacidad y el cúmulo salía de un color liso.
       const pinta = (color, dy, esc) => {
         for (const bolas of cumulos) {
           for (const b of bolas) {
@@ -883,8 +1025,9 @@ export default function Mundo() {
           }
         }
       };
-      pinta('rgba(140,140,140,1)', 6, 1.08);
-      pinta('rgba(255,255,255,1)', 0, 1);
+      pinta('rgba(105,105,105,1)', 9, 1.12); // panza
+      pinta('rgba(190,190,190,1)', 2, 1.0); // cuerpo
+      pinta('rgba(255,255,255,1)', -6, 0.86); // coronilla, hacia el sol
       // la base de todos los cúmulos se funde con la calima del horizonte
       const base = c.createLinearGradient(0, H - 26, 0, H);
       base.addColorStop(0, 'rgba(255,255,255,0)');
@@ -906,6 +1049,7 @@ export default function Mundo() {
         cHorizonte: { value: new THREE.Color(CIELO_HORIZONTE) },
         cCalima: { value: new THREE.Color(CIELO_CALIMA) },
         cNubes: { value: new THREE.Color(CIELO_NUBES) },
+        cNubeSombra: { value: new THREE.Color(CIELO_NUBES_SOMBRA) },
         uSol: { value: SOL },
       },
       vertexShader: `
@@ -921,6 +1065,7 @@ export default function Mundo() {
         uniform vec3 cHorizonte;
         uniform vec3 cCalima;
         uniform vec3 cNubes;
+        uniform vec3 cNubeSombra;
         uniform vec3 uSol;
         varying vec3 vDir;
         float ajusta(float v, float a, float b) { return clamp((v - a) / (b - a), 0.0, 1.0); }
@@ -929,15 +1074,35 @@ export default function Mundo() {
           float t = ajusta(d.y, -0.2, 0.35);
           t = t < 0.5 ? 2.0 * t * t : -1.0 + (4.0 - 2.0 * t) * t;
           vec3 color = mix(cHorizonte, cCenit, t);
-          // los cúmulos: la franja va del horizonte a unos 18 grados, y gira
+          // Los cúmulos: la franja va del horizonte a unos 18 grados, y gira.
+          // El valor de la textura NO es opacidad: es cuánta luz le da a esa
+          // parte del cúmulo. De ahí salen DOS cosas distintas, que es lo
+          // que le da volumen: cob (dónde hay nube) sale del borde de la
+          // silueta, y luz (de qué color) del valor dentro de ella. Antes
+          // las dos eran el mismo número, así que un cúmulo era una mancha
+          // de un solo color: ni panza ni coronilla.
           float v = ajusta(d.y, -0.03, 0.32);
           float u = atan(d.z, d.x) / 6.2831853 * 2.0 + tiempo * 0.0012;
           u += sin(v * 7.0 + tiempo * 0.03) * 0.004;
           float limites = smoothstep(0.0, 0.03, v) * smoothstep(1.0, 0.97, v);
-          float nubes = texture2D(tNubes, vec2(u, v)).r * limites;
-          float e = 1.0 - nubes;
-          nubes = 1.0 - e * e * e;
-          color = mix(color, cNubes, nubes);
+          float t0 = texture2D(tNubes, vec2(u, v)).r;
+          float cob = smoothstep(0.03, 0.30, t0) * limites;
+          float luz = smoothstep(0.34, 0.86, t0);
+          // La panza mira al suelo y le llega el verde rebotado; la coronilla
+          // mira al sol. Y el cúmulo que está DEL LADO del sol se calienta
+          // entero: es lo que hace que el cielo sepa dónde tiene la tarde.
+          float azN = dot(normalize(d.xz), normalize(uSol.xz));
+          vec3 cn = mix(cNubeSombra, cNubes, luz);
+          cn = mix(cn, cn * vec3(1.06, 1.01, 0.94), max(azN, 0.0) * 0.8);
+          color = mix(color, cn, cob);
+          // Una segunda capa, más alta, más fina y más lenta: cirros. Sin
+          // ella el cielo tiene UNA banda de nubes y encima nada, y se lee
+          // como un telón. Es el mismo mapa a otra escala, así que no cuesta
+          // ni una textura más.
+          float vC = ajusta(d.y, 0.16, 0.62);
+          float tC = texture2D(tNubes, vec2(u * 0.45 + 0.37, vC * 0.8 + 0.2)).r;
+          float cirro = smoothstep(0.30, 0.75, tC) * smoothstep(0.0, 0.25, vC) * smoothstep(1.0, 0.75, vC) * 0.30;
+          color = mix(color, mix(cNubeSombra, cNubes, 0.85), cirro);
           // La silueta del horizonte. Entre el suelo, que se desvanece en la
           // niebla, y la banda de cúmulos no había NADA: dos capas de lectura
           // y un hueco en medio. Esto son dos crestas pintadas en la cúpula
@@ -977,7 +1142,15 @@ export default function Mundo() {
     });
     const cielo = new THREE.Mesh(new THREE.SphereGeometry(1000, 40, 20), matCielo);
     cielo.frustumCulled = false;
-    cielo.renderOrder = -1000;
+    // Al FINAL de los opacos, no al principio. Con `renderOrder = -1000` la
+    // cúpula se pintaba primero y su fragment —un atan2, una textura, media
+    // docena de smoothstep y el ruido del horizonte— corría en el 100 % de
+    // los píxeles de la pantalla para que casi todos se sobrescribieran
+    // después con el suelo. Pintándola la última, el test de profundidad
+    // descarta lo que ya tiene geometría delante y el shader solo corre en el
+    // cielo que de verdad se ve. No escribe profundidad, así que lo
+    // transparente que va detrás no se entera.
+    cielo.renderOrder = 1000;
     scene.add(cielo);
     scene.fog = new THREE.Fog(NIEBLA, NIEBLA_DESDE, NIEBLA_HASTA);
 
@@ -1165,14 +1338,62 @@ export default function Mundo() {
           if (distRioG(wpa.x, -wpa.z) > ${BANDA_AGUA.toFixed(1)}) transformed.y -= 60.0;`
         );
       sh.fragmentShader = sh.fragmentShader
-        .replace('#include <common>', '#include <common>\nuniform float tiempo;\nuniform vec3 uSol;\nvarying vec2 vXZ;\n' + GLSL_ALTURA)
+        .replace('#include <common>', '#include <common>\nuniform float tiempo;\nuniform vec3 uSol;\nvarying vec2 vXZ;\nvec3 nOlas;\n' + GLSL_RUIDO + GLSL_ALTURA + GLSL_FLUJO)
         .replace(
           '#include <color_fragment>',
           `#include <color_fragment>
           float prof = ${NIVEL_AGUA.toFixed(2)} - altura(vXZ);
-          vec3 someroC = vec3(0.42, 0.78, 0.80);
-          vec3 hondoC = vec3(0.10, 0.36, 0.62);
+          // Más oscuras que antes a propósito: sobre esto caen el sol (2,9)
+          // y el cielo (1,55) y luego ACES, así que un turquesa ya claro
+          // salía lavado. Lo que da el brillo son las crestas, no el fondo.
+          vec3 someroC = vec3(0.26, 0.63, 0.68);
+          vec3 hondoC = vec3(0.05, 0.24, 0.46);
           diffuseColor.rgb = mix(someroC, hondoC, smoothstep(0.0, 1.8, prof));
+          // El rizado. Se calcula EN COORDENADAS DEL RÍO: a lo largo va la
+          // corriente y a lo ancho el vaivén, así que las ondas siguen al
+          // cauce en vez de cruzarlo en diagonal como si fuera un mar.
+          vec2 flujo = flujoRio(vXZ.x, -vXZ.y);
+          vec2 cruz = vec2(-flujo.y, flujo.x);
+          float sL = dot(vXZ, flujo);
+          float sT = dot(vXZ, cruz);
+          // Tres ondas de longitudes que no son múltiplos unas de otras, con
+          // la fase y la fuerza DESORDENADAS POR RUIDO. Sin el ruido, tres
+          // senos puros vuelven a coincidir cada pocos metros y el río sale
+          // a escamas: da igual lo finas que se hagan las ondas, el ojo pilla
+          // la rejilla enseguida. El ruido va con el tiempo, así que además
+          // de romper el patrón hace que el rizado respire — unos tramos se
+          // encrespan y otros se calman, como un río de verdad.
+          float n1 = ruido(vXZ * 0.20 + vec2(tiempo * 0.07, tiempo * 0.03));
+          float n2 = ruido(vXZ * 0.07 + vec2(11.0 - tiempo * 0.05, 4.0));
+          float alabeo = (n1 - 0.5) * 7.0;
+          float fuerza = 0.45 + n2 * 1.1;
+          float f1 = sL * 2.4 + alabeo - tiempo * 2.6;
+          float f2 = sL * 4.3 + sT * 1.5 + alabeo * 0.7 - tiempo * 4.4;
+          float f3 = sT * 3.1 + sL * 0.9 - alabeo * 0.5 + tiempo * 2.0;
+          // la pendiente de la ola: derivada cerrada, sin muestrear nada
+          vec2 grad = (flujo * (0.048 * cos(f1) + 0.043 * cos(f2) + 0.012 * cos(f3)) + cruz * (0.015 * cos(f2) + 0.042 * cos(f3))) * fuerza;
+          vec3 Nr = normalize(vec3(-grad.x, 1.0, -grad.y));
+          nOlas = Nr;
+          // Lo que hace que el agua se lea DESDE ARRIBA: no el reflejo (que
+          // desde el cenit no existe) sino la pendiente CONTRA EL SOL. La
+          // cara de la ola que mira al suroeste se aclara y la de atrás se
+          // apaga, y como es un escalón y no un degradado, sale el rizado a
+          // bandas de un dibujo animado. Antes las olas solo movían el
+          // specular y el fresnel, los dos casi cero mirando hacia abajo:
+          // el río era una lámina de plástico azul.
+          float pend = dot(Nr.xz, normalize(uSol.xz));
+          // El rizado se apaga con la distancia. De cerca es detalle; a 150 m
+          // una onda mide menos de un píxel y lo que llega no es una ola, es
+          // ruido que hierve. Así el río de lejos vuelve a ser una cinta
+          // limpia y de cerca tiene superficie.
+          float det = mix(1.0, 0.30, smoothstep(50.0, 170.0, vFogDepth));
+          float cresta = smoothstep(-0.030, 0.040, pend);
+          diffuseColor.rgb *= mix(1.0, mix(0.87, 1.13, cresta), det);
+          // Y en lo más empinado de la cresta, el destello. Va con el MISMO
+          // ruido que desordena la ola, así que sale a rachas —unas olas
+          // brillan y otras no— en vez de encenderse todas a la vez, que es
+          // lo que lo hacía parecer un plástico de burbujas.
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.86, 0.96, 1.0), smoothstep(0.058, 0.084, pend) * smoothstep(0.5, 0.82, n1) * det * 0.5);
           // espuma: una banda en el primer palmo de agua, con el borde
           // rompiéndose despacio para que no sea una línea de goma
           float borde = 0.10 + 0.06 * sin(vXZ.x * 0.7 + tiempo * 0.8) + 0.05 * sin(vXZ.y * 0.9 - tiempo * 0.6);
@@ -1189,20 +1410,22 @@ export default function Mundo() {
             // cada 8 m y el río mide 18 m de banda, así que las olas del
             // vertex shader (lambda 15,6 y 12,6 m) van por debajo de Nyquist
             // y lo que se veía no era una ola, era aliasing en movimiento.
-            // Derivada cerrada de dos senos de lambda 4-8 m, por píxel.
-            float a1 = vXZ.x * 0.8 + vXZ.y * 0.45 + tiempo * 1.6;
-            float a2 = vXZ.x * 0.35 - vXZ.y * 1.1 - tiempo * 1.1;
-            vec3 N = normalize(vec3(-(0.05 * 0.8 * cos(a1) + 0.04 * 0.35 * cos(a2)), 1.0, -(0.05 * 0.45 * cos(a1) - 0.04 * 1.1 * cos(a2))));
+            // La normal es la MISMA que la del rizado de arriba (nOlas), que
+            // si no el brillo iba por un lado y el dibujo de la ola por otro.
             vec3 wp = vec3(vXZ.x, ${NIVEL_AGUA.toFixed(2)}, vXZ.y);
             vec3 V = normalize(cameraPosition - wp);
             vec3 H = normalize(normalize(uSol) + V);
             // el step() es lo que lo hace cartoon: un brillo con borde, no un
             // degradado de plástico
-            float esp = step(0.55, pow(max(dot(N, H), 0.0), 60.0));
-            // fresnel contra un color de horizonte constante: acotado a 0,6
-            // porque si domina, el agua pierde sus dos bandas toon
-            float F = min(0.6, 0.02 + 0.98 * pow(1.0 - max(dot(N, V), 0.0), 5.0));
-            gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(0.79, 0.92, 1.0), F * gl_FragColor.a);
+            float esp = step(0.55, pow(max(dot(nOlas, H), 0.0), 60.0));
+            // Fresnel contra un color de horizonte constante. Acotado a 0,42
+            // y contra un azul de cielo, no contra un blanco: con el tope en
+            // 0,6 y (0.79,0.92,1.0), mirando el río de canto —que es como se
+            // ve andando— el 60 % de la superficie era ese casi blanco y el
+            // agua se quedaba en una lámina gris. Un río visto de lejos SÍ se
+            // aclara, pero tiene que seguir siendo azul.
+            float F = min(0.42, 0.02 + 0.98 * pow(1.0 - max(dot(nOlas, V), 0.0), 5.0));
+            gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(0.60, 0.80, 0.95), F * gl_FragColor.a);
             gl_FragColor.rgb += esp * 0.5 * gl_FragColor.a;
           }`
         );
@@ -1281,6 +1504,13 @@ export default function Mundo() {
     // para que el lado mayor en planta mida `ancho` metros y se deja el
     // origen en el centro de la planta, a ras de suelo.
     const cargador = new GLTFLoader();
+    // Las cuatro casas del City Kit apuntan al MISMO Textures/colormap.png,
+    // pero cada .glb trae su referencia y el cargador le hace una textura y un
+    // material nuevos a cada una: cuatro copias de la misma imagen subidas a
+    // la GPU y cuatro programas donde bastaba uno. Se comparte por la URL de
+    // la imagen, que es lo que de verdad las iguala.
+    const materialesAtlas = new Map();
+
     async function cargaModelo(def) {
       const gltf = await cargador.loadAsync('/modelos/' + def.glb + '.glb');
       const raiz = gltf.scene;
@@ -1371,9 +1601,25 @@ export default function Mundo() {
       // el 0). Así el día del cambio no se mueve ni un píxel de lo que hay, y
       // el resto de la paleta sí repinta de verdad.
       if (teñibles.length) partes.push({ geo: mergeGeometries(teñibles, false), mat: def.viento ? matTinteViento : matTinte, tinte: true, base: baseTinte });
+      // La clave para compartir: la URI de la imagen dentro del .glb. No vale
+      // `tex.image.src` —el cargador usa ImageBitmap y no tiene src— ni
+      // `tex.name`, que en los kits de Kenney es «colormap» en TODOS aunque
+      // el atlas del City Kit y el del Nature Kit sean imágenes distintas.
+      // Solo se comparte cuando el modelo trae UNA imagen, que es el caso de
+      // los kits con atlas; con varias no se puede saber cuál es cuál desde
+      // aquí y cada una se queda con su material.
+      const imgs = gltf.parser?.json?.images;
+      const claveAtlas = imgs?.length === 1 && imgs[0].uri ? imgs[0].uri : null;
       for (const [tex, gs] of conTextura) {
-        tex.colorSpace = THREE.SRGBColorSpace;
-        partes.push({ geo: mergeGeometries(gs, false), mat: conNiebla(new THREE.MeshToonMaterial({ map: tex, gradientMap: rampa })) });
+        const clave = claveAtlas || tex.uuid;
+        let matAtlas = materialesAtlas.get(clave);
+        if (!matAtlas) {
+          tex.colorSpace = THREE.SRGBColorSpace;
+          tex.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+          matAtlas = conNiebla(new THREE.MeshToonMaterial({ map: tex, gradientMap: rampa }));
+          materialesAtlas.set(clave, matAtlas);
+        }
+        partes.push({ geo: mergeGeometries(gs, false), mat: matAtlas });
       }
       const caja = new THREE.Box3();
       for (const p of partes) {
@@ -1421,26 +1667,32 @@ export default function Mundo() {
 
     // --- hierba: matas que se mecen, alrededor del avatar ---
     const texHierba = (() => {
+      const S = 128;
       const cv = document.createElement('canvas');
-      cv.width = 64;
-      cv.height = 64;
+      cv.width = cv.height = S;
       const c = cv.getContext('2d');
       const rnd = prng(3);
-      // hojas anchas y en dos verdes, más oscuras que el suelo: sobre la
-      // hierba del suelo, una brizna clara y fina desaparece
-      for (let i = 0; i < 8; i++) {
-        const x = 6 + i * 7 + rnd() * 3;
-        const alto = 34 + rnd() * 28;
-        const inclina = (rnd() - 0.5) * 22;
-        c.fillStyle = i % 3 === 0 ? '#6fae5a' : i % 3 === 1 ? '#84c268' : '#98d276';
+      // Una MATA, no tres briznas sueltas. Con 8 hojas en 64 px la mata salía
+      // como un cardo: tres pinchos separados con el suelo por en medio, y de
+      // lejos ni se veía. Ahora van dos filas —primero las cortas del fondo,
+      // más oscuras, y encima las largas— así que la mata tiene base y se lee
+      // como una macolla incluso a 30 m.
+      const hoja = (x, alto, ancho, color) => {
+        const inclina = (rnd() - 0.5) * 44;
+        c.fillStyle = color;
         c.beginPath();
-        c.moveTo(x - 4.5, 64);
-        c.quadraticCurveTo(x + inclina * 0.4, 64 - alto * 0.55, x + inclina, 64 - alto);
-        c.quadraticCurveTo(x + inclina * 0.4 + 3, 64 - alto * 0.55, x + 4.5, 64);
+        c.moveTo(x - ancho, S);
+        c.quadraticCurveTo(x + inclina * 0.4, S - alto * 0.55, x + inclina, S - alto);
+        c.quadraticCurveTo(x + inclina * 0.4 + ancho * 0.7, S - alto * 0.55, x + ancho, S);
         c.fill();
-      }
+      };
+      // fondo: cortas, apretadas y oscuras — es la sombra de dentro de la mata
+      for (let i = 0; i < 15; i++) hoja(7 + i * 8.2 + rnd() * 4, 30 + rnd() * 26, 9 + rnd() * 4, i % 2 ? '#4a8540' : '#57944a');
+      // delante: las largas, en tres verdes, más claras según suben
+      for (let i = 0; i < 12; i++) hoja(9 + i * 9.8 + rnd() * 5, 58 + rnd() * 52, 8 + rnd() * 4, i % 3 === 0 ? '#63a44e' : i % 3 === 1 ? '#79b95c' : '#8ecb69');
       const tex = new THREE.CanvasTexture(cv);
       tex.colorSpace = THREE.SRGBColorSpace;
+      tex.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
       return tex;
     })();
     const geoHierba = (() => {
@@ -1479,7 +1731,12 @@ export default function Mundo() {
     hierba.receiveShadow = true;
     scene.add(hierba);
     let hierbaCentro = null;
-    const CELDA_HIERBA = 1.9;
+    // Una mata cada 11,7 m² y un 9 % de cobertura: eso daba la rejilla de
+    // 1,9 m, o sea unas 870 matas de las 3.000 del presupuesto, que no se
+    // tocaba NUNCA. El suelo a los pies del avatar era césped pintado y ya.
+    // Con 1,3 m y rodales más generosos salen unas 2.200 y la pradera tiene
+    // mata donde pisas, que es donde se mira.
+    const CELDA_HIERBA = 1.45;
     const RADIO_HIERBA = 56;
 
     // --- nubes ---
@@ -1592,7 +1849,7 @@ export default function Mundo() {
     scene.add(marcos);
     const plazas = new THREE.InstancedMesh(
       geoParcela,
-      conAltura(new THREE.MeshToonMaterial({ color: 0xdfd0b2, gradientMap: rampa }), { normales: true, nubes: true, rio: true }),
+      conAltura(new THREE.MeshToonMaterial({ color: 0xdfd0b2, gradientMap: rampa }), { normales: true, nubes: true, rio: true, piedra: true }),
       MAX_PARC
     );
     plazas.count = 0;
@@ -1748,8 +2005,10 @@ export default function Mundo() {
           const i2 = cont[t];
           if (i2 >= MAX_INST) continue;
           const escala = 0.85 + hash2(gx * 71, gy * 53) * 0.3;
-          posI.set(wx, alturaEn(wx, wy) - 0.12, -wy);
-          rotI.setFromAxisAngle(ejeY, hash2(gx * 13, gy * 41) * Math.PI * 2);
+          const giroC = hash2(gx * 13, gy * 41) * Math.PI * 2;
+          ponMancha(PIEZAS[t], wx, wy, escala);
+          posI.set(wx, asiento(PIEZAS[t], wx, wy, escala), -wy);
+          rotI.setFromAxisAngle(ejeY, giroC);
           escPieza.set(escala, escala, escala);
           mtx.compose(posI, rotI, escPieza);
           for (const q of par.partes) {
@@ -1763,6 +2022,50 @@ export default function Mundo() {
       }
     }
 
+    // A qué altura se planta una pieza. Muestrear UN punto —el centro— y
+    // hundir 12 cm fijos vale para una silla, pero una casa de 10 m en una
+    // pendiente apoya el centro y deja la esquina baja flotando: se le ve el
+    // aire por debajo, y eso es la mitad de la sensación de decorado. Se mira
+    // el MÍNIMO de cuatro puntos a `solido` metros del centro, así que la
+    // casa se apoya en su punto más bajo y el resto se entierra un poco, que
+    // es lo que hace un edificio de verdad.
+    // La huella buena es `solido` —lo que el avatar no puede atravesar— y NO
+    // la caja de la geometría: la caja de un árbol es su COPA, así que
+    // asentar por ella hundiría el tronco un palmo por culpa de unas ramas
+    // que están a ocho metros del suelo. Por eso los cuatro puntos van sobre
+    // los ejes y no en las esquinas: en las esquinas de un cuadrado de lado
+    // 2r se sale del círculo que la pieza ocupa de verdad.
+    // Solo para lo que ocupa más de metro y medio: por debajo de eso el error
+    // no llega al centímetro, y son cuatro senos por pieza en un bucle que
+    // corre en CADA pointermove del arrastre.
+    let nManchas = 0;
+    // Pone la mancha de contacto de una pieza. Solo las que tienen `solido`:
+    // es el radio que el avatar no puede atravesar, o sea justo lo que la
+    // pieza ocupa EN EL SUELO. Un camino o una flor no la llevan —una losa a
+    // ras de suelo con un cerco oscuro alrededor se lee como un agujero— y
+    // sin `solido` no hay nada que ocluir.
+    function ponMancha(def, wx, wy, escala) {
+      const r = (def.solido || 0) * escala;
+      if (r < 0.15 || def.suelo || nManchas >= MAX_MANCHAS) return;
+      const d = r * 3.2; // el cerco tiene que asomar por fuera de la pieza
+      posI.set(wx, 0.05, -wy);
+      rotI.identity();
+      escS.set(d, 1, d);
+      mtx.compose(posI, rotI, escS);
+      manchas.setMatrixAt(nManchas++, mtx);
+    }
+
+    const ASIENTO_MIN = 1.5;
+    function asiento(def, wx, wy, escala) {
+      const r = (def.solido || 0) * escala;
+      // Los 12 cm de sobra son PARA ESTO: para que en pendiente se hunda el
+      // borde bajo en vez de flotar el alto. Cuando la huella ya se ha
+      // mirado, ese margen ya está puesto —y de sobra— así que sumarle otros
+      // 12 cm entierra el zócalo de la casa medio palmo.
+      if (r < ASIENTO_MIN) return alturaEn(wx, wy) - 0.12;
+      return Math.min(alturaEn(wx - r, wy), alturaEn(wx + r, wy), alturaEn(wx, wy - r), alturaEn(wx, wy + r)) - 0.04;
+    }
+
     function pintaMundo() {
       const cont = {};
       for (const t in mallas) {
@@ -1772,6 +2075,7 @@ export default function Mundo() {
       solidos = [];
       let nMarcos = 0;
       let nPlazas = 0;
+      nManchas = 0;
       for (const [clave, pc] of parcelas) {
         const p = parseParcela(clave);
         if (!p) continue;
@@ -1836,7 +2140,8 @@ export default function Mundo() {
           if (def.solido) solidos.push({ x: wx, y: wy, r: def.solido * escala });
           // un pelín enterrada: en pendiente, mejor que el borde bajo se hunda
           // a que el alto flote
-          posI.set(wx, alturaEn(wx, wy) - 0.12, -wy);
+          ponMancha(def, wx, wy, escala);
+          posI.set(wx, asiento(def, wx, wy, escala), -wy);
           rotI.setFromAxisAngle(ejeY, giro);
           escPieza.set(escala, escala, escala);
           mtx.compose(posI, rotI, escPieza);
@@ -1877,6 +2182,10 @@ export default function Mundo() {
       }
       pintaSeleccion();
       pideSombras(); // ha cambiado lo que hay: la sombra de antes ya no vale
+      manchas.count = nManchas;
+      manchas.instanceMatrix.clearUpdateRanges();
+      manchas.instanceMatrix.addUpdateRange(0, nManchas * 16);
+      manchas.instanceMatrix.needsUpdate = true;
       marcos.count = nMarcos;
       marcos.instanceMatrix.needsUpdate = true;
       if (marcos.instanceColor) marcos.instanceColor.needsUpdate = true;
@@ -1907,11 +2216,19 @@ export default function Mundo() {
           const gx = cx + i;
           const gy = cy + j;
           const h = hash2(gx, gy);
-          const wx = (gx + hash2(gx * 7, gy) - 0.5) * CELDA_HIERBA;
-          const wy = (gy + hash2(gx, gy * 7) - 0.5) * CELDA_HIERBA;
-          // a rodales: una onda lenta decide dónde hay más y dónde menos, si
-          // no la hierba sale como un campo sembrado en filas
-          const rodal = 0.32 + 0.3 * Math.sin(wx * 0.09 + wy * 0.05) * Math.sin(wy * 0.11 - wx * 0.04);
+          // El desvío es de casi celda y media, no de media: con ±0,5 la mata
+          // se queda dentro de su casilla y desde una cámara de canto la
+          // rejilla de 1,3 m se lee como filas en diagonal. Pasándose de la
+          // celda las matas se solapan entre vecinas y la rejilla desaparece.
+          const wx = (gx + (hash2(gx * 7, gy) - 0.5) * 2.6) * CELDA_HIERBA;
+          const wy = (gy + (hash2(gx, gy * 7) - 0.5) * 2.6) * CELDA_HIERBA;
+          // A rodales: dos octavas de ruido deciden dónde hay más y dónde
+          // menos, si no la hierba sale como un campo sembrado en filas. Un
+          // PRODUCTO DE SENOS, que es lo que había, no vale: dibuja un
+          // cuadriculado en diagonal que con esta densidad se ve a simple
+          // vista, y sus ondas de 60-70 m dejaban calvas de 30 m —te podías
+          // plantar en medio de una y no tener una mata a la vista.
+          const rodal = 0.18 + 0.44 * ruido2(wx / 19, wy / 19) + 0.16 * ruido2(wx / 6.5 + 31, wy / 6.5 + 17);
           if (h > rodal) continue;
           const p = parcelaDe(wx, wy);
           const tipoH = tipoParcela(p.px, p.py);
@@ -1931,7 +2248,11 @@ export default function Mundo() {
             }
           }
           if (tapada) continue;
-          const s = 0.3 + h * 0.85; // como mucho, al muslo del avatar
+          // El tamaño NO puede salir del mismo hash que decide si hay mata:
+          // como se planta cuando `h` es BAJO, con `s = 0.3 + h * 0.85` solo
+          // sobrevivían las matas pequeñas y el rodal salía siempre raso.
+          // Con su propio hash se ve la variedad que ya estaba escrita.
+          const s = 0.4 + hash2(gx * 13 + 5, gy * 29 + 3) * 0.34; // como mucho, al muslo del avatar
           posI.set(wx, 0, -wy);
           rotI.setFromAxisAngle(ejeY, h * 9);
           escS.set(s, s * (0.9 + hash2(gy, gx) * 0.7), s);
@@ -1984,6 +2305,48 @@ export default function Mundo() {
       fog: false,
       toneMapped: false, // es oclusión, no luz: que ACES no la toque
     });
+
+    // La mancha de contacto de las PIEZAS, la misma que ya llevaba el avatar.
+    // No es la sombra del sol —esa cae al noreste y se va de la pieza en
+    // cuanto el sol está bajo— sino la oclusión de justo debajo, que ninguna
+    // luz rellena y que es lo que dice «esto se apoya aquí». Sin ella una
+    // casa es una calcomanía pegada sobre el césped. Va instanciada y se
+    // rellena en el mismo bucle que las piezas: cero draw calls nuevos por
+    // pieza y uno en total.
+    // Pasa por `conAltura`, así que las cuatro esquinas del cuadro suben con
+    // la colina: un cuadro plano de 12 m fijado a `alturaEn` + una constante
+    // se hundiría por un lado en cuanto hubiera pendiente.
+    // La del avatar no sirve tal cual: su degradado es un cono, y bajo una
+    // casa de 8,4 m lo oscuro queda TAPADO por la propia casa —solo asoma el
+    // borde, donde el alfa ya vale casi cero— así que no se veía nada. Esta
+    // mantiene el tono hasta pasado el objeto y se apaga después, que es lo
+    // que hace que asome un cerco de contacto alrededor de la pieza.
+    const texManchaPieza = (() => {
+      const S = 64;
+      const cv = document.createElement('canvas');
+      cv.width = cv.height = S;
+      const c = cv.getContext('2d');
+      const g = c.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
+      g.addColorStop(0, 'rgba(56,74,100,0.5)');
+      g.addColorStop(0.42, 'rgba(56,74,100,0.44)');
+      g.addColorStop(0.7, 'rgba(56,74,100,0.22)');
+      g.addColorStop(1, 'rgba(56,74,100,0)');
+      c.fillStyle = g;
+      c.fillRect(0, 0, S, S);
+      const tex = new THREE.CanvasTexture(cv);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      return tex;
+    })();
+    const MAX_MANCHAS = 700;
+    const manchas = new THREE.InstancedMesh(
+      new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2),
+      conAltura(new THREE.MeshBasicMaterial({ map: texManchaPieza, transparent: true, depthWrite: false, toneMapped: false })),
+      MAX_MANCHAS
+    );
+    manchas.count = 0;
+    manchas.frustumCulled = false;
+    manchas.renderOrder = 2; // sobre la losa de la plaza y el marco de parcela
+    scene.add(manchas);
 
     function creaFigura(c, p, s) {
       const grupo = new THREE.Group();

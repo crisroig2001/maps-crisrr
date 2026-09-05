@@ -83,6 +83,21 @@ float cauce(float x, float y) {
   return hondo * lejosPuente;
 }`;
 
+// Hacia dónde CORRE el río en un punto: la tangente de su eje. El rizado del
+// agua se calcula en estas coordenadas, así que las ondas bajan con la
+// corriente en vez de cruzar el cauce en diagonal como si fuera un mar.
+// Recibe coordenadas del mundo (y al norte) y devuelve el vector en XZ —con
+// el z = -y ya aplicado—, que es donde vive el shader del agua.
+export const GLSL_FLUJO = `
+vec2 flujoRio(float x, float y) {
+  float dE = abs(x - rioEsteX(y));
+  float dS = abs(y - rioSurY(x));
+  vec2 t = dE <= dS
+    ? vec2(26.0 * 0.011 * cos(y * 0.011) + 10.0 * 0.031 * cos(y * 0.031 + 1.7), 1.0)
+    : vec2(1.0, 26.0 * 0.009 * cos(x * 0.009 + 0.6) + 10.0 * 0.027 * cos(x * 0.027));
+  return normalize(vec2(t.x, -t.y));
+}`;
+
 // Parques públicos: cajas de parcelas [px0, px1, py0, py1]
 const PARQUES = [
   [-4, -3, 2, 3],
