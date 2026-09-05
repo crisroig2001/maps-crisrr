@@ -88,7 +88,7 @@ const NUBE = new THREE.Color(0xfffaf0); // igual que la coronilla de la cúpula
 const NUBE_SOMBRA = new THREE.Color(0xbcc5df); // ... y la panza
 
 const MAX_INST = 3000; // instancias por parte de pieza en el mundo cargado
-const MAX_HIERBA = 3000;
+const MAX_HIERBA = 4200;
 const VELOCIDAD = 3.8; // m/s del avatar
 const CADENCIA = 12.5; // rad/s de la zancada: con VELOCIDAD da un paso de ~0,95 m
 
@@ -198,7 +198,7 @@ function conNiebla(mat) {
 //   cesped: el verde del suelo se calcula aquí con ruido a varias escalas
 //          (dos verdes a manchas grandes, calvas más claras y matas más
 //          oscuras), como el terreno de la referencia
-function conAltura(mat, { tinta = false, viento = false, normales = false, nubes = false, cesped = false, pie = false, rio = false } = {}) {
+function conAltura(mat, { tinta = false, viento = false, normales = false, nubes = false, cesped = false, pie = false, rio = false, piedra = false } = {}) {
   mat.onBeforeCompile = (sh) => {
     sh.uniforms.tiempo = uTiempo;
     sh.uniforms.tNubes = uNubes;
@@ -229,7 +229,19 @@ function conAltura(mat, { tinta = false, viento = false, normales = false, nubes
           vec4 wpos = modelMatrix * vec4(transformed, 1.0);
         #endif
         float hh = altura(wpos.xz);
-        transformed.y += hh;
+        // La altura se suma en espacio de OBJETO, así que la escala de la
+        // instancia la multiplica: hay que dividirla antes. Sin esto, una
+        // mata de hierba con escala 0,4 sobre un terreno de 2,5 m se plantaba
+        // a 1 m, o sea metro y medio BAJO tierra, y una de 1,18 flotaba medio
+        // metro. Como el tamaño de la mata es aleatorio, lo que se veía era
+        // una pradera con matas sueltas donde el azar había dado una escala
+        // cercana a 1: la mitad de la hierba del mundo estaba enterrada. Los
+        // marcos y las plazas no lo notaban porque van a escala 1 en y.
+        #ifdef USE_INSTANCING
+          transformed.y += hh / max(length(instanceMatrix[1].xyz), 0.0001);
+        #else
+          transformed.y += hh;
+        #endif
         vAltura = hh;
         vMundoXZ = wpos.xz;
         ${
@@ -238,14 +250,25 @@ function conAltura(mat, { tinta = false, viento = false, normales = false, nubes
                transformed.z += cos(tiempo * 1.3 + wpos.x * 0.17 - wpos.z * 0.3) * 0.08 * position.y;
                vec2 dAv = wpos.xz - uAvatar.xz;
                float lAv = length(dAv);
-               transformed.xz += (dAv / max(lAv, 0.001)) * (1.0 - smoothstep(0.15, 1.0, lAv)) * 0.45 * position.y;`
+               transformed.xz += (dAv / max(lAv, 0.001)) * (1.0 - smoothstep(0.15, 1.0, lAv)) * 0.45 * position.y;
+               // La mata se encoge con la distancia A LA CÁMARA hasta
+               // desaparecer. Una mata de 60 cm a 70 m ocupa dos píxeles: lo
+               // que se ve no es hierba, es un rascado que hierve al andar, y
+               // con la cámara alejada tapaba el prado entero. A la cámara y
+               // no al avatar: mirando un parque desde 60 m, la hierba de al
+               // lado del avatar está lejos de QUIEN MIRA aunque la tenga a
+               // los pies. Y de paso se acaba el pop del borde del sembrado,
+               // que hasta ahora aparecía a tamaño natural de golpe.
+               float lejos = smoothstep(40.0, 75.0, distance(cameraPosition.xz, wpos.xz));
+               transformed.y -= position.y * lejos;
+               transformed.xz *= 1.0 - lejos * 0.6;`
             : ''
         }`
       );
     sh.fragmentShader = sh.fragmentShader
       .replace(
         '#include <common>',
-        '#include <common>\nuniform float tiempo;\nuniform sampler2D tNubes;\nvarying float vAltura;\nvarying vec2 vMundoXZ;' + (cesped || rio ? GLSL_RUIDO : '') + (tinta || rio ? GLSL_CAUCE : '')
+        '#include <common>\nuniform float tiempo;\nuniform sampler2D tNubes;\nvarying float vAltura;\nvarying vec2 vMundoXZ;' + (cesped || rio || piedra ? GLSL_RUIDO : '') + (tinta || rio ? GLSL_CAUCE : '')
       )
       // la hierba es de doble cara y three le da la vuelta a la normal en
       // la cara trasera: la mitad de cada mata salía a oscuras. La normal
@@ -270,6 +293,17 @@ function conAltura(mat, { tinta = false, viento = false, normales = false, nubes
                vec3 cesped = mix(vec3(0.27, 0.55, 0.15), vec3(0.36, 0.60, 0.17), rA);
                cesped = mix(cesped, vec3(0.47, 0.70, 0.22), smoothstep(0.55, 0.8, rC) * smoothstep(0.35, 0.7, rB));
                cesped = mix(cesped, vec3(0.20, 0.45, 0.13), smoothstep(0.6, 0.85, rD) * 0.6);
+               // Una octava FINA (70 cm) que solo vive cerca. Las cuatro de
+               // arriba son manchas de 3 a 33 m: de lejos pintan el campo,
+               // pero a los pies del avatar el suelo es un degradado liso de
+               // acuarela. Y no puede estar siempre: a 70 m una mancha de
+               // 70 cm no llega a un píxel y lo que se ve no es hierba, es
+               // el suelo hirviendo al andar.
+               float rE = ruido(vMundoXZ * 1.4 + 21.0);
+               float cerca = 1.0 - smoothstep(16.0, 65.0, vFogDepth);
+               // no solo más clara: más SECA. Las calvas de una pradera de
+               // julio tiran a paja, no a un verde más luminoso.
+               cesped = mix(cesped, mix(vec3(0.26, 0.46, 0.14), vec3(0.66, 0.72, 0.30), rE), cerca * 0.45);
                diffuseColor.rgb *= cesped;`
             : ''
         }
@@ -293,6 +327,24 @@ function conAltura(mat, { tinta = false, viento = false, normales = false, nubes
             : ''
         }
         ${
+          piedra
+            ? `// Losas de 2,4 m en coordenadas del MUNDO, así que casan de una
+               // parcela a la de al lado. La plaza y el paseo eran 48 × 48 m
+               // de UN color liso: la mitad del encuadre de quien llega es
+               // una explanada beige sin nada que mirar.
+               vec2 lp = vMundoXZ / 2.4;
+               vec2 f = abs(fract(lp) - 0.5);
+               float junta = 0.5 - max(f.x, f.y);
+               // el ancho de la junta lo pone fwidth: se suaviza sola con la
+               // distancia en vez de centellear a 80 m
+               float wj = fwidth(junta) * 1.6 + 0.004;
+               float linea = 1.0 - smoothstep(0.022 - wj, 0.022 + wj, junta);
+               diffuseColor.rgb *= mix(0.94, 1.05, hash21(floor(lp)));
+               diffuseColor.rgb *= 0.96 + 0.09 * ruido(vMundoXZ * 1.6);
+               diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.60, 0.55, 0.45), linea * 0.5);`
+            : ''
+        }
+        ${
           // La mata se oscurece hacia la base: sin eso, 3.000 quads con el
           // mismo tono de arriba abajo flotan un dedo sobre el suelo. Es el
           // mismo problema de contacto que las piezas, multiplicado por mil,
@@ -310,7 +362,7 @@ function conAltura(mat, { tinta = false, viento = false, normales = false, nubes
       );
     parcheaNiebla(sh);
   };
-  mat.customProgramCacheKey = () => 'altura' + (tinta ? 't' : '') + (viento ? 'v' : '') + (normales ? 'n' : '') + (nubes ? 'c' : '') + (cesped ? 'g' : '') + (pie ? 'p' : '') + (rio ? 'r' : '');
+  mat.customProgramCacheKey = () => 'altura' + (tinta ? 't' : '') + (viento ? 'v' : '') + (normales ? 'n' : '') + (nubes ? 'c' : '') + (cesped ? 'g' : '') + (pie ? 'p' : '') + (rio ? 'r' : '') + (piedra ? 's' : '');
   return mat;
 }
 // Las copas se mecen: un vaivén lento proporcional a la altura sobre el
@@ -684,6 +736,21 @@ function prng(seed) {
 }
 function hash2(x, y) {
   return ((Math.imul(x, 73856093) ^ Math.imul(y, 19349663)) >>> 0) / 4294967296;
+}
+// Ruido de valor 2D en JS: el mismo que `ruido()` en GLSL, para repartir
+// cosas por el mundo sin que se vea la rejilla. Un producto de dos senos,
+// que es lo que había, dibuja un cuadriculado en diagonal: se le ve el
+// patrón en cuanto hay bastantes cosas repartidas.
+function ruido2(x, y) {
+  const i = Math.floor(x);
+  const j = Math.floor(y);
+  const fx = x - i;
+  const fy = y - j;
+  const sx = fx * fx * (3 - 2 * fx);
+  const sy = fy * fy * (3 - 2 * fy);
+  const ab = hash2(i, j) + (hash2(i + 1, j) - hash2(i, j)) * sx;
+  const cd = hash2(i, j + 1) + (hash2(i + 1, j + 1) - hash2(i, j + 1)) * sx;
+  return ab + (cd - ab) * sy;
 }
 
 export default function Mundo() {
@@ -1530,26 +1597,32 @@ export default function Mundo() {
 
     // --- hierba: matas que se mecen, alrededor del avatar ---
     const texHierba = (() => {
+      const S = 128;
       const cv = document.createElement('canvas');
-      cv.width = 64;
-      cv.height = 64;
+      cv.width = cv.height = S;
       const c = cv.getContext('2d');
       const rnd = prng(3);
-      // hojas anchas y en dos verdes, más oscuras que el suelo: sobre la
-      // hierba del suelo, una brizna clara y fina desaparece
-      for (let i = 0; i < 8; i++) {
-        const x = 6 + i * 7 + rnd() * 3;
-        const alto = 34 + rnd() * 28;
-        const inclina = (rnd() - 0.5) * 22;
-        c.fillStyle = i % 3 === 0 ? '#6fae5a' : i % 3 === 1 ? '#84c268' : '#98d276';
+      // Una MATA, no tres briznas sueltas. Con 8 hojas en 64 px la mata salía
+      // como un cardo: tres pinchos separados con el suelo por en medio, y de
+      // lejos ni se veía. Ahora van dos filas —primero las cortas del fondo,
+      // más oscuras, y encima las largas— así que la mata tiene base y se lee
+      // como una macolla incluso a 30 m.
+      const hoja = (x, alto, ancho, color) => {
+        const inclina = (rnd() - 0.5) * 44;
+        c.fillStyle = color;
         c.beginPath();
-        c.moveTo(x - 4.5, 64);
-        c.quadraticCurveTo(x + inclina * 0.4, 64 - alto * 0.55, x + inclina, 64 - alto);
-        c.quadraticCurveTo(x + inclina * 0.4 + 3, 64 - alto * 0.55, x + 4.5, 64);
+        c.moveTo(x - ancho, S);
+        c.quadraticCurveTo(x + inclina * 0.4, S - alto * 0.55, x + inclina, S - alto);
+        c.quadraticCurveTo(x + inclina * 0.4 + ancho * 0.7, S - alto * 0.55, x + ancho, S);
         c.fill();
-      }
+      };
+      // fondo: cortas, apretadas y oscuras — es la sombra de dentro de la mata
+      for (let i = 0; i < 15; i++) hoja(7 + i * 8.2 + rnd() * 4, 30 + rnd() * 26, 9 + rnd() * 4, i % 2 ? '#4a8540' : '#57944a');
+      // delante: las largas, en tres verdes, más claras según suben
+      for (let i = 0; i < 12; i++) hoja(9 + i * 9.8 + rnd() * 5, 58 + rnd() * 52, 8 + rnd() * 4, i % 3 === 0 ? '#63a44e' : i % 3 === 1 ? '#79b95c' : '#8ecb69');
       const tex = new THREE.CanvasTexture(cv);
       tex.colorSpace = THREE.SRGBColorSpace;
+      tex.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
       return tex;
     })();
     const geoHierba = (() => {
@@ -1588,7 +1661,12 @@ export default function Mundo() {
     hierba.receiveShadow = true;
     scene.add(hierba);
     let hierbaCentro = null;
-    const CELDA_HIERBA = 1.9;
+    // Una mata cada 11,7 m² y un 9 % de cobertura: eso daba la rejilla de
+    // 1,9 m, o sea unas 870 matas de las 3.000 del presupuesto, que no se
+    // tocaba NUNCA. El suelo a los pies del avatar era césped pintado y ya.
+    // Con 1,3 m y rodales más generosos salen unas 2.200 y la pradera tiene
+    // mata donde pisas, que es donde se mira.
+    const CELDA_HIERBA = 1.45;
     const RADIO_HIERBA = 56;
 
     // --- nubes ---
@@ -1701,7 +1779,7 @@ export default function Mundo() {
     scene.add(marcos);
     const plazas = new THREE.InstancedMesh(
       geoParcela,
-      conAltura(new THREE.MeshToonMaterial({ color: 0xdfd0b2, gradientMap: rampa }), { normales: true, nubes: true, rio: true }),
+      conAltura(new THREE.MeshToonMaterial({ color: 0xdfd0b2, gradientMap: rampa }), { normales: true, nubes: true, rio: true, piedra: true }),
       MAX_PARC
     );
     plazas.count = 0;
@@ -2016,11 +2094,19 @@ export default function Mundo() {
           const gx = cx + i;
           const gy = cy + j;
           const h = hash2(gx, gy);
-          const wx = (gx + hash2(gx * 7, gy) - 0.5) * CELDA_HIERBA;
-          const wy = (gy + hash2(gx, gy * 7) - 0.5) * CELDA_HIERBA;
-          // a rodales: una onda lenta decide dónde hay más y dónde menos, si
-          // no la hierba sale como un campo sembrado en filas
-          const rodal = 0.32 + 0.3 * Math.sin(wx * 0.09 + wy * 0.05) * Math.sin(wy * 0.11 - wx * 0.04);
+          // El desvío es de casi celda y media, no de media: con ±0,5 la mata
+          // se queda dentro de su casilla y desde una cámara de canto la
+          // rejilla de 1,3 m se lee como filas en diagonal. Pasándose de la
+          // celda las matas se solapan entre vecinas y la rejilla desaparece.
+          const wx = (gx + (hash2(gx * 7, gy) - 0.5) * 2.6) * CELDA_HIERBA;
+          const wy = (gy + (hash2(gx, gy * 7) - 0.5) * 2.6) * CELDA_HIERBA;
+          // A rodales: dos octavas de ruido deciden dónde hay más y dónde
+          // menos, si no la hierba sale como un campo sembrado en filas. Un
+          // PRODUCTO DE SENOS, que es lo que había, no vale: dibuja un
+          // cuadriculado en diagonal que con esta densidad se ve a simple
+          // vista, y sus ondas de 60-70 m dejaban calvas de 30 m —te podías
+          // plantar en medio de una y no tener una mata a la vista.
+          const rodal = 0.18 + 0.44 * ruido2(wx / 19, wy / 19) + 0.16 * ruido2(wx / 6.5 + 31, wy / 6.5 + 17);
           if (h > rodal) continue;
           const p = parcelaDe(wx, wy);
           const tipoH = tipoParcela(p.px, p.py);
@@ -2040,7 +2126,11 @@ export default function Mundo() {
             }
           }
           if (tapada) continue;
-          const s = 0.3 + h * 0.85; // como mucho, al muslo del avatar
+          // El tamaño NO puede salir del mismo hash que decide si hay mata:
+          // como se planta cuando `h` es BAJO, con `s = 0.3 + h * 0.85` solo
+          // sobrevivían las matas pequeñas y el rodal salía siempre raso.
+          // Con su propio hash se ve la variedad que ya estaba escrita.
+          const s = 0.4 + hash2(gx * 13 + 5, gy * 29 + 3) * 0.34; // como mucho, al muslo del avatar
           posI.set(wx, 0, -wy);
           rotI.setFromAxisAngle(ejeY, h * 9);
           escS.set(s, s * (0.9 + hash2(gy, gx) * 0.7), s);
