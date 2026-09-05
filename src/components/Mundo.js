@@ -780,6 +780,16 @@ export default function Mundo() {
     // (`creaInstancias`), así que lo que se ve aquí es exactamente lo que se
     // ve en el mundo: mismas luces, misma rampa, mismo ACES.
     const MUESTRARIO = params.get('muestrario') === '1';
+    // `?miniatura=<tipo>`: UNA pieza, cámara ortográfica fija y fondo liso,
+    // para generar las miniaturas de la paleta con el MOTOR DE VERDAD. Las de
+    // ahora son los previews que reparte Kenney: tres kits, tres encuadres,
+    // seis tamaños distintos (y cuatro no son ni cuadradas), con el objeto
+    // ocupando del 3 % al 100 % del lienzo. El resultado es que la escala
+    // sale INVERTIDA —una silla se dibuja tres veces más grande que un
+    // árbol— y el color no es el del mundo. La marca `zoom` del catálogo es
+    // un parche booleano contra una ocupación que va del 3 % al 100 %, así
+    // que no arregla nada.
+    const MINIATURA = params.get('miniatura');
     const MUESTRA_PASO = 15; // la casona mide 13 m: con menos, se pisan
     const MUESTRA_COLS = 7;
     const jugador = perfil();
@@ -1567,6 +1577,26 @@ export default function Mundo() {
     // el monte) ni en `origen` (no se puede tocar ni seleccionar: no es de
     // nadie), y la comprobación de `origen` ya iba con `?.`, así que las
     // instancias sin dueño simplemente no responden al rayo.
+    // Una sola pieza en el origen, para la miniatura.
+    const cajaMini = new THREE.Box3();
+    function pintaMiniatura(cont) {
+      const par = mallas[MINIATURA];
+      if (!par) return;
+      posI.set(0, 0, 0);
+      rotI.setFromAxisAngle(ejeY, 0);
+      escPieza.set(1, 1, 1);
+      mtx.compose(posI, rotI, escPieza);
+      cajaMini.makeEmpty();
+      for (const q of par.partes) {
+        q.mesh.setMatrixAt(0, mtx);
+        if (q.tinte) q.mesh.setColorAt(0, coloresTinte[0]);
+        q.geo = q.geo || q.mesh.geometry;
+        q.mesh.geometry.computeBoundingBox();
+        cajaMini.union(q.mesh.geometry.boundingBox);
+      }
+      cont[MINIATURA] = 1;
+    }
+
     // La hoja de contactos del catálogo: cada pieza en su celda, ordenadas
     // por categoría y en el orden del catálogo, todas con giro 0 y escala 1
     // para que se comparen de verdad.
@@ -1598,7 +1628,7 @@ export default function Mundo() {
 
     let campoCentro = null;
     function siembraCampo(cont) {
-      if (MUESTRARIO) return;
+      if (MUESTRARIO || MINIATURA) return;
       const cx = Math.round(yo.x / CELDA_CAMPO);
       const cy = Math.round(yo.y / CELDA_CAMPO);
       campoCentro = { cx, cy };
@@ -1687,7 +1717,7 @@ export default function Mundo() {
           }
           marcos.setColorAt(nMarcos++, col);
         }
-        for (const z of MUESTRARIO ? [] : pc.d || []) {
+        for (const z of MUESTRARIO || MINIATURA ? [] : pc.d || []) {
           const par = mallas[z.t];
           if (!par) continue;
           const wx = bx + z.x;
@@ -1731,7 +1761,8 @@ export default function Mundo() {
       }
       // ANTES del bucle que fija los `count`: si no, las instancias del campo
       // se escriben pero no se dibujan.
-      if (MUESTRARIO) pintaMuestrario(cont);
+      if (MINIATURA) pintaMiniatura(cont);
+      else if (MUESTRARIO) pintaMuestrario(cont);
       else siembraCampo(cont);
       for (const t in mallas) {
         for (const p of mallas[t].partes) {
@@ -1887,6 +1918,30 @@ export default function Mundo() {
       return { grupo, cuerpo, pi, pd, bi, bd, mancha };
     }
     const avatar = creaFigura(jugador.color, jugador.pelo, jugador.piel);
+    // --- modo miniatura: fuera todo menos la pieza ---
+    let camMini = null;
+    if (MINIATURA) {
+      suelo.visible = false;
+      agua.visible = false;
+      hierba.visible = false;
+      cielo.visible = false;
+      pajaros.visible = false;
+      marcos.visible = false;
+      plazas.visible = false;
+      marcoObra.visible = false;
+      for (const nb of nubes) nb.m.visible = false;
+      avatar.grupo.visible = false;
+      scene.fog = null;
+      scene.background = new THREE.Color(0xeaf3fb);
+      document.body.classList.add('miniatura');
+      // Ortográfica y SIEMPRE desde el mismo sitio: es lo que hace que dos
+      // miniaturas se puedan comparar. 45° de acimut y 60° de polar, que es
+      // el tres cuartos de toda la vida.
+      camMini = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 200);
+      const dir = new THREE.Vector3(Math.cos(Math.PI / 4), Math.tan(Math.PI / 6), Math.sin(Math.PI / 4)).normalize();
+      camMini.position.copy(dir).multiplyScalar(60);
+      camMini.lookAt(0, 0, 0);
+    }
     scene.add(avatar.grupo);
     sigueElSol(0, 0, 0);
     // posición en metros del mundo (y hacia el norte); rumbo en radianes
@@ -3178,6 +3233,37 @@ export default function Mundo() {
 
       centraMapa(dt, yo.andando);
       controls.update();
+      if (camMini) {
+        // El encuadre sale del tamaño REAL de la pieza, con una ley
+        // sublineal: si fuera proporcional, una flor de 0,8 m saldría como
+        // una mota y la torre de 13,5 m llenaría el cuadro; y si todas
+        // ocuparan lo mismo, se pierde la escala, que es justo lo que pasa
+        // hoy. Así una casa se ve más grande que una silla, pero la silla
+        // se sigue viendo.
+        const tam = new THREE.Vector3();
+        cajaMini.getSize(tam);
+        // El encuadre es PROPORCIONAL a la pieza pero con el margen
+        // encogiéndose: una pieza pequeña se enmarca holgada (×2,4) y una
+        // grande, justa (×1,2). Así la casa se ve el doble de grande que la
+        // silla en la celda —la escala se lee— pero la silla sigue siendo
+        // legible en 64 px, que es lo que se perdía si el encuadre fuera
+        // proporcional a secas (la flor de 0,8 m saldría como una mota).
+        const alto = Math.max(tam.y, 0.2);
+        const grande = Math.max(alto, Math.hypot(tam.x, tam.z));
+        const margen = 2.9 * Math.pow(grande / 0.5, -0.26);
+        const h = (grande * Math.max(1.15, margen)) / 2;
+        camMini.left = -h;
+        camMini.right = h;
+        camMini.top = h;
+        camMini.bottom = -h;
+        // el centro de la pieza, no su base
+        const cen = new THREE.Vector3();
+        cajaMini.getCenter(cen);
+        camMini.lookAt(cen.x, cen.y, cen.z);
+        camMini.updateProjectionMatrix();
+        renderer.render(scene, camMini);
+        return;
+      }
       renderer.render(scene, camera);
       pintaNombres();
 
@@ -3648,7 +3734,7 @@ export default function Mundo() {
             <div className="panel-cab">
               <button className="actual" onClick={() => setPanelAbierto((v) => !v)} aria-expanded={panelAbierto} aria-label="Elegir pieza">
                 {PIEZAS[herr]?.mini ? (
-                  <i className={'mini' + (PIEZAS[herr].zoom ? ' zoom' : '')}>
+                  <i className="mini">
                     <img src={'/miniaturas/' + herr + '.png'} alt="" />
                   </i>
                 ) : (
@@ -3675,7 +3761,7 @@ export default function Mundo() {
                   .map(([t, d]) => (
                     <button key={t} className={'pieza' + (herr === t ? ' on' : '')} onClick={() => eligeHerr(t)} aria-label={d.nombre} aria-pressed={herr === t} title={d.nombre}>
                       {d.mini ? (
-                        <i className={'mini' + (d.zoom ? ' zoom' : '')}>
+                        <i className="mini">
                           <img src={'/miniaturas/' + t + '.png'} alt="" />
                         </i>
                       ) : (
