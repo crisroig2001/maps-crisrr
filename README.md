@@ -49,7 +49,21 @@ servidor solo guarda qué hay en cada parcela y quién anda cerca.
   el suelo (dos capas de manchas que van cada una por su lado: solo hay
   sombra donde coinciden), **hierba** que se mece y **se aparta del avatar**
   al pasar (vertex shader, instanciada a rodales en una rejilla fija del
-  mundo alrededor del avatar), copas que se mecen, nubes en el cielo, una
+  mundo alrededor del avatar), copas que se mecen (el viento estaba escrito y calibrado desde hacía tiempo,
+  pero solo lo llevaba la bandera), **variación por instancia** —giro de ±22° y
+  escala de 0,88 a 1,12 sacados de un hash de la posición, así que un parque
+  deja de ser el mismo árbol clonado once veces sin que cueste un byte—,
+  **agua con profundidad**: la misma función `altura()` que levanta el terreno
+  da, restada al nivel del agua, lo honda que es en cada píxel, y de ahí salen
+  el color, la espuma de la orilla y sobre todo la opacidad, que puesta a cero
+  en la orilla disuelve sola la arista contra el terreno; **arena y limo**
+  donde el cauce manda y no por altura absoluta; una **silueta de horizonte**
+  pintada en la cúpula con armónicos enteros sobre el acimut (línea de
+  arbolado, no cordillera); el **velo del sol** calentando la mitad suroeste
+  del horizonte —un disco no serviría: el sol está a 44° y el borde de arriba
+  del encuadre no pasa de 17°—; **monte sembrado** por hash alrededor del
+  avatar, que respeta el agua, lo público y la parcela de cualquiera; nubes en
+  el cielo, una
   **bandada de pájaros** aleteando en círculos por encima, tone mapping ACES
   y una viñeta cálida en CSS. La cámara arranca cerca y baja, para que
   siempre se vea el horizonte con sus nubes. El **relieve** son colinas
@@ -154,14 +168,26 @@ servidor solo guarda qué hay en cada parcela y quién anda cerca.
   cuenta y, para ti, si tú eras uno. Tope de `MAX_GUSTA` por parcela, que es
   lo que impide que una parcela famosa se coma el fichero. El «cuántos había
   la última vez» vive en tu dispositivo: es un aviso, no un dato del mundo.
-- **Construir**: en tu parcela, «Construir» abre la paleta con una treintena
-  de piezas: cuatro casas, tienda, torre, árboles (roble, pino, palmera…),
-  arbustos, flores, setas, calabazas, rocas, troncos, hoguera, camino, puente,
-  valla, cartel, banco, mesa, silla, farola, fuente y bandera. Toca el suelo
+- **Construir**: en tu parcela, «Construir» abre la paleta con **41 piezas**
+  en cuatro pestañas: casas (cuatro del City Kit, más torre, tienda, caseta y
+  cobertizo), naturaleza (árboles, arbustos, flores, setas, calabazas, rocas,
+  troncos), jardín (banco, mesa, silla, maceta, farola, fuente, hoguera,
+  cartel, bandera, tendedero, arenero, buzón, barbacoa) y **suelo** (camino,
+  puente, valla, losa, patio, patio grande y parterre). El suelo era el hueco
+  grande del catálogo: eran tres piezas y ninguna dibujaba una forma, así que
+  un patio de 12 × 12 salían nueve toques a la rejilla de 4 m y el 6 % del
+  presupuesto de la parcela; con `patio grande` es un toque y una pieza. Toca el suelo
   para colocar una pieza (se pega a medio metro; caminos, vallas y puentes a
   una rejilla de 4 m para que casen) y **arrastra una pieza** con el dedo o
   el ratón para llevarla donde quieras (a pasos de 10 cm; la cámara se queda
-  quieta mientras). Tocarla la selecciona: sale un anillo y una barra con
+  quieta mientras). **Doce piezas se tiñen** del color elegido: las generadas
+  pintan sobre blanco, y las de modelo llevan en el catálogo el NOMBRE del
+  material que se pinta (`valla` lleva wood y woodDark, `arbusto` grass,
+  `tienda` colorRed). Ahí el color de vértice guarda la relación entre tonos
+  —la valla mantiene su listón claro y su poste oscuro— y el color de verdad
+  lo pone `instanceColor`; con el índice 0, que es lo que lleva todo lo ya
+  guardado, se pinta el color ORIGINAL, así que el día que se añade un tinte
+  no se mueve nada de lo que hay. Tocarla la selecciona: sale un anillo y una barra con
   flechas de medio metro, girar, borrar y soltar. La recién colocada queda
   seleccionada, para ajustarla al momento. Las piezas van en un **panel** a
   la derecha por pestañas (Casas, Naturaleza, Jardín, Suelo) con miniaturas
@@ -175,7 +201,10 @@ servidor solo guarda qué hay en cada parcela y quién anda cerca.
 - **Modelos**: casi todas las piezas son modelos glTF de
   [Kenney](https://kenney.nl) (Nature Kit, City Kit Suburban y Furniture Kit,
   licencia CC0), en `public/modelos/` con sus miniaturas en
-  `public/miniaturas/`; 27 modelos, 780 KB en total. Al cargar cada uno se
+  `public/miniaturas/`; 27 modelos, 780 KB en total. Las **otras 14 piezas
+  son geometría generada** (torre, farola, fuente, bandera, caseta,
+  cobertizo, tendedero, arenero, buzón, barbacoa, losa, patio, patio grande y
+  parterre): 0 bytes de descarga, y son las que se pueden teñir enteras. Al cargar cada uno se
   funden sus mallas: las de color liso hornean el color en el vértice y van
   en UNA geometría con el material toon de siempre; las que traen un atlas
   van en otra con la textura. Luego se escala para que el lado mayor en
@@ -229,7 +258,18 @@ Un cambio en el visor se juzga mirando capturas, no desplegando a producción.
 npx playwright install chromium   # una vez
 npm run dev                       # en otra terminal, con el almacén de semilla
 npm run vistas                    # captura y compara
+npm run vistas -- --estricto      # ... y FALLA si algo se ha movido
 ```
+
+**El reloj del mundo se para para capturar.** De `uTiempo` cuelgan la hierba,
+las copas, las sombras de nube, el agua, los cúmulos y los pájaros, así que
+con el reloj libre dos capturas de la MISMA escena ya salían distintas: se
+midió, y 6 de las 7 vistas se movían solas, una de ellas un 0,65 %. Con ese
+suelo de ruido el porcentaje era un número que se aprendía a ignorar. Ahora
+cada vista se pide con `?t=12`, que congela el reloj del DIBUJO (el del
+movimiento sigue siendo el de verdad, que si no el avatar no andaría), y el
+umbral de «igual» baja de 0,05 % a 0,01 %. Si tocas algo que dependa del
+tiempo, acuérdate de que el banco lo verá.
 
 Hay una vista, `a-escala`, que existe solo para juzgar el **tamaño**: el
 avatar pegado a la casa de muestra y a su jardín, donde se ve enseguida si una
@@ -245,6 +285,26 @@ encima cambia las capturas: bórralo y reinicia `npm run dev` antes.
 npm run vistas -- --base                  # acepta lo capturado como referencia
 npm run vistas -- --solo casa-de-muestra  # una sola vista
 ```
+
+La vista `catalogo` no mira el mundo: pide `?muestrario=1`, que pinta TODAS
+las piezas en una rejilla por categorías, a escala real y por el mismo camino
+de render que el mundo (mismas luces, misma rampa, mismo ACES). Es la única
+forma de ver de un golpe que una pieza está mal escalada o desentona con las
+demás.
+
+```bash
+npm run miniaturas              # regenera public/miniaturas/*.png
+npm run miniaturas -- --solo casa
+```
+
+Las miniaturas de la paleta **las pinta el motor**, con `?miniatura=<tipo>`:
+cámara ortográfica siempre desde el mismo sitio (45° de acimut, 60° de polar)
+y un encuadre proporcional a la pieza pero con el margen encogiéndose —
+holgado en lo pequeño y justo en lo grande—, así la escala se lee en la celda
+sin que una flor de 0,8 m salga como una mota. Antes eran los previews que
+reparte Kenney: tres kits, seis tamaños distintos, cuatro ni siquiera
+cuadradas, y la escala INVERTIDA (una silla se dibujaba tres veces más grande
+que un árbol). **Si añades una pieza, pasa esto y commitea el PNG.**
 
 `npm run prueba` es la otra mitad: dos jugadores de verdad en dos pestañas
 (Ana y Bea) que se presentan, andan, se ven, **se hablan** (Ana dice algo y
@@ -283,6 +343,41 @@ se baje otro.
 4. WebSockets para la presencia (hablar y los gestos ya van por el sondeo, que
    para eso sobra; lo que se nota es el retardo al ver andar a los demás)
 5. Más piezas, piezas apilables (plantas), interiores
+
+### Lo que dejó apuntado la auditoría visual
+
+Hay una auditoría de calidad visual hecha sobre este código (11 dimensiones,
+101 hallazgos juzgados, 12 refutados). Lo que se ha aplicado está en los
+commits; lo que queda, por si alguien lo retoma, más o menos por orden de lo
+que daría:
+
+- **Manchas de contacto bajo las piezas**, como la que ya lleva el avatar: un
+  InstancedMesh de quads rellenado en el mismo bucle de `pintaMundo`, pasado
+  por `conAltura` (un quad plano de 5,8 m se hunde en pendiente si se fija a
+  `alturaEn` + constante).
+- **Asiento por huella**: hoy `pintaMundo` muestrea UN punto y hunde 12 cm
+  fijos, así que en pendiente la esquina baja de una casa de 10 m flota hasta
+  26 cm. Guardar `{rx, rz}` de la caja que ya calcula `cargaModelo` y colocar
+  en el mínimo de las cuatro esquinas.
+- **Rejilla de 4 m visible** al colocar piezas de rejilla (una textura en
+  `texObra`, cero draw calls): es el «casar dos tramos de valla», que es el
+  problema real.
+- **Densidad de la hierba**: medido, una mata cada 11,7 m² y un 9 % de
+  cobertura, con `MAX_HIERBA` (3.000) sin tocarse nunca.
+- **`MAX_INST` de 3.000 a ~400**: 33 mallas × 3.000 × 16 floats son 6,3 MB en
+  CPU y otros tantos en GPU, casi todo aire.
+- **La cúpula al final de los opacos**: con `renderOrder = -1000` su fragment
+  (atan2, texture2D, varios smoothstep) corre en el 100 % de los píxeles y
+  luego se sobrescribe.
+- **Deduplicar el atlas**: las cuatro casas cargan cada una su copia de
+  `colormap.png`, o sea 4 texturas y 4 materiales de la misma imagen.
+- **Arrastre incremental**: `onMueve` sabe qué pieza se movió, pero llama a
+  `pintaMundo()` entero en cada pointermove.
+- **Extraer `src/lib/look.js`** con las constantes de dirección de arte y un
+  `?look=<preset>`, para poder probar variantes con el banco.
+- **Una vista del banco con el modo construir abierto** y otra a tamaño de
+  móvil: hoy las ocho son de escritorio y ninguna lleva interfaz, así que
+  todo lo de la paleta es invisible para `npm run vistas`.
 
 ### Cabos sueltos
 
