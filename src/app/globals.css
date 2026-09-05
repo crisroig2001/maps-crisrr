@@ -726,12 +726,16 @@ body {
 .panel-cuerpo { display: flex; flex-direction: column; min-height: 0; flex: 1; }
 .tabs {
   display: flex;
+  /* Se PLIEGAN, no se deslizan. Con cuatro pestañas cabían justas en los 320
+     px del panel; con «Calle» la fila pide 390 y la quinta quedaba fuera del
+     borde —y como el scrollbar va oculto, sin ninguna pista de que hubiera
+     más—. Deslizar una fila sin barra ni sombra es esconder una pestaña. Al
+     plegar, la que sobra baja a una segunda línea y se ve sola; y la sexta,
+     cuando entre otro kit, también. */
+  flex-wrap: wrap;
   gap: 4px;
   padding: 8px 10px 4px;
-  overflow-x: auto;
-  scrollbar-width: none;
 }
-.tabs::-webkit-scrollbar { display: none; }
 .tab {
   flex: none;
   border: 1px solid transparent;
