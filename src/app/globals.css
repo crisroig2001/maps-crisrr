@@ -129,6 +129,147 @@ body {
   .rotulo.aparte .dice { animation: none; opacity: 0.85; }
 }
 
+/* ===================================================================
+   EL HILO DEL CORRO
+   El carrete flota sobre el centro del grupo y guarda lo hablado, con
+   el nombre delante como en cualquier chat de grupo. Cada frase llega
+   volando desde la cabeza de quien la dice.
+   =================================================================== */
+.carrete {
+  position: absolute;
+  top: 0;
+  left: 0;
+  /* TIENE TOPE: sin él, una frase de 80 caracteres tapaba media pantalla y
+     cuatro seguidas se comían el mundo. Ancho a lo que pida el texto hasta
+     el tope, y alto a cuatro líneas; lo que sobra se lee en «Todo». */
+  width: max-content;
+  max-width: min(300px, 62vw);
+  padding: 7px 9px 8px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 6px 20px rgba(43, 52, 64, 0.26);
+  backdrop-filter: blur(6px);
+  will-change: transform;
+}
+/* el pico, apuntando al corro que tiene debajo */
+.carrete.sujeto::after { display: none; }
+.carrete::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: -4px;
+  width: 11px;
+  height: 11px;
+  background: rgba(255, 255, 255, 0.94);
+  border-radius: 0 0 3px 0;
+  transform: translateX(-50%) rotate(45deg);
+}
+.carrete .cab {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--accent);
+  padding-bottom: 4px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid rgba(43, 52, 64, 0.1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.carrete .lineas { display: grid; gap: 4px; }
+.carrete .linea {
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.32;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+/* el nombre solo cuando cambia quien habla: repetirlo en cada frase de la
+   misma persona es ruido, y aquí el sitio es oro */
+.carrete .linea b {
+  display: block;
+  font-size: 10.5px;
+  font-weight: 800;
+  line-height: 1.2;
+  margin-bottom: 1px;
+}
+.carrete .linea.sigue { padding-left: 1px; }
+.carrete .linea.entra { animation: cae-linea 0.32s cubic-bezier(0.2, 0.9, 0.3, 1) both; }
+@keyframes cae-linea {
+  from { opacity: 0; transform: translateY(7px) scale(0.96); }
+  to { opacity: 1; transform: none; }
+}
+
+/* la cuenta que vuela: dos traslaciones anidadas, la de fuera lleva el avance
+   y la de dentro la caída, y de ahí sale el arco */
+.cuenta {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 12px;
+  height: 12px;
+  margin: -6px 0 0 -6px;
+  pointer-events: none;
+}
+.cuenta i {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.92);
+  box-shadow: 0 2px 7px rgba(43, 52, 64, 0.35);
+}
+
+/* El globo MUDO: lo que ve quien no está en el corro. Tres puntos y nada
+   más, colgados del grupo. Se sabe que están hablando; lo que dicen es de
+   los de dentro. */
+.globo-mudo {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  padding: 8px 13px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.86);
+  box-shadow: 0 3px 12px rgba(43, 52, 64, 0.2);
+  opacity: 0;
+  transform-origin: 50% 100%;
+  transition: opacity 0.35s ease;
+  will-change: transform;
+}
+.globo-mudo.hablando { opacity: 1; }
+.globo-mudo::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: -4px;
+  width: 10px;
+  height: 10px;
+  background: rgba(255, 255, 255, 0.8);
+  border-radius: 0 0 3px 0;
+  transform: translateX(-50%) rotate(45deg);
+}
+.globo-mudo i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ink-2);
+  animation: charla-punto 1.4s ease-in-out infinite;
+}
+.globo-mudo i:nth-child(2) { animation-delay: 0.18s; }
+.globo-mudo i:nth-child(3) { animation-delay: 0.36s; }
+@keyframes charla-punto {
+  0%, 100% { opacity: 0.3; transform: translateY(0); }
+  40% { opacity: 1; transform: translateY(-2px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .globo-mudo i { animation: none; opacity: 0.75; }
+  .carrete .linea.entra { animation: none; }
+}
+
 /* cartel de parcela: de quién es esa casa y a cuánta gente le gusta, flotando
    sobre ella. El punto lleva el color del marco que la parcela tiene pintado
    en el suelo, así el cartel y el suelo dicen lo mismo. */
@@ -337,6 +478,33 @@ body {
 .vecinos .nota { margin-top: 14px; font-size: 12px; line-height: 1.5; color: var(--ink-2); font-weight: 600; }
 .vecinos .nota b { color: var(--ink); }
 .vecinos .btn-principal { margin-top: 12px; width: 100%; }
+
+/* la hoja con todo lo hablado en el corro */
+.registro { display: grid; }
+.registro ol {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+  max-height: 46vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.registro li {
+  display: grid;
+  gap: 1px;
+  padding: 8px 11px;
+  border-radius: 12px;
+  background: var(--card-line);
+  font-size: 13.5px;
+  line-height: 1.4;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.registro li b { font-size: 11.5px; font-weight: 800; }
+.registro .nota { margin-top: 12px; font-size: 12px; line-height: 1.5; color: var(--ink-2); font-weight: 600; }
+.registro .btn-principal { margin-top: 12px; width: 100%; }
 
 /* la hoja del perfil: una fila de muestras por cada cosa que se elige */
 .pinta { display: grid; gap: 6px; }

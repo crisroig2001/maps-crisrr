@@ -13,7 +13,7 @@ import path from 'node:path';
 import { PARCELA_M, claveParcela } from './parcela';
 import { validaPiezas, limpiaNombre, limpiaMensaje, COLORES, PELOS, PIELES, MAX_NOMBRE, EMOTES, MENSAJE_MS, EMOTE_MS, RE_JUGADOR } from './piezas';
 import { tipoParcela, esPublica, piezasPublicas, RADIO_RESIDENCIAL } from './paisaje';
-import { CORRO_MAX, CORRO_CERCA_M, CORRO_RADIO_M, INVITACION_MS, ACCIONES_CORRO, RE_CORRO } from './corro';
+import { CORRO_MAX, CORRO_CERCA_M, CORRO_RADIO_M, INVITACION_MS, ACCIONES_CORRO, RE_CORRO, CORRO_LINEAS } from './corro';
 
 const DIR = process.env.DATA_DIR || path.join(process.cwd(), '.data');
 const FILE = path.join(DIR, 'mundo.json');
@@ -298,7 +298,10 @@ function reporta(de, a) {
 // El estado son tres mapas y no uno: el corro por su id, en qué corro está
 // cada jugador (para resolver en O(1) al repartir lo que se dice, que es lo
 // que se hace en cada sondeo de cada uno) y quién espera en la puerta.
-const corros = new Map(); // k → {k, anfitrion, m: [ids], abierto, t}
+// `h` es el hilo: lo que se ha dicho dentro, en orden, con un tope. `desde`
+// dice cuándo entró cada uno, para no darle a nadie lo que se habló antes de
+// llegar él.
+const corros = new Map(); // k → {k, anfitrion, m: [ids], desde: {id: t}, abierto, t, h: [{q, n, t, ts}]}
 const deQuien = new Map(); // jugador → k
 const invitados = new Map(); // jugador invitado → Map(quien invita → cuándo)
 const alaPuerta = new Map(); // k → Map(quien llama → cuándo)
@@ -308,7 +311,8 @@ function nuevoCorro(anfitrion) {
   do {
     k = Math.random().toString(36).slice(2, 10);
   } while (corros.has(k));
-  const c = { k, anfitrion, m: [anfitrion], abierto: false, t: Date.now() };
+  const now = Date.now();
+  const c = { k, anfitrion, m: [anfitrion], desde: { [anfitrion]: now }, abierto: false, t: now, h: [] };
   corros.set(k, c);
   deQuien.set(anfitrion, k);
   return c;
@@ -339,6 +343,7 @@ function saleDeCorro(id) {
   const c = miCorro(id);
   if (!c) return;
   c.m = c.m.filter((x) => x !== id);
+  delete c.desde[id];
   deQuien.delete(id);
   alaPuerta.get(c.k)?.delete(id);
   if (c.anfitrion === id) c.anfitrion = c.m[0] || null;
@@ -350,6 +355,7 @@ function entraEnCorro(c, id) {
   if (c.m.length >= CORRO_MAX) return 'lleno';
   saleDeCorro(id); // solo se puede estar en un corro: en dos conversaciones no se está
   c.m.push(id);
+  c.desde[id] = Date.now(); // lee desde que entra, no lo de antes
   deQuien.set(id, c.k);
   alaPuerta.get(c.k)?.delete(id);
   invitados.get(id)?.clear();
@@ -536,6 +542,18 @@ export function presencia(id, datos) {
   const antesDeIrse = miCorro(id);
   if (antesDeIrse && lejosDelCorro(antesDeIrse, id, x, y)) saleDeCorro(id);
 
+  // Lo dicho DENTRO de un corro se queda en su hilo, no solo en la burbuja de
+  // quien lo dijo: es lo que hace que los tres lean lo mismo aunque a uno se
+  // le pierda un sondeo, y lo que se enseña sobre el corro. Se apunta después
+  // de resolver la acción, porque en este mismo sondeo puede haber entrado.
+  if (dicho) {
+    const suyo = miCorro(id);
+    if (suyo) {
+      suyo.h.push({ q: id, n: mio.n, t: dicho, ts: now });
+      if (suyo.h.length > CORRO_LINEAS) suyo.h.splice(0, suyo.h.length - CORRO_LINEAS);
+    }
+  }
+
   const cerca = [];
   const miK = deQuien.get(id) || null;
   const ksCerca = new Set(miK ? [miK] : []);
@@ -596,6 +614,10 @@ export function presencia(id, datos) {
       ab: mic.abierto ? 1 : 0,
       m: mic.m.map((q) => ({ id: q, n: vivos.get(q)?.n || 'Alguien' })),
     };
+    // el hilo, desde que entró ESTE: quien llega no lee lo de antes
+    const desde = mic.desde[id] || 0;
+    const hilo = mic.h.filter((l) => l.ts >= desde);
+    if (hilo.length) salida.corro.h = hilo;
     // quién llama a la puerta solo se lo cuenta al anfitrión: la puerta es
     // suya, y al resto no le hace falta saber quién se ha quedado fuera
     if (mic.anfitrion === id) {

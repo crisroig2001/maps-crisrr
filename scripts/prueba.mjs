@@ -153,11 +153,15 @@ await pulsa(ana, '.chat .decir button[type=submit]');
 await ana.evaluate(() => window.__mundo.sondea());
 await bea.waitForTimeout(700);
 await bea.evaluate(() => window.__mundo.sondea());
+// dentro del corro lo dicho NO sale sobre la cabeza: vuela al carrete que
+// flota sobre el grupo, y allí se lee con el nombre delante
 await bea
-  .waitForFunction(() => [...document.querySelectorAll('#rotulos .rotulo .dice')].some((e) => !e.hidden && e.textContent.includes('solo lo lees')), null, { timeout: 15000, polling: 300 })
+  .waitForFunction(() => [...document.querySelectorAll('#rotulos .carrete .linea')].some((e) => e.textContent.includes('solo lo lees')), null, { timeout: 15000, polling: 300 })
   .catch(() => {});
-const enCorro = await bea.$$eval('#rotulos .rotulo .dice', (els) => els.filter((e) => !e.hidden).map((e) => e.textContent));
-console.log('Bea, dentro del corro, lee:', enCorro.length ? enCorro : 'NADA');
+const enCorro = await bea.$$eval('#rotulos .carrete .linea', (els) => els.map((e) => e.textContent));
+const sobreCabeza = await bea.$$eval('#rotulos .rotulo .dice', (els) => els.filter((e) => !e.hidden).map((e) => e.textContent));
+console.log('Bea, en el carrete, lee:', enCorro.length ? enCorro : 'NADA', '| sobre las cabezas:', sobreCabeza.length ? sobreCabeza : 'nada (bien)');
+console.log('cabecera del carrete:', (await bea.textContent('#rotulos .carrete .cab').catch(() => null)) || 'NO HAY CARRETE');
 
 // ...y un tercero que pasa por al lado ve que habla, pero no lo que dice. Va
 // por la API y no abriendo un tercer mundo: tres escenas con sombras a la vez
@@ -198,10 +202,27 @@ const trasAdmitir = await ana.evaluate(() => window.__mundo.corro());
 console.log('corro tras dejarle entrar:', trasAdmitir ? trasAdmitir.m.join(', ') : 'NINGUNO');
 await ana.screenshot({ path: path.join(OUT, 'm3f-corro-de-tres.png') });
 
-// y se deshace: el tercero se va lejos (si se queda al lado, es él quien sale
-// en la hoja de vecinos del paso siguiente) y cada una sale del suyo
-await sondeaCid({ corro: { a: 'sale' } }, [900000, 900000]);
+// DESDE FUERA: Bea se sale y Ana sigue hablando con Cid. Bea tiene que ver el
+// globo mudo sobre el grupo —sabe que hablan— y NO lo que dicen.
 await pulsa(bea, '.corro-cab .btn-sec:has-text("Salir")');
+await bea.waitForTimeout(1800);
+await ana.$eval('.chat .decir input', (i) => (i.value = 'esto Bea ya no lo lee'));
+await pulsa(ana, '.chat .decir button[type=submit]');
+await ana.evaluate(() => window.__mundo.sondea());
+await sondeaCid();
+await bea.waitForTimeout(900);
+await bea.evaluate(() => window.__mundo.sondea());
+await bea
+  .waitForFunction(() => !!document.querySelector('#rotulos .globo-mudo.hablando'), null, { timeout: 12000, polling: 300 })
+  .catch(() => {});
+const globo = await bea.$$eval('#rotulos .globo-mudo.hablando', (els) => els.filter((e) => e.style.display !== 'none').length);
+const leeFuera = await bea.$$eval('#rotulos .carrete .linea, #rotulos .rotulo .dice', (els) => els.filter((e) => !e.hidden).map((e) => e.textContent));
+console.log('Bea, fuera del corro: globo mudo', globo ? 'SÍ lo ve (bien)' : 'NO LO VE', '| texto que lee:', leeFuera.length ? leeFuera : 'ninguno (bien)');
+await bea.screenshot({ path: path.join(OUT, 'm3g-desde-fuera.png') });
+
+// y se deshace: el tercero se va lejos (si se queda al lado, es él quien sale
+// en la hoja de vecinos del paso siguiente) y Ana sale del suyo
+await sondeaCid({ corro: { a: 'sale' } }, [900000, 900000]);
 await pulsa(ana, '.corro-cab .btn-sec:has-text("Salir")');
 await ana.waitForTimeout(2500);
 await bea.evaluate(() => window.__mundo.sondea());
