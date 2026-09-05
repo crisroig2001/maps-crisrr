@@ -275,17 +275,19 @@ servidor solo guarda qué hay en cada parcela y quién anda cerca.
   cuenta y, para ti, si tú eras uno. Tope de `MAX_GUSTA` por parcela, que es
   lo que impide que una parcela famosa se coma el fichero. El «cuántos había
   la última vez» vive en tu dispositivo: es un aviso, no un dato del mundo.
-- **Construir**: en tu parcela, «Construir» abre la paleta con **41 piezas**
-  en cuatro pestañas: casas (cuatro del City Kit, más torre, tienda, caseta y
+- **Construir**: en tu parcela, «Construir» abre la paleta con **56 piezas**
+  en cinco pestañas: casas (nueve del City Kit, más torre, tienda, caseta y
   cobertizo), naturaleza (árboles, arbustos, flores, setas, calabazas, rocas,
   troncos), jardín (banco, mesa, silla, maceta, farola, fuente, hoguera,
-  cartel, bandera, tendedero, arenero, buzón, barbacoa) y **suelo** (camino,
-  puente, valla, losa, patio, patio grande y parterre). El suelo era el hueco
+  cartel, bandera, tendedero, arenero, buzón, barbacoa), **suelo** (camino,
+  puente, valla, losa, patio, patio grande y parterre) y **calle** (recta,
+  curva, cruce, cruce en T, paso de cebra, fin de calle, entrada, semáforo,
+  señal y contenedor). El suelo era el hueco
   grande del catálogo: eran tres piezas y ninguna dibujaba una forma, así que
   un patio de 12 × 12 salían nueve toques a la rejilla de 4 m y el 6 % del
   presupuesto de la parcela; con `patio grande` es un toque y una pieza. Toca el suelo
   para colocar una pieza (se pega a medio metro; caminos, vallas y puentes a
-  una rejilla de 4 m para que casen) y **arrastra una pieza** con el dedo o
+  una rejilla de 4 m para que casen, y la calle a una de 8) y **arrastra una pieza** con el dedo o
   el ratón para llevarla donde quieras (a pasos de 10 cm; la cámara se queda
   quieta mientras). **Doce piezas se tiñen** del color elegido: las generadas
   pintan sobre blanco, y las de modelo llevan en el catálogo el NOMBRE del
@@ -306,9 +308,18 @@ servidor solo guarda qué hay en cada parcela y quién anda cerca.
   dentro de la parcela (1 decimal), giro y color — 40 bytes que no dependen
   de dónde esté la parcela.
 - **Modelos**: casi todas las piezas son modelos glTF de
-  [Kenney](https://kenney.nl) (Nature Kit, City Kit Suburban y Furniture Kit,
-  licencia CC0), en `public/modelos/` con sus miniaturas en
-  `public/miniaturas/`; 27 modelos, 780 KB en total. Las **otras 14 piezas
+  [Kenney](https://kenney.nl) (Nature Kit, City Kit Suburban, City Kit Roads
+  y Furniture Kit, licencia CC0), en `public/modelos/` con sus miniaturas en
+  `public/miniaturas/`; 42 modelos, 1,3 MB en total. **Cada kit con atlas va
+  en su carpeta** (`modelos/calles/` es el de las calles), porque TODOS los
+  kits de Kenney llaman a su atlas `Textures/colormap.png` aunque sean
+  imágenes distintas: el visor comparte material por la RUTA de la imagen, y
+  con el nombre a secas las calles se pintaban con la textura de las casas.
+  Es lo que hay que mirar al meter un kit nuevo. Se cargan **todos al
+  arrancar** (un `Promise.all` sobre el catálogo), así que cada modelo nuevo
+  es descarga en la primera visita de todo el mundo: pasar de 27 a 42 subió
+  de 780 KB a 1,3 MB. El día que el catálogo crezca otro tanto, lo que toca
+  es cargar por pestaña y no antes de abrir la paleta. Las **otras 14 piezas
   son geometría generada** (torre, farola, fuente, bandera, caseta,
   cobertizo, tendedero, arenero, buzón, barbacoa, losa, patio, patio grande y
   parterre): 0 bytes de descarga, y son las que se pueden teñir enteras. Al cargar cada uno se
@@ -316,8 +327,33 @@ servidor solo guarda qué hay en cada parcela y quién anda cerca.
   en UNA geometría con el material toon de siempre; las que traen un atlas
   van en otra con la textura. Luego se escala para que el lado mayor en
   planta mida lo que dice `ancho` en el catálogo (`src/lib/piezas.js`) y se
-  deja el origen en el centro, a ras de suelo. Las cuatro piezas restantes
-  (torre, farola, fuente, bandera) son geometría generada.
+  deja el origen en el centro, a ras de suelo. Al que viene mirando al otro
+  lado (la señal de stop enseñaba el dorso) se le da el `giro` del catálogo,
+  en cuartos de vuelta, al cargarlo.
+- **La calle**, y por qué a 8 m: el City Kit Roads son baldosas de 1×1 unidad
+  de kit, y las casas del City Kit están escaladas a ~7,7 m por unidad. A esa
+  misma escala una calzada mide 7,7 m, que es lo que mide una calle
+  residencial de verdad; se redondea a **8** porque es el único paso que
+  divide la parcela justo (48 / 8 = 6). Ponerla a los 4 m de la rejilla de
+  siempre habría dejado las rayas del paso de cebra y el bordillo a mitad de
+  escala que la puerta de al lado. Por eso `rejilla` en el catálogo ya no es
+  una bandera sino el PASO EN METROS: 4 los caminos y las vallas de siempre,
+  8 la calle.
+- **Cómo se sienta una losa grande**: una pieza de suelo tiene la cara que se
+  ve en su BASE —el asfalto va a ras y lo que sobresale es el bordillo—, así
+  que los 12 cm de hundido que llevan las demás piezas no le valen. El
+  terreno cae hasta 5,6 cm por metro, o sea hasta 20 de desnivel bajo una
+  calle de 8 m: hundida por el centro, la mitad de arriba queda por debajo
+  del suelo y la calzada aparece **cortada en diagonal**, justo por donde
+  parte la malla del terreno. De 8 m en adelante la pieza se apoya en el
+  punto más alto de su huella (nueve muestras: en una loma la cima cae en
+  mitad de un lado tantas veces como en una esquina). Por debajo de 8 no se
+  toca: el camino son losas SUELTAS de 4 m y que el terreno les entre por una
+  esquina es lo que hace que se lean como puestas EN la hierba. Le pasaba ya
+  al patio grande, que mide 12 m, y la hierba tenía el mismo fallo por otro
+  lado: el margen en el que no se siembra estaba fijado a 2,3 m —media
+  anchura del camino— así que crecía por dentro del patio y de la calzada;
+  ahora sale de lo que mide la pieza.
 - **Render de las piezas**: cada tipo son dos geometrías, la que se tiñe y la
   fija, y cada una un **`InstancedMesh`**: un draw call por tipo y parte sean
   3 piezas o 3.000. El tinte va por instancia (`instanceColor`) multiplicado

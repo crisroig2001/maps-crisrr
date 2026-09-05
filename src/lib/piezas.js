@@ -30,7 +30,16 @@
 //                   una lista), y ahí el tinte se MULTIPLICA sobre el color
 //                   original, normalizado a luminancia 1 — así lo que ya
 //                   está guardado (que lleva c = 0) sigue viéndose igual
-//   rejilla         se pega a una rejilla de 4 m (caminos, vallas, puentes)
+//   giro            cuartos de vuelta que se le dan al MODELO al cargarlo,
+//                   para el que viene mirando al otro lado (la señal de stop
+//                   enseñaba el dorso). No es el giro del jugador, que se
+//                   guarda en la pieza y cuenta a partir de este
+//   rejilla         paso en METROS al que se pega la pieza, para que unas
+//                   casen con otras: 4 m los caminos, vallas y losas de
+//                   siempre; 8 m la calle, que es lo que mide una calzada del
+//                   City Kit a la escala a la que están sus casas y además
+//                   cabe justa en la parcela (48 / 8 = 6). `true` sigue
+//                   valiendo y significa 4, que era el único paso que había
 //   viento          se mece con el aire por encima de 1,5 m (copas)
 //   suelo           es plana y a ras de suelo: la hierba la esquiva
 //   cat             pestaña de la paleta (CATEGORIAS)
@@ -51,6 +60,16 @@ export const PIEZAS = {
   // son el mismo edificio (bloque + tejado, 8-8,8 m de alto): lo que faltaba
   // era SILUETA, algo pequeño y algo bajo y largo. Y son tintables, que las
   // del atlas no pueden serlo.
+  // Cinco más del MISMO kit (v2.0), que trae 21 edificios y de los que solo
+  // se usaban cuatro. No cuestan textura: apuntan al colormap.png que ya se
+  // sirve, byte a byte el del kit. Se han elegido por SILUETA, que es lo que
+  // faltaba: un bungaló bajo y largo, un cubo de dos plantas, una moderna
+  // sobre pilares, una con cochera y una con el porche hueco.
+  bungalo: { nombre: 'Bungaló', icono: '🏡', mini: true, glb: 'bungalo', ancho: 10, cat: 'casas', solido: 4.2 }, // 5,7 m: la más baja
+  moderna: { nombre: 'Moderna', icono: '🏢', mini: true, glb: 'moderna', ancho: 7, cat: 'casas', solido: 3.2 },
+  mirador: { nombre: 'Mirador', icono: '🏠', mini: true, glb: 'mirador', ancho: 10, cat: 'casas', solido: 4.2 },
+  cochera: { nombre: 'Cochera', icono: '🏘️', mini: true, glb: 'cochera', ancho: 10, cat: 'casas', solido: 4.2 },
+  villa: { nombre: 'Villa', icono: '🏫', mini: true, glb: 'villa', ancho: 7.5, cat: 'casas', solido: 3.4 },
   caseta: { nombre: 'Caseta', icono: '🛖', mini: true, tinte: true, ancho: 5.4, cat: 'casas', solido: 2.6 },
   cobertizo: { nombre: 'Cobertizo', icono: '🏚️', mini: true, tinte: true, ancho: 8.4, cat: 'casas', solido: 3.6 },
   // árboles y plantas (Nature Kit)
@@ -71,18 +90,18 @@ export const PIEZAS = {
   tronco: { nombre: 'Troncos', icono: '🪵', mini: true, glb: 'tronco', ancho: 2.2, cat: 'naturaleza', solido: 0.9 },
   hoguera: { nombre: 'Hoguera', icono: '🔥', mini: true, glb: 'hoguera', ancho: 1.4, cat: 'jardin', solido: 0.7 },
   // suelo y cierres
-  camino: { nombre: 'Camino', icono: '🟫', mini: true, glb: 'camino', ancho: 4, rejilla: true, suelo: true, cat: 'suelo' },
-  puente: { nombre: 'Puente', icono: '🌉', mini: true, glb: 'puente', ancho: 6, rejilla: true, suelo: true, cat: 'suelo' },
-  valla: { nombre: 'Valla', icono: '🪵', mini: true, glb: 'valla', ancho: 4, rejilla: true, tinte: ['wood', 'woodDark'], cat: 'suelo' },
+  camino: { nombre: 'Camino', icono: '🟫', mini: true, glb: 'camino', ancho: 4, rejilla: 4, suelo: true, cat: 'suelo' },
+  puente: { nombre: 'Puente', icono: '🌉', mini: true, glb: 'puente', ancho: 6, rejilla: 4, suelo: true, cat: 'suelo' },
+  valla: { nombre: 'Valla', icono: '🪵', mini: true, glb: 'valla', ancho: 4, rejilla: 4, tinte: ['wood', 'woodDark'], cat: 'suelo' },
   // Suelo que se DIBUJA. Antes la categoría eran tres piezas y ninguna hacía
   // una forma: un patio de 12 × 12 eran 9 toques a la rejilla de 4 m y el 6 %
   // del presupuesto de la parcela. Con estas es 1 toque y 1 pieza. Son
   // geometría generada, así que TESELAN de verdad (una baldosa por cada 4 m)
   // en vez de estirar una textura, que es lo que pasaría escalando un modelo.
-  losa: { nombre: 'Losa', icono: '⬜', mini: true, tinte: true, ancho: 4, rejilla: true, suelo: true, cat: 'suelo' },
-  patio: { nombre: 'Patio', icono: '🔲', mini: true, tinte: true, ancho: 8, rejilla: true, suelo: true, cat: 'suelo' },
-  'patio-g': { nombre: 'Patio grande', icono: '⬛', mini: true, tinte: true, ancho: 12, rejilla: true, suelo: true, cat: 'suelo' },
-  parterre: { nombre: 'Parterre', icono: '🟤', mini: true, ancho: 4, rejilla: true, suelo: true, cat: 'suelo' },
+  losa: { nombre: 'Losa', icono: '⬜', mini: true, tinte: true, ancho: 4, rejilla: 4, suelo: true, cat: 'suelo' },
+  patio: { nombre: 'Patio', icono: '🔲', mini: true, tinte: true, ancho: 8, rejilla: 4, suelo: true, cat: 'suelo' },
+  'patio-g': { nombre: 'Patio grande', icono: '⬛', mini: true, tinte: true, ancho: 12, rejilla: 4, suelo: true, cat: 'suelo' },
+  parterre: { nombre: 'Parterre', icono: '🟤', mini: true, ancho: 4, rejilla: 4, suelo: true, cat: 'suelo' },
   cartel: { nombre: 'Cartel', icono: '🪧', mini: true, glb: 'cartel', ancho: 1.2, cat: 'jardin', solido: 0.3 }, // 1,7 m: se lee de pie
   // mobiliario (Furniture Kit) y piezas generadas
   banco: { nombre: 'Banco', icono: '🪑', mini: true, glb: 'banco', ancho: 0.95, cat: 'jardin', solido: 0.5 }, // 1,1 m con respaldo
@@ -96,10 +115,39 @@ export const PIEZAS = {
   arenero: { nombre: 'Arenero', icono: '🏖️', mini: true, ancho: 3, suelo: true, cat: 'jardin' },
   buzon: { nombre: 'Buzón', icono: '📮', mini: true, tinte: true, ancho: 0.7, cat: 'jardin', solido: 0.2 },
   barbacoa: { nombre: 'Barbacoa', icono: '🍖', mini: true, ancho: 1.2, cat: 'jardin', solido: 0.6 },
+  // --- la calle (City Kit Roads, CC0) ---
+  // El kit de calles es hermano del de las casas, pero trae SU PROPIO atlas
+  // con el mismo nombre de fichero, así que vive en su carpeta (`calles/`) y
+  // el visor comparte material por la ruta, no por el nombre. Ver
+  // `cargaModelo` en Mundo.js.
+  // Las baldosas son de 1×1 unidad de kit y van a 8 m, que es la calzada a la
+  // escala de las casas (que están a ~7,7 m por unidad) y el único paso que
+  // divide la parcela justo. `suelo` para que la hierba no crezca por encima.
+  calle: { nombre: 'Calle', icono: '🛣️', mini: true, glb: 'calles/calle', ancho: 8, rejilla: 8, suelo: true, cat: 'calle' },
+  'calle-curva': { nombre: 'Curva', icono: '↩️', mini: true, glb: 'calles/calle-curva', ancho: 8, rejilla: 8, suelo: true, cat: 'calle' },
+  'calle-cruce': { nombre: 'Cruce', icono: '➕', mini: true, glb: 'calles/calle-cruce', ancho: 8, rejilla: 8, suelo: true, cat: 'calle' },
+  'calle-t': { nombre: 'Cruce en T', icono: '⊤', mini: true, glb: 'calles/calle-t', ancho: 8, rejilla: 8, suelo: true, cat: 'calle' },
+  'paso-cebra': { nombre: 'Paso de cebra', icono: '🦓', mini: true, glb: 'calles/paso-cebra', ancho: 8, rejilla: 8, suelo: true, cat: 'calle' },
+  'calle-final': { nombre: 'Fin de calle', icono: '🚧', mini: true, glb: 'calles/calle-final', ancho: 8, rejilla: 8, suelo: true, cat: 'calle' },
+  'calle-entrada': { nombre: 'Entrada', icono: '🚗', mini: true, glb: 'calles/calle-entrada', ancho: 8, rejilla: 8, suelo: true, cat: 'calle' },
+  // El mobiliario de la acera va suelto (medio metro), como el del jardín. El
+  // `ancho` de cada uno sale de la ALTURA que tiene que tener al lado del
+  // avatar, no de su planta: un semáforo son 3,5 m y un stop, 2,5.
+  semaforo: { nombre: 'Semáforo', icono: '🚦', mini: true, glb: 'calles/semaforo', ancho: 0.82, cat: 'calle', solido: 0.2 },
+  senal: { nombre: 'Señal', icono: '🛑', mini: true, glb: 'calles/senal', ancho: 0.71, giro: 2, cat: 'calle', solido: 0.2 },
+  contenedor: { nombre: 'Contenedor', icono: '🗑️', mini: true, glb: 'calles/contenedor', ancho: 2.2, cat: 'calle', solido: 1.1 },
 };
 
+// A qué paso se pega una pieza, en metros; 0 si va suelta. `rejilla` nació
+// como bandera (`true` = los 4 m que eran el único paso) y ahora es el paso,
+// así que esto entiende las dos formas y es lo único que sabe que `true` es 4.
+export function pasoRejilla(t) {
+  const r = PIEZAS[t]?.rejilla;
+  return r === true ? 4 : r || 0;
+}
+
 // Pestañas de la paleta, en su orden
-export const CATEGORIAS = { casas: 'Casas', naturaleza: 'Naturaleza', jardin: 'Jardín', suelo: 'Suelo' };
+export const CATEGORIAS = { casas: 'Casas', naturaleza: 'Naturaleza', jardin: 'Jardín', suelo: 'Suelo', calle: 'Calle' };
 
 // Paleta de tintes (pastel, a juego con el look cartoon). El índice es lo que
 // se guarda, así que el orden NO se cambia: añadir al final.

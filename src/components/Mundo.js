@@ -16,7 +16,7 @@ import { MapControls } from 'three/examples/jsm/controls/MapControls.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { PARCELA_M, parcelaDe, claveParcela, parseParcela, centroParcela } from '../lib/parcela';
-import { PIEZAS, CATEGORIAS, COLORES, PELOS, PIELES, MAX_PIEZAS, MAX_NOMBRE, MAX_MENSAJE, MENSAJE_MS, EMOTES, limpiaMensaje } from '../lib/piezas';
+import { PIEZAS, CATEGORIAS, COLORES, PELOS, PIELES, MAX_PIEZAS, MAX_NOMBRE, MAX_MENSAJE, MENSAJE_MS, EMOTES, limpiaMensaje, pasoRejilla } from '../lib/piezas';
 import { perfil, guardaPerfil, gustaVisto, guardaGustaVisto, silenciados, silencia, quitaSilencio } from '../lib/jugador';
 import { CORRO_MAX, CORRO_CERCA_M, CORRO_AVISO_M, CORRO_LINEAS_VISTA } from '../lib/corro';
 import { tipoParcela, conSuelo, cauce, distRio, rioEsteX as rioEsteXEnEscena, rioSurY as rioSurYEnEscena, GLSL_CAUCE, GLSL_FLUJO, RIO_ANCHO, NIVEL_AGUA, LECHO, BANDA_AGUA } from '../lib/paisaje';
@@ -1019,7 +1019,7 @@ export default function Mundo() {
     // que no arregla nada.
     const MINIATURA = params.get('miniatura');
     const MUESTRA_PASO = 15; // la casona mide 13 m: con menos, se pisan
-    const MUESTRA_COLS = 7;
+    const MUESTRA_COLS = 8; // 8 × 7 = las 56 piezas justas
     const jugador = perfil();
 
     // --- escena, cielo y niebla ---
@@ -1653,15 +1653,23 @@ export default function Mundo() {
       // el 0). Así el día del cambio no se mueve ni un píxel de lo que hay, y
       // el resto de la paleta sí repinta de verdad.
       if (teñibles.length) partes.push({ geo: mergeGeometries(teñibles, false), mat: def.viento ? matTinteViento : matTinte, tinte: true, base: baseTinte });
-      // La clave para compartir: la URI de la imagen dentro del .glb. No vale
-      // `tex.image.src` —el cargador usa ImageBitmap y no tiene src— ni
-      // `tex.name`, que en los kits de Kenney es «colormap» en TODOS aunque
-      // el atlas del City Kit y el del Nature Kit sean imágenes distintas.
-      // Solo se comparte cuando el modelo trae UNA imagen, que es el caso de
-      // los kits con atlas; con varias no se puede saber cuál es cuál desde
-      // aquí y cada una se queda con su material.
+      // La clave para compartir: la URI de la imagen dentro del .glb, RESUELTA
+      // desde la carpeta del modelo. No vale `tex.image.src` —el cargador usa
+      // ImageBitmap y no tiene src— ni `tex.name`, que en los kits de Kenney
+      // es «colormap» en TODOS aunque el atlas del City Kit y el del Nature
+      // Kit sean imágenes distintas. Y no basta con la URI a secas: TODOS los
+      // kits llaman a su atlas «Textures/colormap.png», así que dos kits
+      // distintos daban la misma clave y el segundo se pintaba con el atlas
+      // del primero (las calles, con la textura de las casas). Cada kit vive
+      // en su carpeta bajo /modelos y la carpeta delante es justo la URL de
+      // la que sale la imagen: dos kits no se pisan y los modelos de uno
+      // siguen compartiendo material. Solo se comparte cuando el modelo trae
+      // UNA imagen, que es el caso de los kits con atlas; con varias no se
+      // puede saber cuál es cuál desde aquí y cada una se queda con su
+      // material.
       const imgs = gltf.parser?.json?.images;
-      const claveAtlas = imgs?.length === 1 && imgs[0].uri ? imgs[0].uri : null;
+      const carpeta = def.glb.slice(0, def.glb.lastIndexOf('/') + 1);
+      const claveAtlas = imgs?.length === 1 && imgs[0].uri ? carpeta + imgs[0].uri : null;
       for (const [tex, gs] of conTextura) {
         const clave = claveAtlas || tex.uuid;
         let matAtlas = materialesAtlas.get(clave);
@@ -1686,6 +1694,14 @@ export default function Mundo() {
       for (const p of partes) {
         p.geo.translate(-cx, -caja.min.y, -cz);
         p.geo.scale(esc, esc, esc);
+        // Hay modelos que vienen mirando al otro lado —la señal de stop
+        // enseñaba el dorso gris, tanto en la miniatura como recién puesta—.
+        // `giro` son cuartos de vuelta que se le dan AL MODELO al cargarlo,
+        // así que la pieza nace mirando a donde toca y el giro del jugador
+        // sigue contando desde ahí. Va después de centrar y escalar: como es
+        // múltiplo de 90° alrededor del centro, ni mueve el origen ni cambia
+        // el lado mayor en planta, que es de donde salió la escala.
+        if (def.giro) p.geo.rotateY((def.giro * Math.PI) / 2);
         p.geo.computeBoundingSphere();
       }
       return partes;
@@ -2012,32 +2028,45 @@ export default function Mundo() {
       cont[MINIATURA] = 1;
     }
 
-    // La hoja de contactos del catálogo: cada pieza en su celda, ordenadas
-    // por categoría y en el orden del catálogo, todas con giro 0 y escala 1
-    // para que se comparen de verdad.
-    function pintaMuestrario(cont) {
+    // Dónde cae cada pieza en la hoja de contactos: por categoría y en el
+    // orden del catálogo. Sale de aquí y no del bucle que pinta porque la
+    // hierba también necesita saberlo, para no crecer por encima de una
+    // calle igual que no crece por encima de un camino del mundo.
+    const celdasMuestrario = () => {
+      const celdas = [];
       let k = 0;
       for (const cat of Object.keys(CATEGORIAS)) {
         for (const t of Object.keys(PIEZAS)) {
           if (PIEZAS[t].cat !== cat) continue;
-          const par = mallas[t];
-          if (!par) { k++; continue; }
-          const cx = (k % MUESTRA_COLS) * MUESTRA_PASO;
-          const cy = -Math.floor(k / MUESTRA_COLS) * MUESTRA_PASO;
-          const i = cont[t];
-          if (i < MAX_INST) {
-            posI.set(cx, alturaEn(cx, cy) - 0.12, -cy);
-            rotI.setFromAxisAngle(ejeY, 0);
-            escPieza.set(1, 1, 1);
-            mtx.compose(posI, rotI, escPieza);
-            for (const q of par.partes) {
-              q.mesh.setMatrixAt(i, mtx);
-              if (q.tinte) q.mesh.setColorAt(i, tinteDe(q, (k * 3) % COLORES.length));
-            }
-            cont[t] = i + 1;
-          }
+          celdas.push({ t, k, cx: (k % MUESTRA_COLS) * MUESTRA_PASO, cy: -Math.floor(k / MUESTRA_COLS) * MUESTRA_PASO });
           k++;
         }
+      }
+      return celdas;
+    };
+
+    // La hoja de contactos del catálogo: cada pieza en su celda, ordenadas
+    // por categoría y en el orden del catálogo, todas con giro 0 y escala 1
+    // para que se comparen de verdad.
+    function pintaMuestrario(cont) {
+      for (const { t, k, cx, cy } of celdasMuestrario()) {
+        const par = mallas[t];
+        if (!par) continue;
+        const i = cont[t];
+        if (i >= MAX_INST) continue;
+        // Por el MISMO camino que el mundo: el muestrario se sentaba por su
+        // cuenta con los 12 cm de siempre, así que las piezas de suelo
+        // grandes salían cortadas aquí aunque en el mundo ya no lo
+        // estuvieran, y el banco no enseñaba lo que hay.
+        posI.set(cx, asiento(PIEZAS[t], cx, cy, 1), -cy);
+        rotI.setFromAxisAngle(ejeY, 0);
+        escPieza.set(1, 1, 1);
+        mtx.compose(posI, rotI, escPieza);
+        for (const q of par.partes) {
+          q.mesh.setMatrixAt(i, mtx);
+          if (q.tinte) q.mesh.setColorAt(i, tinteDe(q, (k * 3) % COLORES.length));
+        }
+        cont[t] = i + 1;
       }
     }
 
@@ -2130,6 +2159,28 @@ export default function Mundo() {
     const ASIENTO_MIN = 1.5;
     function asiento(def, wx, wy, escala) {
       const r = (def.solido || 0) * escala;
+      // Una losa de SUELO grande —una calzada, un patio— tiene la cara que se
+      // ve en su BASE: el asfalto va a ras y lo que sobresale es el bordillo.
+      // Así que no vale hundirla por el centro. El terreno cae hasta 5,6 cm
+      // por metro, o sea hasta 20 de desnivel bajo una calle de 8 m: hundida
+      // los 12 cm de siempre, la mitad de arriba queda POR DEBAJO del suelo y
+      // la calzada se ve cortada en diagonal, justo por donde parte la malla
+      // del terreno. Le pasaba ya al patio grande, que mide 12 m. Se apoya en
+      // el punto más alto de su huella, que es el único que garantiza que el
+      // terreno no asome por ningún lado; por el lado bajo queda un escalón
+      // que el bordillo lee como bordillo.
+      // De 8 m para abajo no se toca, y no es por ahorrar: el camino son
+      // losas SUELTAS de 4 m y que el terreno les entre por una esquina es
+      // justo lo que hace que se lean como puestas EN la hierba en vez de
+      // encima. Apoyarlas en su punto alto les sacaba el canto.
+      if (def.suelo && (def.ancho || 4) >= 8) {
+        const m = ((def.ancho || 4) * escala) / 2;
+        // Nueve puntos, no cuatro: en una loma el punto más alto de la huella
+        // cae en MITAD DE UN LADO tantas veces como en una esquina.
+        let cima = -Infinity;
+        for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) cima = Math.max(cima, alturaEn(wx + i * m, wy + j * m));
+        return cima - 0.02;
+      }
       // Los 12 cm de sobra son PARA ESTO: para que en pendiente se hunda el
       // borde bajo en vez de flotar el alto. Cuando la huella ya se ha
       // mirado, ese margen ya está puesto —y de sobra— así que sumarle otros
@@ -2275,11 +2326,22 @@ export default function Mundo() {
       if (hierbaCentro && Math.abs(hierbaCentro.cx - cx) < 5 && Math.abs(hierbaCentro.cy - cy) < 5) return;
       hierbaCentro = { cx, cy };
       const R = Math.round(RADIO_HIERBA / CELDA_HIERBA);
+      // Dónde NO se siembra: encima de una pieza de suelo. El margen sale de
+      // lo que MIDE la pieza, no de una constante. Eran 2,3 m fijos, que es
+      // justo media anchura del `camino` (4 m) más un pelo: al patio de 8 y
+      // al patio grande de 12 la hierba les crecía por dentro, y a una calle
+      // de 8 m también. Para el camino sale el mismo 2,3 de siempre, así que
+      // esto no mueve nada de lo que ya había.
+      const margenSuelo = (d) => (d.ancho || 4) / 2 + 0.3;
       const caminos = [];
-      for (const [clave, pc] of parcelas) {
-        const p = parseParcela(clave);
-        if (!p) continue;
-        for (const z of pc.d || []) if (PIEZAS[z.t]?.suelo) caminos.push([p.px * L + z.x, p.py * L + z.y]);
+      if (MUESTRARIO) {
+        for (const { t, cx, cy } of celdasMuestrario()) if (PIEZAS[t].suelo) caminos.push([cx, cy, margenSuelo(PIEZAS[t])]);
+      } else {
+        for (const [clave, pc] of parcelas) {
+          const p = parseParcela(clave);
+          if (!p) continue;
+          for (const z of pc.d || []) if (PIEZAS[z.t]?.suelo) caminos.push([p.px * L + z.x, p.py * L + z.y, margenSuelo(PIEZAS[z.t])]);
+        }
       }
       let n = 0;
       for (let i = -R; i <= R && n < MAX_HIERBA; i++) {
@@ -2314,7 +2376,7 @@ export default function Mundo() {
           if (distRio(wx, wy).d < RIO_ANCHO + 2) continue;
           let tapada = false;
           for (const c of caminos) {
-            if (Math.abs(c[0] - wx) < 2.3 && Math.abs(c[1] - wy) < 2.3) {
+            if (Math.abs(c[0] - wx) < c[2] && Math.abs(c[1] - wy) < c[2]) {
               tapada = true;
               break;
             }
@@ -3350,13 +3412,17 @@ export default function Mundo() {
       anillo.scale.set(a, a, 1);
       anillo.visible = true;
     }
-    // A qué posición se pega una pieza: a media metro, o a la rejilla de 4 m
-    // (caminos y vallas, para que casen entre sí)
+    // A qué posición se pega una pieza: a medio metro, o al centro de su
+    // celda si va a rejilla (caminos y vallas a 4 m, la calle a 8, para que
+    // casen entre sí). El paso lo dice el catálogo, así que una calle de 8 m
+    // cae en 4, 12, 20… y las seis que caben en la parcela quedan justas.
     function ajusta(t, x, y) {
-      if (PIEZAS[t]?.rejilla) {
+      const paso = pasoRejilla(t);
+      if (paso) {
+        const medio = paso / 2;
         return {
-          x: Math.min(L - 2, Math.max(2, Math.floor(x / 4) * 4 + 2)),
-          y: Math.min(L - 2, Math.max(2, Math.floor(y / 4) * 4 + 2)),
+          x: Math.min(L - medio, Math.max(medio, Math.floor(x / paso) * paso + medio)),
+          y: Math.min(L - medio, Math.max(medio, Math.floor(y / paso) * paso + medio)),
         };
       }
       return { x: Math.min(L, Math.max(0, Math.round(x * 2) / 2)), y: Math.min(L, Math.max(0, Math.round(y * 2) / 2)) };
@@ -3458,7 +3524,7 @@ export default function Mundo() {
         fe = 0;
       }
       const z = seleccion.z;
-      const paso = PIEZAS[z.t]?.rejilla ? 4 : 0.5;
+      const paso = pasoRejilla(z.t) || 0.5;
       const dx = (fe * ay + fn * ax) * paso;
       const dy = (fn * ay - fe * ax) * paso;
       z.x = Math.min(L, Math.max(0, Math.round((z.x + dx) * 10) / 10));
@@ -3564,7 +3630,7 @@ export default function Mundo() {
       const z = arrastre.z;
       const x = p.x - obraBase.bx + arrastre.ox;
       const y = p.y - obraBase.by + arrastre.oy;
-      const q = PIEZAS[z.t]?.rejilla ? ajusta(z.t, x, y) : { x: Math.min(L, Math.max(0, Math.round(x * 10) / 10)), y: Math.min(L, Math.max(0, Math.round(y * 10) / 10)) };
+      const q = pasoRejilla(z.t) ? ajusta(z.t, x, y) : { x: Math.min(L, Math.max(0, Math.round(x * 10) / 10)), y: Math.min(L, Math.max(0, Math.round(y * 10) / 10)) };
       if (q.x === z.x && q.y === z.y) return;
       z.x = q.x;
       z.y = q.y;
