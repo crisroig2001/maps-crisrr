@@ -1601,7 +1601,11 @@ export default function Mundo() {
     scene.add(avatar.grupo);
     sigueElSol(0, 0, 0);
     // posición en metros del mundo (y hacia el norte); rumbo en radianes
-    const yo = { x: L / 2, y: L / 2 - 12, h: 0, rumbo: 0, destino: null, fase: 0, andando: false };
+    // `faseResp` desplaza la respiración de cada figura: sin ella, dos
+    // vecinos parados suben y bajan a la vez y se ve la máquina. Sale del id,
+    // así que es la misma en todas las pantallas.
+    const faseDeId = (id) => (parseInt(String(id).slice(-4), 16) || 0) / 65535 * Math.PI * 2;
+    const yo = { x: L / 2, y: L / 2 - 12, h: 0, rumbo: 0, destino: null, fase: 0, amp: 0, andando: false, faseResp: faseDeId(jugador.id) };
     const px0 = parseFloat(params.get('x'));
     const py0 = parseFloat(params.get('y'));
     if (Number.isFinite(px0) && Number.isFinite(py0)) {
@@ -1613,9 +1617,31 @@ export default function Mundo() {
     // sale suave. Los brazos giran desde el hombro (que es donde está su
     // origen), así que basta con un ángulo por brazo.
     const GESTO_MS = 1500;
+    // Persigue un rumbo por el camino corto, con la constante de tiempo de
+    // siempre (1 - e^(-dt·k)): sirve para el avatar propio y para los vecinos.
+    function giraHacia(o, objetivo, dt) {
+      if (o.rumbo == null) { o.rumbo = objetivo; return; }
+      let d = objetivo - o.rumbo;
+      while (d > Math.PI) d -= Math.PI * 2;
+      while (d < -Math.PI) d += Math.PI * 2;
+      o.rumbo += d * (1 - Math.exp(-dt * 11));
+    }
+
     function colocaFigura(f, o) {
-      const salto = o.andando ? Math.abs(Math.sin(o.fase)) * 0.06 : 0;
-      const a = o.andando ? Math.sin(o.fase) * 0.65 : 0;
+      // `amp` va de 0 a 1 y de vuelta: es lo que hace que la zancada arranque
+      // y frene en vez de aparecer y desaparecer de un fotograma a otro.
+      const amp = o.amp != null ? o.amp : o.andando ? 1 : 0;
+      const salto = Math.abs(Math.sin(o.fase)) * 0.06 * amp;
+      const a = Math.sin(o.fase) * 0.65 * amp;
+      // Respiración: quieto, el muñeco era una estatua. Sube y baja un
+      // centímetro y se balancea un grado, con la fase desplazada por figura
+      // para que dos vecinos parados no respiren a la vez. NO se escala
+      // `f.cuerpo`: es la malla fusionada de cuerpo, cabeza, pelo y ojos, y
+      // los brazos son hermanos suyos, así que un 2 % en Y estiraría el
+      // cuello y despegaría los brazos.
+      const quieto = 1 - amp;
+      const tResp = uTiempo.value + (o.faseResp || 0);
+      const resp = Math.sin(tResp * 1.9) * 0.012 * quieto;
       f.pi.rotation.x = a;
       f.pd.rotation.x = -a;
       // los brazos van al contrario que las piernas, como al andar de verdad
@@ -1650,6 +1676,10 @@ export default function Mundo() {
       }
       f.bi.rotation.set(bix, 0, biz);
       f.bd.rotation.set(bdx, 0, bdz);
+      f.cuerpo.position.y = resp;
+      f.bi.position.y = 1.14 + resp;
+      f.bd.position.y = 1.14 + resp;
+      f.grupo.rotation.z = Math.sin(tResp * 0.42) * 0.018 * quieto;
       f.grupo.position.set(o.x, o.h + salto + brinco, -o.y);
       f.grupo.rotation.y = o.rumbo;
       // la mancha se queda en el SUELO y se encoge con la altura del brinco:
@@ -1698,7 +1728,7 @@ export default function Mundo() {
         dice: null, // lo que dice ahora mismo, si dice algo
         diceT: 0, // ... y cuándo lo dijo: distingue lo nuevo de lo repetido
         gestoT: 0,
-        o: { x: datos.x, y: datos.y, h: alturaEn(datos.x, datos.y), rumbo: datos.r, fase: 0, andando: false },
+        o: { x: datos.x, y: datos.y, h: alturaEn(datos.x, datos.y), rumbo: datos.r, fase: 0, amp: 0, andando: false, faseResp: faseDeId(id) },
         objetivo: { x: datos.x, y: datos.y, rumbo: datos.r },
       };
       otros.set(id, o);
@@ -2772,8 +2802,12 @@ export default function Mundo() {
             yo.y = cy + Math.sign(yo.y - cy || 1) * (RIO_ANCHO + 1);
           }
         }
-        yo.rumbo = Math.atan2(dx, -dy); // el frente del avatar es +z (sur)
+        // El rumbo se persigue por el camino corto en vez de escribirse: un
+        // giro de 180° con el joystick era un pivote instantáneo, y es el
+        // gesto más frecuente en el móvil.
+        giraHacia(yo, Math.atan2(dx, -dy), dt); // el frente del avatar es +z (sur)
         yo.fase += dt * CADENCIA;
+        yo.amp = Math.min(1, (yo.amp || 0) + dt * 7);
         // la cámara va con él
         camera.position.x += yo.x - x0;
         camera.position.z -= yo.y - y0;
@@ -2782,7 +2816,12 @@ export default function Mundo() {
         if (yo.destino && Math.hypot(yo.x - x0, yo.y - y0) < paso * 0.2) yo.destino = null; // atascado: se para
         actualizaDonde(false);
       } else {
-        yo.fase = 0;
+        // La amplitud baja sola en vez de ponerse a cero de golpe: antes la
+        // pierna volvía de 37° a la vertical EN UN FOTOGRAMA al soltar la
+        // tecla. La fase sigue corriendo mientras queda amplitud, para que el
+        // paso termine en lugar de congelarse a medias.
+        yo.amp = Math.max(0, (yo.amp || 0) - dt * 4);
+        if (yo.amp > 0) yo.fase += dt * CADENCIA;
       }
       // sube y baja con la colina; la cámara acompaña
       const h = alturaEn(yo.x, yo.y);
@@ -2804,12 +2843,14 @@ export default function Mundo() {
           const paso = Math.min(d, Math.max(VELOCIDAD * 1.2 * dt, d * dt * 2));
           s.x += (dx / d) * paso;
           s.y += (dy / d) * paso;
-          s.rumbo = Math.atan2(dx, -dy);
+          giraHacia(s, Math.atan2(dx, -dy), dt);
           s.andando = true;
           s.fase += dt * CADENCIA;
+          s.amp = Math.min(1, (s.amp || 0) + dt * 7);
         } else {
           s.andando = false;
-          s.fase = 0;
+          s.amp = Math.max(0, (s.amp || 0) - dt * 4);
+          if (s.amp > 0) s.fase += dt * CADENCIA;
           s.rumbo = o.objetivo.rumbo;
         }
         s.h = alturaEn(s.x, s.y);
