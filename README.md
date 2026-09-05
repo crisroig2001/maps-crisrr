@@ -511,9 +511,10 @@ densidad de la hierba, la cúpula al final de los opacos y el atlas
 deduplicado ya están—; lo que queda, por si alguien lo retoma, más o menos
 por orden de lo que daría:
 
-- **Rejilla de 4 m visible** al colocar piezas de rejilla (una textura en
-  `texObra`, cero draw calls): es el «casar dos tramos de valla», que es el
-  problema real.
+- **Rejilla visible** al colocar piezas de rejilla (una textura en `texObra`,
+  cero draw calls): es el «casar dos tramos de valla», que es el problema
+  real. Ahora hacen falta DOS pasos, 4 m y 8, porque la calle va a 8: el paso
+  de cada pieza lo dice `pasoRejilla(t)` en `src/lib/piezas.js`.
 - **`MAX_INST` de 3.000 a ~400**: 33 mallas × 3.000 × 16 floats son 6,3 MB en
   CPU y otros tantos en GPU, casi todo aire. Ojo con el número: `MAX_PIEZAS`
   es 150 por parcela y se cargan 13 × 13, así que el tope no es teórico —
@@ -526,6 +527,87 @@ por orden de lo que daría:
 - **Una vista del banco con el modo construir abierto** y otra a tamaño de
   móvil: hoy las ocho son de escritorio y ninguna lleva interfaz, así que
   todo lo de la paleta es invisible para `npm run vistas`.
+
+### Lo que queda de la segunda auditoría visual
+
+Una segunda pasada por las siete vistas (septiembre de 2026). Lo que salió
+arreglado —las hileras de hierba y las manchas de la losa— está en el commit
+`b405be2`; esto es lo que se miró y NO se ha tocado, por orden de lo que daría.
+Nada de esto está prototipado, así que el coste es estimación, no medida.
+
+- **El horizonte está vacío**, y es lo más caro y lo que más daría. El mundo
+  termina en una banda verde plana y recta contra el cielo, sin una silueta que
+  la rompa: por eso se lee como un disco plano y no como un paisaje. Se ve en
+  la vista `a-ras-de-suelo`. Pide relieve lejano o siluetas de bajo detalle más
+  allá de la niebla, y es trabajo de días, no de horas. Ojo: subir la amplitud
+  de `ONDAS` en `alturaEn()` NO vale de atajo —el comentario de ahí explica por
+  qué media parcela de desnivel es el techo para que una casa no flote— así que
+  el relieve lejano tendría que ser otra cosa, no el mismo terreno más ondulado.
+- **El rizado del agua moirea.** Ampliando la orilla lejana en `rio-y-paseo` se
+  ve un enrejado regular de rombos, no un rizado. Es el mismo tipo de fallo que
+  tenían las hileras de hierba —un patrón que se repite donde debería haber
+  desorden— y el sitio a mirar es la fase del rizado en el shader del agua, que
+  va en coordenadas del cauce. El resto del agua está bien y no hay que
+  tocarlo: la profundidad, la espuma de la orilla y la opacidad que disuelve la
+  arista funcionan, se comprobó.
+- **El naranja del kit manda demasiado.** Vallas, troncos y bancos comparten un
+  naranja muy saturado que domina cada encuadre verde. El mecanismo para
+  remapearlo ya existe (`PALETA_KIT` y `acercaVerde` en `Mundo.js`, que es lo
+  que ya lleva los verdes menta del Nature Kit al verde hierba), así que son
+  horas. Pero es GUSTO, no defecto: puede que se quiera así, y por eso no se
+  tocó.
+- **Las losas del `camino` no contrastan sobre el paseo.** Puestas sobre
+  pavimento son casi del mismo tono y desaparecen; sobre hierba se leen bien.
+  Un punto más oscuras. Minutos.
+- **Los modelos se cargan todos al arrancar.** Un `Promise.all` sobre el
+  catálogo entero: 42 modelos, 1,3 MB en la primera visita de cualquiera. Con
+  27 eran 780 KB. Lo que toca cuando el catálogo crezca otra vez es cargar por
+  pestaña, y no antes de abrir la paleta.
+
+Y una hipótesis que se miró y **se descartó**, apuntada para que nadie la
+«arregle» otro día: parecía que los árboles del fondo no proyectaban sombra en
+`a-ras-de-suelo`. No es un fallo. El sol es bajo y del suroeste y esa cámara
+mira al norte, así que las sombras caen DETRÁS de los árboles y las tapan ellos
+mismos. La caja de sombras son 150 m con 2.048 px (7,3 cm por téxel), de sobra
+para esa vista.
+
+### Si se mete otro kit
+
+Lo aprendido metiendo el City Kit Roads, que es lo que va a doler la próxima vez:
+
+- **Cada kit con atlas, en su carpeta** bajo `public/modelos/`. TODOS los kits
+  de Kenney llaman a su atlas `Textures/colormap.png` aunque sean imágenes
+  distintas, y `cargaModelo` comparte material por la RUTA de la imagen justo
+  por eso. Con el nombre a secas, el segundo kit se pinta con el atlas del
+  primero.
+- **La escala del City Kit es ~7,7 m por unidad**, que es a lo que están sus
+  casas. Una baldosa de 1×1 unidad son 7,7 m de calzada; se redondeó a 8 porque
+  divide la parcela justo (48 / 8 = 6).
+- **El `ancho` de una pieza pequeña sale de la ALTURA que debe tener**, no de
+  su planta: un semáforo son 3,5 m y un stop, 2,5. `npm run medidas` lo dice.
+- **Si un modelo viene mirando al otro lado**, `giro` en el catálogo son
+  cuartos de vuelta que se le dan al cargarlo. La señal de stop enseñaba el
+  dorso.
+- **Al añadir una pestaña, comprobar que cabe**: el panel de escritorio son 320
+  px fijos y con cinco pestañas la fila pedía 390. Ahora se pliegan
+  (`flex-wrap`), así que una sexta baja sola, pero conviene mirarlo.
+
+Kits mirados y descartados de momento, todos CC0 salvo donde se dice: Kenney
+[City Kit Commercial](https://kenney.nl/assets/city-kit-commercial) (tiendas y
+edificios altos, la variedad de silueta que aún falta),
+[Fantasy Town Kit](https://kenney.nl/assets/fantasy-town-kit) (160 piezas,
+precioso pero es OTRO mundo al lado de un chalet suburbano),
+[Graveyard](https://kenney.nl/assets/graveyard-kit),
+[Mini Forest](https://kenney.nl/assets/mini-forest) y
+[Car Kit](https://kenney.nl/assets/car-kit). Fuera de Kenney,
+[KayKit City Builder Bits](https://kaylousberg.itch.io/city-builder-bits) (CC0,
+más carácter; el parque con la fuente es de pago) y
+[Poly Pizza](https://poly.pizza/) (10.600 modelos sueltos, GLB directo, mezcla
+CC0 y CC-BY: hay que mirar modelo a modelo y atribuir los CC-BY).
+[Quaternius](https://quaternius.com/) tiene packs estupendos —Downtown City
+MegaKit, Modular Streets— pero **ya no es CC0**: su licencia no permite
+redistribuir los assets como assets, y este repo es público y sirve los `.glb`
+sueltos, así que es zona gris.
 
 ### Cabos sueltos
 
