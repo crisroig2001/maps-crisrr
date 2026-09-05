@@ -47,6 +47,7 @@ const NIEBLA_DESDE = 60;
 const NIEBLA_HASTA = 325; // satura antes de los 384 m en que se acaba el plano del suelo
 const SUELO_M = 16 * L; // el plano del suelo que sigue al avatar: 768 m
 const RADIO_PARCELAS = 6; // se piden (2r+1)² parcelas alrededor: 13×13
+const ANCHO_PASEO = 15; // la losa del paseo es una banda, no la parcela entera
 
 const BLANCO = new THREE.Color(0xffffff);
 const TRONCO = new THREE.Color(0x8d6a4a);
@@ -803,6 +804,24 @@ export default function Mundo() {
           float e = 1.0 - nubes;
           nubes = 1.0 - e * e * e;
           color = mix(color, cNubes, nubes);
+          // La silueta del horizonte. Entre el suelo, que se desvanece en la
+          // niebla, y la banda de cúmulos no había NADA: dos capas de lectura
+          // y un hueco en medio. Esto son dos crestas pintadas en la cúpula
+          // con armónicos ENTEROS sobre el acimut, que es lo que hace que
+          // cierren sin costura en el meridiano.
+          // Es una LÍNEA DE ARBOLADO, no una cordillera: en un mundo llano de
+          // colinas de ±3 m por el que se puede andar, una sierra alpina sería
+          // un telón de fondo ajeno. Muy desaturada, y la calima que viene
+          // justo después le come la base, que es lo que la manda al fondo.
+          float ang = d.y > -0.2 ? atan(d.z, d.x) : 0.0;
+          float g = fwidth(d.y) * 1.4 + 0.0008;
+          // capa lejana: apenas insinuada, más alta
+          float cLejos = 0.045 + 0.014 * sin(ang * 3.0 + 0.7) + 0.007 * sin(ang * 7.0 + 2.1);
+          color = mix(color, vec3(0.72, 0.80, 0.82), smoothstep(cLejos + g, cLejos - g, d.y) * 0.5);
+          // capa cercana: el arbolado, con armónicos altos y poca amplitud
+          float cCerca = 0.025 + 0.008 * sin(ang * 7.0 + 1.3) + 0.005 * sin(ang * 13.0 + 0.4) + 0.003 * sin(ang * 23.0);
+          color = mix(color, vec3(0.66, 0.77, 0.68), smoothstep(cCerca + g, cCerca - g, d.y) * 0.75);
+
           // El velo del sol. NO un disco: el sol está a 44,1° de altura y el
           // borde de arriba del encuadre no pasa de 17°, así que un disco o
           // un halo radial quedan fuera de cuadro SIEMPRE. Lo que sí se ve en
@@ -1447,6 +1466,8 @@ export default function Mundo() {
     // (1,1,1) y no lo escribe nunca; si `pintaMundo` lo mutara, los pájaros
     // saldrían escalados en silencio.
     const escPieza = new THREE.Vector3(1, 1, 1);
+    // ... y otra para la losa del paseo, por lo mismo: `escI` no se toca.
+    const escPaseo = new THREE.Vector3(1, 1, 1);
     const colorMio = new THREE.Color(0x7fb0ff);
     const cacheColorDueno = new Map();
 
@@ -1473,8 +1494,19 @@ export default function Mundo() {
         const by = p.py * L;
         const cen = centroParcela(p.px, p.py);
         if (pc.o === 'mundo') {
-          if (conSuelo(tipoParcela(p.px, p.py)) && nPlazas < MAX_PARC) {
-            mtx.makeTranslation(cen.x, 0.04, -cen.y);
+          const tipoP = tipoParcela(p.px, p.py);
+          if (conSuelo(tipoP) && nPlazas < MAX_PARC) {
+            // La plaza es una plaza y se queda entera. El PASEO no: recibía
+            // una losa de piedra de 48 × 48 m, así que eran 624 m de
+            // explanada beige con un camino de 4 m por el medio, las farolas
+            // plantadas en piedra vacía y ni una mata de hierba. Un paseo es
+            // una banda: 15 m deja las farolas de ±6 m sobre piedra y los
+            // árboles de ±11 m sobre hierba, que es justo lo que se busca.
+            posI.set(cen.x, 0.04, -cen.y);
+            rotI.identity();
+            if (tipoP === 'paseo') escPaseo.set(p.py === 0 ? 1 : ANCHO_PASEO / L, 1, p.py === 0 ? ANCHO_PASEO / L : 1);
+            else escPaseo.set(1, 1, 1);
+            mtx.compose(posI, rotI, escPaseo);
             plazas.setMatrixAt(nPlazas++, mtx);
           }
         } else if (pc.o && nMarcos < MAX_PARC) {
@@ -1592,7 +1624,14 @@ export default function Mundo() {
           const rodal = 0.32 + 0.3 * Math.sin(wx * 0.09 + wy * 0.05) * Math.sin(wy * 0.11 - wx * 0.04);
           if (h > rodal) continue;
           const p = parcelaDe(wx, wy);
-          if (conSuelo(tipoParcela(p.px, p.py))) continue;
+          const tipoH = tipoParcela(p.px, p.py);
+          // Antes se saltaba la parcela ENTERA, así que un paseo eran 48 m
+          // pelados. Ahora solo la banda de losa: la hierba llega al bordillo.
+          if (tipoH === 'plaza') continue;
+          if (tipoH === 'paseo') {
+            const dentro = p.py === 0 ? Math.abs(wy - (p.py * L + L / 2)) : Math.abs(wx - (p.px * L + L / 2));
+            if (dentro < ANCHO_PASEO / 2 + 0.6) continue;
+          }
           if (distRio(wx, wy).d < RIO_ANCHO + 2) continue;
           let tapada = false;
           for (const c of caminos) {
