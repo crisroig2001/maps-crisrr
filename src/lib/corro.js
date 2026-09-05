@@ -46,6 +46,22 @@ export const CORRO_AVISO_M = 15;
 // hace media hora que no está.
 export const INVITACION_MS = 45_000;
 
+// Lo que el corro recuerda de lo hablado. Vive en la MEMORIA del servidor
+// mientras el corro exista y se va con él: no se escribe en disco, no queda
+// registro y nadie de fuera lo ve nunca. Es lo mismo que ya pasaba con una
+// burbuja, solo que el dueño de lo dicho pasa a ser el grupo en vez de quien
+// lo dijo, que es lo que hace falta para que los tres lean LA MISMA
+// conversación aunque a uno se le pierda un sondeo.
+export const CORRO_LINEAS = 14;
+
+// Y lo que se ve en el mundo, sobre el corro: cuatro líneas caben sin tapar
+// el paisaje. El resto se lee en «Todo», que es una hoja normal.
+export const CORRO_LINEAS_VISTA = 4;
+
+// Quien entra empieza a leer desde que entra, como en cualquier conversación:
+// nadie llega y se pone a leer lo de antes. Lo que ya estaba dicho sigue en
+// el corro para los que estaban, pero al recién llegado no se le manda.
+
 // Id de corro: lo genera el servidor y viaja con la presencia.
 export const RE_CORRO = /^[a-z0-9]{6,16}$/;
 

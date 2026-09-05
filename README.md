@@ -148,6 +148,27 @@ servidor solo guarda qué hay en cada parcela y quién anda cerca.
   espera en la puerta) y no los sucesos: los avisos salen de compararlo con lo
   que había, que es lo que aguanta un sondeo perdido sin contar dos veces lo
   mismo ni quedarse mudo.
+- **El hilo del corro**: dentro de un corro lo que dices **no sale sobre tu
+  cabeza**. Sale volando: una cuenta de tu color describe un arco desde tu
+  cabeza hasta el **carrete**, un globo que flota sobre el centro del corro y
+  que guarda lo hablado con **el nombre delante**, como en cualquier chat de
+  grupo (y sin repetirlo cuando sigue hablando el mismo, que es ruido). El
+  arco no es una ruta escrita: son dos traslaciones anidadas con curvas
+  distintas, la de fuera con el avance y la de dentro con la caída. El
+  carrete **tiene tope** —cuatro líneas y `min(300px, 62vw)` de ancho—, y
+  como la cámara de serie mira de cerca y desde alto, el punto del que cuelga
+  se proyecta arriba del todo: se sujeta por debajo de la barra y dentro de
+  la pantalla, y cuando le toca sujetarse pierde el pico, que ya no apunta a
+  nadie. Lo que no cabe se lee en **«Todo»**, una hoja normal con la
+  conversación entera. Quien pasa por al lado y no está dentro ve un **globo
+  mudo** sobre el grupo —tres puntos que laten y nada más—: sabe que ahí se
+  está hablando, y lo que se dice es de los de dentro. El hilo lo guarda el
+  **corro**, no quien habló: así los tres leen lo mismo aunque a uno se le
+  pierda un sondeo, y por eso vive en la memoria del servidor (tope de
+  `CORRO_LINEAS`, 14) **mientras dure el corro y se va con él**: ni disco, ni
+  registro, ni nada que sobreviva a la conversación. Quien entra empieza a
+  leer **desde que entra**, como en cualquier corro de verdad: nadie llega y
+  se pone a leer lo de antes.
 - **Silenciar y reportar**: tocando «N personas en el mundo» se abre la hoja
   de **vecinos**, con quien anda cerca y a qué distancia (y tocando a alguien
   en el mundo, su ficha, que lleva lo mismo). **Silenciar** es lo
@@ -343,9 +364,11 @@ que un árbol). **Si añades una pieza, pasa esto y commitea el PNG.**
 hace un gesto, y se comprueba que a Bea le llegan), **hacen corro** (Ana toca
 a Bea en el mundo, le pide hablar, Bea acepta, y se comprueba que las dos
 tienen el corro, que se dibuja el círculo en el suelo, que Bea lee lo que Ana
-dice dentro y que un tercero que pasa ve que habla pero no lo que dice; luego
-ese tercero **llama a la puerta** y el aviso le sale a Ana, que es quien lo
-empezó, y le deja entrar), **se silencian** (Bea
+dice **en el carrete** —con el nombre delante, y nada sobre las cabezas— y que
+un tercero que pasa ve que habla pero no lo que dice; luego ese tercero
+**llama a la puerta** y el aviso le sale a Ana, que es quien lo empezó, y le
+deja entrar; y Bea se sale para comprobar que desde fuera ve el **globo mudo**
+sobre el grupo y ni una letra), **se silencian** (Bea
 silencia a Ana y la reporta, y se comprueba que deja de verle el nombre y lo
 que dice, y que el reporte queda guardado con lo que Ana decía), reclaman un
 solar,
@@ -378,7 +401,8 @@ se baje otro.
    burbujas y gestos, el cartel de quién es cada casa y el me gusta, pelo y
    piel propios con perfil que se puede cambiar, silenciar y reportar, y el
    **corro**: tocar a alguien para hablar solo con él, un círculo en el suelo
-   que enseña quién habla con quién, y una puerta que abre quien lo empezó
+   que enseña quién habla con quién, una puerta que abre quien lo empezó, y el
+   hilo con lo hablado volando hasta un carrete sobre el grupo
 3. **Cuentas de usuario** ← lo siguiente. Hoy el id es del dispositivo y se
    puede falsificar, y de ahí cuelga todo lo demás: la propiedad de una parcela
    es «quien tenga ese localStorage», bloquear a alguien cuesta lo que vaciarlo

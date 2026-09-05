@@ -18,7 +18,7 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { PARCELA_M, parcelaDe, claveParcela, parseParcela, centroParcela } from '../lib/parcela';
 import { PIEZAS, CATEGORIAS, COLORES, PELOS, PIELES, MAX_PIEZAS, MAX_NOMBRE, MAX_MENSAJE, MENSAJE_MS, EMOTES, limpiaMensaje } from '../lib/piezas';
 import { perfil, guardaPerfil, gustaVisto, guardaGustaVisto, silenciados, silencia, quitaSilencio } from '../lib/jugador';
-import { CORRO_MAX, CORRO_CERCA_M, CORRO_AVISO_M } from '../lib/corro';
+import { CORRO_MAX, CORRO_CERCA_M, CORRO_AVISO_M, CORRO_LINEAS_VISTA } from '../lib/corro';
 import { tipoParcela, conSuelo, cauce, distRio, rioEsteX as rioEsteXEnEscena, rioSurY as rioSurYEnEscena, GLSL_CAUCE, RIO_ANCHO, NIVEL_AGUA, LECHO, BANDA_AGUA } from '../lib/paisaje';
 const LECHO_G = LECHO.toFixed(1);
 
@@ -545,6 +545,10 @@ function geometriaPieza(tipo) {
 // altura a la que mira la cámara, el rótulo del nombre, el radio con que
 // choca) sale de aquí.
 const ALTO_AVATAR = 1.8;
+// A qué altura flota el carrete del corro sobre las cabezas. 2,6 m deja pasar
+// por debajo al que anda por delante y no se sale por arriba con la cámara de
+// serie, que mira desde bastante alto.
+const ALTO_CARRETE = 2.6;
 function geometriaAvatar(color, pelo, piel) {
   const g = nuevaGeo();
   esfera(g, 0, 0.96, 0, 0.24, color, 1.4); // cuerpo
@@ -587,6 +591,21 @@ function colorDueno(id) {
   let h = 0;
   for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
   return new THREE.Color().setHSL((h % 360) / 360, 0.55, 0.62);
+}
+
+// El color con el que se escribe el NOMBRE de alguien en el hilo del corro,
+// como en cualquier chat de grupo. Sale del mismo matiz que su marco de
+// parcela —así una persona es del mismo color en todo el mundo— pero mucho
+// más oscuro: el pastel del marco sobre blanco no se lee.
+const cacheColorNombre = new Map();
+function colorNombre(id) {
+  let c = cacheColorNombre.get(id);
+  if (c) return c;
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+  c = '#' + new THREE.Color().setHSL((h % 360) / 360, 0.62, 0.34).getHexString();
+  cacheColorNombre.set(id, c);
+  return c;
 }
 
 // Los verdes del Nature Kit tiran a menta y turquesa; el mundo de la
@@ -666,6 +685,7 @@ export default function Mundo() {
   const [llamadas, setLlamadas] = useState([]); // quién llama a la puerta de TU corro
   // la ficha de alguien a quien has tocado en el mundo: {id, nombre, dist, ...}
   const [ficha, setFicha] = useState(null);
+  const [registro, setRegistro] = useState(false); // la hoja con todo lo hablado
   const [conectados, setConectados] = useState(1);
   // dónde está el avatar: {clave, dueno, mia, libre, n}
   const [donde, setDonde] = useState(null);
@@ -693,6 +713,11 @@ export default function Mundo() {
 
   // La ficha de un vecino se refresca como la hoja de vecinos: la distancia
   // que pone cambia mientras uno de los dos anda, y una congelada engaña.
+  // sin corro no hay nada que leer: la hoja se cierra sola
+  useEffect(() => {
+    if (!corro) setRegistro(false);
+  }, [corro]);
+
   useEffect(() => {
     if (!ficha) return;
     const t = setInterval(() => setFicha((f) => (f ? engineRef.current?.fichaDe(f.id) || null : null)), 900);
@@ -2238,6 +2263,7 @@ export default function Mundo() {
       for (const [k, v] of corrosVista) {
         if (gente.has(k)) continue;
         grupoCorros.remove(v.grupo);
+        v.globo?.remove();
         corrosVista.delete(k);
       }
       for (const [k, ids] of gente) {
@@ -2245,6 +2271,7 @@ export default function Mundo() {
         let v = corrosVista.get(k);
         if (v && v.mio !== mio) {
           grupoCorros.remove(v.grupo);
+          v.globo?.remove();
           corrosVista.delete(k);
           v = null;
         }
@@ -2265,7 +2292,19 @@ export default function Mundo() {
           }
           grupo.add(luz, aro);
           grupoCorros.add(grupo);
-          v = { grupo, aro, luz, pies: new Map(), mio };
+          v = { grupo, aro, luz, pies: new Map(), mio, globo: null, centro: null };
+          // Un corro que no es el tuyo lleva un globo MUDO sobre el grupo:
+          // tres puntos y nada más. De fuera se ve que ahí se está hablando,
+          // que es lo que hace falta saber; lo que se dice es de los de
+          // dentro. Es la misma idea que el «…» sobre una cabeza, pero
+          // colgada del grupo, que es quien tiene la conversación.
+          if (!mio && rotulosRef.current) {
+            const g = document.createElement('div');
+            g.className = 'globo-mudo';
+            for (let i = 0; i < 3; i++) g.appendChild(document.createElement('i'));
+            rotulosRef.current.appendChild(g);
+            v.globo = g;
+          }
           corrosVista.set(k, v);
         }
         for (const [id, pie] of v.pies) {
@@ -2282,6 +2321,128 @@ export default function Mundo() {
           v.grupo.add(pie);
           v.pies.set(id, pie);
         }
+      }
+    }
+
+    // --- el hilo: el carrete sobre el corro y las cuentas que vuelan ---
+    // Cada frase sale de la cabeza de quien la dice, describe un arco y cae en
+    // un carrete que flota sobre el centro del corro. Así se ve DE QUIÉN sale
+    // cada cosa (que es lo que se perdía al juntarlo todo en un sitio) y a la
+    // vez queda leído lo hablado, con el nombre delante como en cualquier
+    // chat de grupo.
+    //
+    // Es DOM proyectado, como los rótulos y los carteles: un texto metido en
+    // el 3D saldría pixelado y habría que rehacerlo en cada letra.
+    let carrete = null;
+    let carreteLineas = null;
+    let ultimaLinea = null; // {ts, q} de lo último que ya se ha pintado
+    let centroMio = null; // dónde está el centro de MI corro, para colgar el carrete
+
+    function haceCarrete() {
+      const cont = rotulosRef.current;
+      if (carrete || !cont) return;
+      carrete = document.createElement('div');
+      carrete.className = 'carrete';
+      const cab = document.createElement('div');
+      cab.className = 'cab';
+      carreteLineas = document.createElement('div');
+      carreteLineas.className = 'lineas';
+      carrete.append(cab, carreteLineas);
+      carrete._cab = cab;
+      cont.appendChild(carrete);
+    }
+    function quitaCarrete() {
+      carrete?.remove();
+      carrete = null;
+      carreteLineas = null;
+      ultimaLinea = null;
+    }
+    // Una línea del hilo. El nombre solo sale cuando cambia quien habla, como
+    // en un chat de grupo: repetirlo en cada frase de la misma persona es
+    // ruido, y aquí el sitio es oro.
+    function meteLinea(l) {
+      if (!carreteLineas) return;
+      const previa = carreteLineas.lastElementChild;
+      const el = document.createElement('div');
+      el.className = 'linea entra';
+      el.dataset.de = l.q;
+      if (previa?.dataset.de !== l.q) {
+        const b = document.createElement('b');
+        b.textContent = l.q === jugador.id ? 'Tú' : l.n;
+        b.style.color = l.q === jugador.id ? '#2f6fed' : colorNombre(l.q);
+        el.appendChild(b);
+      } else el.classList.add('sigue');
+      const t = document.createElement('span');
+      t.textContent = l.t; // textContent, nunca marcado: lo escribe otra persona
+      el.appendChild(t);
+      carreteLineas.appendChild(el);
+      while (carreteLineas.children.length > CORRO_LINEAS_VISTA) carreteLineas.firstElementChild.remove();
+    }
+
+    // Dónde cae en pantalla un punto del mundo, sin tocar ningún nodo: es lo
+    // que necesitan las cuentas para saber de dónde salen y adónde van.
+    const pProyecta = new THREE.Vector3();
+    function enPantalla(x, y, h, alto) {
+      pProyecta.set(x, h + alto, -y);
+      if (pProyecta.distanceTo(camera.position) > 160) return null;
+      pProyecta.project(camera);
+      if (pProyecta.z > 1 || Math.abs(pProyecta.x) > 1.3 || Math.abs(pProyecta.y) > 1.3) return null;
+      return { sx: (pProyecta.x * 0.5 + 0.5) * vpW, sy: (-pProyecta.y * 0.5 + 0.5) * vpH };
+    }
+
+    // La cuenta: sale de la cabeza y cae en el carrete describiendo un arco.
+    // El arco son DOS traslaciones anidadas con curvas distintas —la de fuera
+    // lleva el avance en X a ritmo constante y la de dentro la caída en Y con
+    // su propia curva—, que es lo que dobla el vuelo sin escribir una ruta.
+    const VUELO_MS = 620;
+    function lanzaCuenta(l, alLlegar) {
+      const cont = rotulosRef.current;
+      const quien = l.q === jugador.id ? yo : otros.get(l.q)?.o;
+      const de = quien && cont ? enPantalla(quien.x, quien.y, quien.h, ALTO_AVATAR + 0.35) : null;
+      const a = centroMio && cont ? enPantalla(centroMio.x, centroMio.y, centroMio.h, ALTO_AVATAR + ALTO_CARRETE) : null;
+      // sin sitio de salida o de llegada (fuera de cámara), la línea entra sin
+      // vuelo: lo que no se puede perder es lo dicho
+      if (!de || !a) return alLlegar();
+      const fuera = document.createElement('i');
+      fuera.className = 'cuenta';
+      const dentro = document.createElement('i');
+      dentro.style.background = l.q === jugador.id ? '#2f6fed' : colorNombre(l.q);
+      fuera.appendChild(dentro);
+      fuera.style.transform = 'translate3d(' + Math.round(de.sx) + 'px,' + Math.round(de.sy) + 'px,0)';
+      cont.appendChild(fuera);
+      try {
+        fuera.animate([{ translate: '0 0' }, { translate: Math.round(a.sx - de.sx) + 'px 0' }], { duration: VUELO_MS, easing: 'linear', fill: 'forwards' });
+        dentro.animate([{ transform: 'translateY(0) scale(1)' }, { transform: 'translateY(' + Math.round(a.sy - de.sy) + 'px) scale(.55)' }], {
+          duration: VUELO_MS,
+          easing: 'cubic-bezier(.35,-0.35,.6,1)',
+          fill: 'forwards',
+        });
+      } catch {
+        /* sin Web Animations: la cuenta se queda quieta y desaparece igual */
+      }
+      setTimeout(() => {
+        fuera.remove();
+        alLlegar();
+      }, VUELO_MS - 40);
+    }
+
+    // Lo que llega en el hilo del sondeo. El servidor manda el hilo ENTERO
+    // (desde que entraste), no los sucesos: se busca por dónde iba y se pinta
+    // lo que falte, que es lo que aguanta un sondeo perdido.
+    function llegaHilo(h) {
+      if (!carreteLineas) return;
+      let desde = 0;
+      if (ultimaLinea) {
+        const i = h.findIndex((l) => l.ts === ultimaLinea.ts && l.q === ultimaLinea.q);
+        desde = i < 0 ? 0 : i + 1; // si ya no está, se ha caído por el tope: se pinta todo
+      }
+      for (let i = desde; i < h.length; i++) {
+        const l = h[i];
+        ultimaLinea = { ts: l.ts, q: l.q };
+        // solo vuela lo que acaba de decirse; al entrar en un corro con hilo,
+        // lo de antes se pone de golpe y no cae una lluvia de cuentas
+        if (Date.now() - l.ts < 4000) lanzaCuenta(l, () => meteLinea(l));
+        else meteLinea(l);
       }
     }
 
@@ -2310,6 +2471,7 @@ export default function Mundo() {
       matAro.mio.opacity = pulso;
       matAro.otro.opacity = pulso * 0.85;
       lejosDelCorro = 0;
+      centroMio = null;
       for (const [k, ids] of gente) {
         const v = corrosVista.get(k);
         if (!v) continue;
@@ -2335,6 +2497,9 @@ export default function Mundo() {
         // presencia) no se pinta, pero tampoco se borra: volverá
         if (!n) {
           v.grupo.visible = false;
+          v.centro = null;
+          if (v.globo) v.globo.style.display = 'none';
+          if (v.mio) centroMio = null;
           continue;
         }
         v.grupo.visible = true;
@@ -2358,7 +2523,24 @@ export default function Mundo() {
           pie.position.x = o.x;
           pie.position.z = -o.y;
         }
-        if (v.mio && nOtros) lejosDelCorro = Math.hypot(sxOtros / nOtros - yo.x, syOtros / nOtros - yo.y);
+        v.centro = { x: cx, y: cy, h: alturaEn(cx, cy) };
+        // un corro ajeno enseña el globo mientras alguien de dentro esté
+        // hablando, y lo esconde en cuanto callan
+        if (v.globo) {
+          let hablan = false;
+          for (const id of ids) {
+            const o = otros.get(id);
+            if (o && (o.aparte || o.dice)) {
+              hablan = true;
+              break;
+            }
+          }
+          v.globo.classList.toggle('hablando', hablan);
+        }
+        if (v.mio) {
+          centroMio = v.centro;
+          if (nOtros) lejosDelCorro = Math.hypot(sxOtros / nOtros - yo.x, syOtros / nOtros - yo.y);
+        }
       }
     }
 
@@ -2420,7 +2602,22 @@ export default function Mundo() {
         llamaPrev = idsLlaman;
         setLlamadas(llaman);
       }
-      const fCorro = corroMio ? corroMio.k + '|' + corroMio.ab + '|' + corroMio.m.map((v) => v.id).join(',') : '';
+      // el carrete existe mientras exista el corro, y se lleva el hilo
+      if (corroMio) {
+        if (!carrete || (antes && antes.k !== corroMio.k)) {
+          quitaCarrete();
+          haceCarrete();
+        }
+        if (carrete) {
+          const otrosN = corroMio.m.length - 1;
+          const cab = 'Corro · ' + (otrosN === 1 ? corroMio.m.find((v) => v.id !== jugador.id)?.n || 'alguien' : corroMio.m.length + ' personas');
+          if (carrete._cab.textContent !== cab) carrete._cab.textContent = cab;
+          llegaHilo(corroMio.h || []);
+        }
+      } else if (carrete) quitaCarrete();
+
+      const ult = corroMio?.h?.[corroMio.h.length - 1];
+      const fCorro = corroMio ? corroMio.k + '|' + corroMio.ab + '|' + corroMio.m.map((v) => v.id).join(',') + '|' + (corroMio.h?.length || 0) + '|' + (ult ? ult.ts : 0) : '';
       if (fCorro !== corroPrev) {
         const eranIds = antes ? antes.m.map((v) => v.id) : [];
         corroPrev = fCorro;
@@ -2432,9 +2629,10 @@ export default function Mundo() {
           setChatOpen(true); // lo primero que se querrá hacer es hablar
         } else if (!corroMio && antes) {
           // el servidor no dice por qué te has salido: lo sabe el cliente,
-          // que es el que mide cuánto te has alejado
-          const lejos = lejosDelCorro > CORRO_AVISO_M;
-          avisa(lejos ? 'Te has alejado: has salido del corro' : 'Se ha deshecho el corro');
+          // que es quien ha pulsado «Salir» y quien mide cuánto te has alejado
+          const porqué =
+            pedido?.a === 'sale' ? 'Has salido del corro' : lejosDelCorro > CORRO_AVISO_M ? 'Te has alejado: has salido del corro' : 'Se ha acabado el corro';
+          avisa(porqué);
           cuentaAlLector('Ya no estás en el corro');
         } else if (corroMio && antes) {
           for (const v of corroMio.m) if (!eranIds.includes(v.id) && v.id !== jugador.id) avisa(v.n + ' se ha unido al corro');
@@ -2594,7 +2792,7 @@ export default function Mundo() {
         el.style.opacity = dist > 110 ? ((160 - dist) / 50).toFixed(2) : '1';
       };
       const yoP = perfil();
-      if (yoP.nombre) pinta('yo', yoP.nombre, miDice && Date.now() - miDice.t < MENSAJE_MS ? miDice.txt : null, yo.x, yo.y, yo.h, true);
+      if (yoP.nombre) pinta('yo', yoP.nombre, !corroMio && miDice && Date.now() - miDice.t < MENSAJE_MS ? miDice.txt : null, yo.x, yo.y, yo.h, true);
       for (const [id, o] of otros) {
         const callado = callados.has(id);
         // Tres burbujas distintas: lo que dice (si lo oyes), el «…» de quien
@@ -2602,13 +2800,18 @@ export default function Mundo() {
         // dice, como al pasar al lado de dos que charlan— y el «✋» de quien
         // llama a la puerta del tuyo, que solo le sale al anfitrión.
         const llama = llamando.has(id);
-        const dice = callado ? null : llama ? '✋ quiere entrar' : o.dice || (o.aparte ? '…' : null);
+        // Dentro de TU corro no hay burbuja sobre la cabeza: lo que dice vuela
+        // hasta el carrete y se lee allí, con su nombre. Fuera del corro, lo
+        // de siempre; y de un corro ajeno, ni el «…» —eso lo dice ahora el
+        // globo mudo del grupo, que es de quien es la conversación.
+        const conmigo = !!(corroMio && o.corro === corroMio.k);
+        const dice = callado || conmigo ? null : llama ? '✋ quiere entrar' : o.corro ? null : o.dice;
         pinta(id, callado ? 'silenciado' : o.nombre, dice, o.o.x, o.o.y, o.o.h, false);
         const el = nodos.get(id);
         if (!el) continue;
         el.classList.toggle('callado', callado);
-        el.classList.toggle('aparte', !callado && !llama && !o.dice && o.aparte);
-        el.classList.toggle('llama', llama);
+        el.classList.toggle('aparte', false);
+        el.classList.toggle('llama', llama && !!dice);
       }
       for (const g of gestos) {
         const o = g.id === 'yo' ? yo : otros.get(g.id)?.o;
@@ -2622,6 +2825,32 @@ export default function Mundo() {
         const q = parseParcela(clave);
         const c = centroParcela(q.px, q.py);
         sitúa(el, c.x, c.y, alturaEn(c.x, c.y), CARTEL_ALTO, CARTEL_LEJOS);
+      }
+      // El carrete cuelga del centro del corro y anda con él. Pero con la
+      // cámara de serie, que mira desde bastante alto y de cerca, ese punto
+      // se proyecta ARRIBA del todo y se metía debajo de la barra del corro:
+      // se veía la cabecera y ni una línea. Así que se coloca a mano y se
+      // sujeta dentro de la pantalla, por debajo de la barra y sin salirse
+      // por los lados. Cuando toca sujetarlo pierde el pico, que ya no
+      // apunta a nadie.
+      if (carrete) {
+        const p = centroMio ? enPantalla(centroMio.x, centroMio.y, centroMio.h, ALTO_AVATAR + ALTO_CARRETE) : null;
+        if (!p) carrete.style.display = 'none';
+        else {
+          carrete.style.display = '';
+          const alto = carrete.offsetHeight || 90;
+          const ancho = carrete.offsetWidth || 200;
+          const arriba = 124 + alto; // 124: lo que ocupan cabecera y barra del corro
+          const sy = Math.max(p.sy, arriba);
+          const sx = Math.min(Math.max(p.sx, ancho / 2 + 10), vpW - ancho / 2 - 10);
+          carrete.classList.toggle('sujeto', sy > p.sy + 1);
+          carrete.style.transform = 'translate3d(' + Math.round(sx) + 'px,' + Math.round(sy) + 'px,0) translate(-50%,-100%)';
+        }
+      }
+      for (const v of corrosVista.values()) {
+        if (!v.globo) continue;
+        if (v.centro) sitúa(v.globo, v.centro.x, v.centro.y, v.centro.h, ALTO_AVATAR + 1.5, 120);
+        else v.globo.style.display = 'none';
       }
     }
 
@@ -3800,6 +4029,8 @@ export default function Mundo() {
       for (const id of [...otros.keys()]) quitaOtro(id);
       for (const el of nodos.values()) el.remove();
       nodos.clear();
+      quitaCarrete();
+      for (const v of corrosVista.values()) v.globo?.remove();
       for (const t in mallas) {
         for (const p of mallas[t].partes) {
           p.mesh.geometry.dispose();
@@ -4012,6 +4243,7 @@ export default function Mundo() {
   }
   function onSaleCorro() {
     pideCorro({ a: 'sale' });
+    setRegistro(false);
   }
   function onAbreCorro() {
     pideCorro({ a: 'abre', v: !corro?.ab });
@@ -4152,6 +4384,33 @@ export default function Mundo() {
         </div>
       )}
 
+      {registro && corro && (
+        <div className="ui velo" onClick={() => setRegistro(false)}>
+          <div className="hoja glass registro" onClick={(e) => e.stopPropagation()}>
+            <h2>Lo hablado en el corro</h2>
+            {!corro.h?.length ? (
+              <p>Todavía no ha dicho nadie nada. Lo que se diga aquí solo lo leéis los {corro.m.length} del corro.</p>
+            ) : (
+              <ol>
+                {corro.h.map((l) => (
+                  <li key={l.ts + '-' + l.q}>
+                    <b style={{ color: l.q === yo?.id ? 'var(--accent)' : colorNombre(l.q) }}>{l.q === yo?.id ? 'Tú' : l.n}</b>
+                    <span>{l.t}</span>
+                  </li>
+                ))}
+              </ol>
+            )}
+            <p className="nota">
+              Esto vive en la memoria del servidor mientras dure el corro y se va con él: no se guarda en ningún sitio ni queda registro. Quien entre
+              después empieza a leer desde que entra, no lo de antes.
+            </p>
+            <button className="btn-principal" onClick={() => setRegistro(false)}>
+              Cerrar
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="ui cabecera glass">
         <button className="quien" onClick={abreEditor} disabled={!presentado} aria-label="Cambiar tu nombre y tu aspecto" title="Cambiar tu nombre y tu aspecto">
           <i style={{ background: COLORES[yo?.color ?? 0] }} />
@@ -4215,6 +4474,9 @@ export default function Mundo() {
               <i className="punto" />
               <b>Corro</b>
               <span className="gente">{corro.m.map((v) => (v.id === yo?.id ? 'tú' : v.n)).join(' · ')}</span>
+              <button className="btn-sec" onClick={() => setRegistro(true)} title="Todo lo que se ha hablado desde que entraste">
+                💬 Todo{corro.h?.length ? ' · ' + corro.h.length : ''}
+              </button>
               {corro.a === yo?.id && (
                 <button
                   className="btn-sec"
