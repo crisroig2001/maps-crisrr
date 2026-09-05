@@ -139,7 +139,7 @@ try {
 }
 
 for (const v of vistas) {
-  const q = `?x=${v.x}&y=${v.y}&d=${v.d}&pol=${v.pol}&az=${v.az}&t=${v.t ?? T_MUNDO}`;
+  const q = `?x=${v.x}&y=${v.y}&d=${v.d}&pol=${v.pol}&az=${v.az}&t=${v.t ?? T_MUNDO}` + (v.extra ? '&' + v.extra : '');
   process.stdout.write(`${v.id.padEnd(20)} `);
   await page.goto(URL_APP + '/' + q, { waitUntil: 'domcontentloaded', timeout: 60000 });
   await page.waitForSelector('#lienzo', { timeout: 30000 });

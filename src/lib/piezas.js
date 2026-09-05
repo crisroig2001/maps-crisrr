@@ -37,6 +37,12 @@ export const PIEZAS = {
   'casa-d': { nombre: 'Casona', icono: '🏚️', glb: 'casa-d', mini: true, ancho: 13, cat: 'casas', solido: 5.5 },
   torre: { nombre: 'Torre', icono: '🗼', tinte: true, ancho: 5.6, cat: 'casas', solido: 2.6 },
   tienda: { nombre: 'Tienda', icono: '⛺', glb: 'tienda', mini: true, zoom: true, ancho: 5, cat: 'casas', solido: 2.2 },
+  // Geometría generada, 0 bytes de descarga. Las cuatro casas del City Kit
+  // son el mismo edificio (bloque + tejado, 8-8,8 m de alto): lo que faltaba
+  // era SILUETA, algo pequeño y algo bajo y largo. Y son tintables, que las
+  // del atlas no pueden serlo.
+  caseta: { nombre: 'Caseta', icono: '🛖', tinte: true, ancho: 5.4, cat: 'casas', solido: 2.6 },
+  cobertizo: { nombre: 'Cobertizo', icono: '🏚️', tinte: true, ancho: 8.4, cat: 'casas', solido: 3.6 },
   // árboles y plantas (Nature Kit)
   arbol: { nombre: 'Árbol', icono: '🌳', glb: 'arbol', mini: true, zoom: true, ancho: 5.5, viento: true, cat: 'naturaleza', solido: 0.6 },
   roble: { nombre: 'Roble', icono: '🌳', glb: 'roble', mini: true, zoom: true, ancho: 5, viento: true, cat: 'naturaleza', solido: 0.6 },
@@ -58,6 +64,15 @@ export const PIEZAS = {
   camino: { nombre: 'Camino', icono: '🟫', glb: 'camino', mini: true, zoom: true, ancho: 4, rejilla: true, suelo: true, cat: 'suelo' },
   puente: { nombre: 'Puente', icono: '🌉', glb: 'puente', mini: true, zoom: true, ancho: 6, rejilla: true, suelo: true, cat: 'suelo' },
   valla: { nombre: 'Valla', icono: '🪵', glb: 'valla', mini: true, zoom: true, ancho: 4, rejilla: true, cat: 'suelo' },
+  // Suelo que se DIBUJA. Antes la categoría eran tres piezas y ninguna hacía
+  // una forma: un patio de 12 × 12 eran 9 toques a la rejilla de 4 m y el 6 %
+  // del presupuesto de la parcela. Con estas es 1 toque y 1 pieza. Son
+  // geometría generada, así que TESELAN de verdad (una baldosa por cada 4 m)
+  // en vez de estirar una textura, que es lo que pasaría escalando un modelo.
+  losa: { nombre: 'Losa', icono: '⬜', tinte: true, ancho: 4, rejilla: true, suelo: true, cat: 'suelo' },
+  patio: { nombre: 'Patio', icono: '🔲', tinte: true, ancho: 8, rejilla: true, suelo: true, cat: 'suelo' },
+  'patio-g': { nombre: 'Patio grande', icono: '⬛', tinte: true, ancho: 12, rejilla: true, suelo: true, cat: 'suelo' },
+  parterre: { nombre: 'Parterre', icono: '🟤', ancho: 4, rejilla: true, suelo: true, cat: 'suelo' },
   cartel: { nombre: 'Cartel', icono: '🪧', glb: 'cartel', mini: true, zoom: true, ancho: 1.2, cat: 'jardin', solido: 0.3 }, // 1,7 m: se lee de pie
   // mobiliario (Furniture Kit) y piezas generadas
   banco: { nombre: 'Banco', icono: '🪑', glb: 'banco', mini: true, ancho: 0.95, cat: 'jardin', solido: 0.5 }, // 1,1 m con respaldo
@@ -66,6 +81,11 @@ export const PIEZAS = {
   farola: { nombre: 'Farola', icono: '💡', ancho: 1.2, cat: 'jardin', solido: 0.3 },
   fuente: { nombre: 'Fuente', icono: '⛲', ancho: 6.4, cat: 'jardin', solido: 3.4 },
   bandera: { nombre: 'Bandera', icono: '🚩', tinte: true, ancho: 2.6, cat: 'jardin' },
+  // El jardín de estar: nada de esto pedía descargar un modelo nuevo.
+  tendedero: { nombre: 'Tendedero', icono: '🧺', tinte: true, ancho: 3.5, cat: 'jardin', solido: 0.3 },
+  arenero: { nombre: 'Arenero', icono: '🏖️', ancho: 3, suelo: true, cat: 'jardin' },
+  buzon: { nombre: 'Buzón', icono: '📮', tinte: true, ancho: 0.7, cat: 'jardin', solido: 0.2 },
+  barbacoa: { nombre: 'Barbacoa', icono: '🍖', ancho: 1.2, cat: 'jardin', solido: 0.6 },
 };
 
 // Pestañas de la paleta, en su orden

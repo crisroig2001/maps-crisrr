@@ -70,6 +70,10 @@ const POSTE = new THREE.Color(0x7a828c);
 const LUZ = new THREE.Color(0xffe38f);
 const MASTIL = new THREE.Color(0xefe9dc);
 const ARENA = new THREE.Color(0xeadcb9);
+const TIERRA = new THREE.Color(0x9c7a56);
+const LOSA = new THREE.Color(0xded6c4);
+const METAL = new THREE.Color(0x8e97a2);
+const CARBON = new THREE.Color(0x4a4a52);
 const CRISTAL = new THREE.Color(0xc6e5f3);
 // pelo y piel: la variedad de los vecinos. El índice viene del perfil (y de
 // la presencia, para los demás); el color, de la paleta compartida.
@@ -459,6 +463,68 @@ function geometriaPieza(tipo) {
     prisma(F, 8, 0.45, 1.0, 2.6, PIEDRA_C);
     prisma(F, 12, 1.3, 2.6, 2.9, PIEDRA_C);
     prisma(F, 12, 1.1, 2.9, 3.0, AGUA);
+  } else if (tipo === 'caseta') {
+    // La silueta que faltaba entre la tienda (3,2 m) y las casas (6,4 m).
+    // `tejado()` llevaba desde el City Kit sin que lo llamara nadie.
+    caja(T, -2.5, 0, -2, 2.5, 2.2, 2, BLANCO);
+    tejado(F, -2.7, -2.2, 2.7, 2.2, 2.2, 3.5, 0.35, TEJA);
+    caja(F, -0.45, 0, 1.95, 0.45, 1.75, 2.1, MADERA);
+    caja(F, 1.1, 1.1, 1.95, 1.9, 1.7, 2.05, CRISTAL);
+  } else if (tipo === 'cobertizo') {
+    // Bajo y largo: lo contrario de las cuatro casas, que son todas bloque
+    // de 8 m con tejado a dos aguas.
+    caja(T, -4, 0, -1.8, 4, 2, 1.8, BLANCO);
+    tejado(F, -4.2, -2, 4.2, 2, 2, 2.9, 3.4, MADERA);
+    caja(F, -3.9, 0, 1.75, -2.6, 1.9, 1.85, MADERA);
+    caja(F, 2.6, 0, 1.75, 3.9, 1.9, 1.85, MADERA);
+  } else if (tipo === 'tendedero') {
+    // La pieza con más alma del jardín y la más barata: dos postes, tres
+    // tiras y unas cuantas cajas de ropa, que son las que se tiñen.
+    prisma(F, 6, 0.07, 0, 1.9, MADERA, 0.06, -1.7, 0);
+    prisma(F, 6, 0.07, 0, 1.9, MADERA, 0.06, 1.7, 0);
+    for (const z of [-0.18, 0, 0.18]) caja(F, -1.7, 1.82, z - 0.015, 1.7, 1.85, z + 0.015, MASTIL);
+    const ropa = [
+      [-1.35, 0.5, -0.18],
+      [-0.7, 0.62, 0],
+      [-0.05, 0.46, 0.18],
+      [0.6, 0.58, -0.18],
+      [1.2, 0.52, 0],
+    ];
+    for (const [x, alto, z] of ropa) caja(T, x - 0.26, 1.82 - alto, z - 0.02, x + 0.26, 1.8, z + 0.02, BLANCO);
+  } else if (tipo === 'arenero') {
+    caja(F, -1.5, 0, -1.5, 1.5, 0.28, 1.5, MADERA);
+    caja(F, -1.28, 0.18, -1.28, 1.28, 0.34, 1.28, ARENA);
+  } else if (tipo === 'buzon') {
+    prisma(F, 6, 0.07, 0, 1.05, MADERA, 0.06);
+    caja(T, -0.22, 1.05, -0.16, 0.22, 1.45, 0.16, BLANCO);
+    caja(F, 0.22, 1.15, -0.04, 0.34, 1.35, 0.04, TEJA);
+  } else if (tipo === 'barbacoa') {
+    prisma(F, 8, 0.34, 0, 0.75, METAL, 0.3);
+    prisma(F, 12, 0.52, 0.75, 0.92, CARBON, 0.5);
+    prisma(F, 12, 0.55, 0.92, 1.0, METAL, 0.55);
+    caja(F, 0.5, 0.9, -0.05, 1.1, 0.96, 0.05, METAL);
+  } else if (tipo === 'losa' || tipo === 'patio' || tipo === 'patio-g') {
+    // Suelo que se DIBUJA. Hasta ahora la categoría eran tres piezas y
+    // ninguna hacía una forma: un patio de 12 × 12 salían 9 toques a 4 m de
+    // rejilla y el 6 % del presupuesto de la parcela. Estas son geometría
+    // generada, así que se TESELAN de verdad (una losa por baldosa) en vez de
+    // estirar una textura, que es lo que pasaría escalando un modelo.
+    const lado = tipo === 'losa' ? 4 : tipo === 'patio' ? 8 : 12;
+    const n = lado / 4;
+    const b = lado / 2;
+    for (let i = 0; i < n; i++) {
+      for (let j = 0; j < n; j++) {
+        const x = -b + i * 4;
+        const z = -b + j * 4;
+        // junta de 12 cm y baldosas de altura ligeramente distinta: sin eso
+        // es una lámina lisa y se lee como una pegatina
+        const h = 0.1 + ((i * 3 + j * 7) % 3) * 0.012;
+        caja(T, x + 0.06, 0, z + 0.06, x + 3.94, h, z + 3.94, BLANCO);
+      }
+    }
+  } else if (tipo === 'parterre') {
+    caja(F, -2, 0, -2, 2, 0.16, 2, MADERA);
+    caja(F, -1.82, 0.1, -1.82, 1.82, 0.22, 1.82, TIERRA);
   } else if (tipo === 'bandera') {
     prisma(F, 6, 0.1, 0, 7.5, MASTIL, 0.07);
     T.pos.push(0.1, 7.4, 0, 0.1, 6.2, 0, 2.6, 6.8, 0);
@@ -706,6 +772,16 @@ export default function Mundo() {
     // no el avatar no andaría.
     const tFijo = parseFloat(params.get('t'));
     const RELOJ_FIJO = Number.isFinite(tFijo);
+    // `?muestrario=1`: en vez del mundo, TODAS las piezas del catálogo en una
+    // rejilla, por categorías y con el avatar al lado de cada fila como vara
+    // de medir. Es la única forma de ver de un golpe que el pino es 5,6 veces
+    // el avatar mientras la palmera es 2,6, o que un mueble del Furniture Kit
+    // desentona con el Nature Kit. Va por el mismo camino que el resto
+    // (`creaInstancias`), así que lo que se ve aquí es exactamente lo que se
+    // ve en el mundo: mismas luces, misma rampa, mismo ACES.
+    const MUESTRARIO = params.get('muestrario') === '1';
+    const MUESTRA_PASO = 15; // la casona mide 13 m: con menos, se pisan
+    const MUESTRA_COLS = 7;
     const jugador = perfil();
 
     // --- escena, cielo y niebla ---
@@ -1491,8 +1567,38 @@ export default function Mundo() {
     // el monte) ni en `origen` (no se puede tocar ni seleccionar: no es de
     // nadie), y la comprobación de `origen` ya iba con `?.`, así que las
     // instancias sin dueño simplemente no responden al rayo.
+    // La hoja de contactos del catálogo: cada pieza en su celda, ordenadas
+    // por categoría y en el orden del catálogo, todas con giro 0 y escala 1
+    // para que se comparen de verdad.
+    function pintaMuestrario(cont) {
+      let k = 0;
+      for (const cat of Object.keys(CATEGORIAS)) {
+        for (const t of Object.keys(PIEZAS)) {
+          if (PIEZAS[t].cat !== cat) continue;
+          const par = mallas[t];
+          if (!par) { k++; continue; }
+          const cx = (k % MUESTRA_COLS) * MUESTRA_PASO;
+          const cy = -Math.floor(k / MUESTRA_COLS) * MUESTRA_PASO;
+          const i = cont[t];
+          if (i < MAX_INST) {
+            posI.set(cx, alturaEn(cx, cy) - 0.12, -cy);
+            rotI.setFromAxisAngle(ejeY, 0);
+            escPieza.set(1, 1, 1);
+            mtx.compose(posI, rotI, escPieza);
+            for (const q of par.partes) {
+              q.mesh.setMatrixAt(i, mtx);
+              if (q.tinte) q.mesh.setColorAt(i, coloresTinte[(k * 3) % coloresTinte.length]);
+            }
+            cont[t] = i + 1;
+          }
+          k++;
+        }
+      }
+    }
+
     let campoCentro = null;
     function siembraCampo(cont) {
+      if (MUESTRARIO) return;
       const cx = Math.round(yo.x / CELDA_CAMPO);
       const cy = Math.round(yo.y / CELDA_CAMPO);
       campoCentro = { cx, cy };
@@ -1581,7 +1687,7 @@ export default function Mundo() {
           }
           marcos.setColorAt(nMarcos++, col);
         }
-        for (const z of pc.d || []) {
+        for (const z of MUESTRARIO ? [] : pc.d || []) {
           const par = mallas[z.t];
           if (!par) continue;
           const wx = bx + z.x;
@@ -1625,7 +1731,8 @@ export default function Mundo() {
       }
       // ANTES del bucle que fija los `count`: si no, las instancias del campo
       // se escriben pero no se dibujan.
-      siembraCampo(cont);
+      if (MUESTRARIO) pintaMuestrario(cont);
+      else siembraCampo(cont);
       for (const t in mallas) {
         for (const p of mallas[t].partes) {
           p.mesh.count = cont[t];
@@ -3060,7 +3167,7 @@ export default function Mundo() {
       // nos ahorramos repintar un 2048×2048.
       // El sembrado va con el avatar, y `pintaMundo` solo se dispara cuando
       // cambian los DATOS, así que hay que repintarlo al cruzar de celda.
-      if (!campoCentro || Math.abs(Math.round(yo.x / CELDA_CAMPO) - campoCentro.cx) > 0 || Math.abs(Math.round(yo.y / CELDA_CAMPO) - campoCentro.cy) > 0) {
+      if (!MUESTRARIO && (!campoCentro || Math.abs(Math.round(yo.x / CELDA_CAMPO) - campoCentro.cx) > 0 || Math.abs(Math.round(yo.y / CELDA_CAMPO) - campoCentro.cy) > 0)) {
         if (modelosListos) pintaMundo();
       }
 
