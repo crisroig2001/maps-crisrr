@@ -48,6 +48,13 @@ const NIEBLA_HASTA = 325; // satura antes de los 384 m en que se acaba el plano 
 const SUELO_M = 16 * L; // el plano del suelo que sigue al avatar: 768 m
 const RADIO_PARCELAS = 6; // se piden (2r+1)² parcelas alrededor: 13×13
 const ANCHO_PASEO = 15; // la losa del paseo es una banda, no la parcela entera
+// El sembrado del campo: fuera de lo público no había NADA, así que el mundo
+// era una pradera lisa con casas sueltas. Rejilla fija del mundo, decidida por
+// hash: no ocupa un byte en el servidor y sale igual en todas las pantallas.
+const CELDA_CAMPO = 18;
+const RADIO_CAMPO = 190;
+// Lo que crece solo. Nada de casas ni de mobiliario: esto es monte.
+const SIEMBRA = ['arbol', 'arbol', 'roble', 'pino', 'arbusto', 'arbusto', 'roca', 'rocas', 'tronco', 'flores', 'flores-amarillas', 'flores-moradas', 'setas'];
 
 const BLANCO = new THREE.Color(0xffffff);
 const TRONCO = new THREE.Color(0x8d6a4a);
@@ -1478,6 +1485,57 @@ export default function Mundo() {
     const origen = {};
     // lo que no se puede atravesar: [{x, y, r}] en metros del mundo
     let solidos = [];
+    // Siembra el campo alrededor del avatar. Va sobre las MISMAS mallas
+    // instanciadas que las piezas de los jugadores, así que no añade ni un
+    // draw call: solo instancias. No entra en `solidos` (no vas a chocarte con
+    // el monte) ni en `origen` (no se puede tocar ni seleccionar: no es de
+    // nadie), y la comprobación de `origen` ya iba con `?.`, así que las
+    // instancias sin dueño simplemente no responden al rayo.
+    let campoCentro = null;
+    function siembraCampo(cont) {
+      const cx = Math.round(yo.x / CELDA_CAMPO);
+      const cy = Math.round(yo.y / CELDA_CAMPO);
+      campoCentro = { cx, cy };
+      const n = Math.ceil(RADIO_CAMPO / CELDA_CAMPO);
+      for (let i = -n; i <= n; i++) {
+        for (let j = -n; j <= n; j++) {
+          const gx = cx + i;
+          const gy = cy + j;
+          const h = hash2(gx * 31 + 5, gy * 17 + 11);
+          // A masas y claros: una onda lenta decide dónde hay monte y dónde
+          // pradera. Sin ella sale un bosque uniforme, que es tan artificial
+          // como no tener nada.
+          const wx = (gx + hash2(gx * 3, gy * 13) - 0.5) * CELDA_CAMPO;
+          const wy = (gy + hash2(gx * 29, gy * 7) - 0.5) * CELDA_CAMPO;
+          const masa = 0.3 + 0.26 * Math.sin(wx * 0.006 + 1.1) * Math.sin(wy * 0.005 - 0.4);
+          if (h > masa) continue;
+          if (Math.hypot(wx - yo.x, wy - yo.y) > RADIO_CAMPO) continue;
+          // ni en el agua ni en su orilla, ni en lo público, ni en lo de nadie
+          if (distRio(wx, wy).d < RIO_ANCHO + 6) continue;
+          const p = parcelaDe(wx, wy);
+          const tipo = tipoParcela(p.px, p.py);
+          if (tipo !== 'campo' && tipo !== 'residencial' && tipo !== 'parque') continue;
+          const pc = parcelas.get(claveParcela(p.px, p.py));
+          if (pc && pc.o && pc.o !== 'mundo') continue; // la parcela de alguien se respeta
+          // en lo residencial, mucho más flojo: es donde la gente construye y
+          // una parcela no puede venir con un bosque puesto
+          if (tipo === 'residencial' && h > masa * 0.45) continue;
+          const t = SIEMBRA[Math.floor(hash2(gy * 101 + 3, gx * 61 + 9) * SIEMBRA.length) % SIEMBRA.length];
+          const par = mallas[t];
+          if (!par) continue;
+          const i2 = cont[t];
+          if (i2 >= MAX_INST) continue;
+          const escala = 0.85 + hash2(gx * 71, gy * 53) * 0.3;
+          posI.set(wx, alturaEn(wx, wy) - 0.12, -wy);
+          rotI.setFromAxisAngle(ejeY, hash2(gx * 13, gy * 41) * Math.PI * 2);
+          escPieza.set(escala, escala, escala);
+          mtx.compose(posI, rotI, escPieza);
+          for (const q of par.partes) q.mesh.setMatrixAt(i2, mtx);
+          cont[t] = i2 + 1;
+        }
+      }
+    }
+
     function pintaMundo() {
       const cont = {};
       for (const t in mallas) {
@@ -1565,6 +1623,9 @@ export default function Mundo() {
           cont[z.t] = i + 1;
         }
       }
+      // ANTES del bucle que fija los `count`: si no, las instancias del campo
+      // se escriben pero no se dibujan.
+      siembraCampo(cont);
       for (const t in mallas) {
         for (const p of mallas[t].partes) {
           p.mesh.count = cont[t];
@@ -2997,6 +3058,12 @@ export default function Mundo() {
       // avatar no se desplace: andar, un gesto o un brinco. Si nada de eso
       // pasa y nadie se ha movido, la sombra del fotograma anterior vale y
       // nos ahorramos repintar un 2048×2048.
+      // El sembrado va con el avatar, y `pintaMundo` solo se dispara cuando
+      // cambian los DATOS, así que hay que repintarlo al cruzar de celda.
+      if (!campoCentro || Math.abs(Math.round(yo.x / CELDA_CAMPO) - campoCentro.cx) > 0 || Math.abs(Math.round(yo.y / CELDA_CAMPO) - campoCentro.cy) > 0) {
+        if (modelosListos) pintaMundo();
+      }
+
       if (yo.andando || yo.gesto) pideSombras();
       else for (const o of otros.values()) {
         if (o.o.andando || o.o.gesto) { pideSombras(); break; }
