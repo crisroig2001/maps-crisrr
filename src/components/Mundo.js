@@ -19,7 +19,7 @@ import { PARCELA_M, parcelaDe, claveParcela, parseParcela, centroParcela } from 
 import { PIEZAS, CATEGORIAS, COLORES, PELOS, PIELES, MAX_PIEZAS, MAX_NOMBRE, MAX_MENSAJE, MENSAJE_MS, EMOTES, limpiaMensaje } from '../lib/piezas';
 import { perfil, guardaPerfil, gustaVisto, guardaGustaVisto, silenciados, silencia, quitaSilencio } from '../lib/jugador';
 import { CORRO_MAX, CORRO_CERCA_M, CORRO_AVISO_M, CORRO_LINEAS_VISTA } from '../lib/corro';
-import { tipoParcela, conSuelo, cauce, distRio, rioEsteX as rioEsteXEnEscena, rioSurY as rioSurYEnEscena, GLSL_CAUCE, RIO_ANCHO, NIVEL_AGUA, LECHO, BANDA_AGUA } from '../lib/paisaje';
+import { tipoParcela, conSuelo, cauce, distRio, rioEsteX as rioEsteXEnEscena, rioSurY as rioSurYEnEscena, GLSL_CAUCE, GLSL_FLUJO, RIO_ANCHO, NIVEL_AGUA, LECHO, BANDA_AGUA } from '../lib/paisaje';
 const LECHO_G = LECHO.toFixed(1);
 
 const L = PARCELA_M;
@@ -42,7 +42,8 @@ const HEMI_FUERZA = 1.55;
 const CIELO_CENIT = 0x248fd5;
 const CIELO_HORIZONTE = 0xcaf0fe;
 const CIELO_CALIMA = 0xd8eeff;
-const CIELO_NUBES = 0xffe5c4;
+const CIELO_NUBES = 0xfff1dc; // la coronilla, la que mira al sol
+const CIELO_NUBES_SOMBRA = 0xc3c8dd; // la panza, que solo ve el cielo y la hierba
 const NIEBLA = 0xd8eeff;
 const NIEBLA_DESDE = 60;
 const NIEBLA_HASTA = 325; // satura antes de los 384 m en que se acaba el plano del suelo
@@ -83,8 +84,8 @@ const PIELES_3D = PIELES.map((h) => new THREE.Color(h));
 const dePaleta = (paleta, i) => paleta[Number.isInteger(i) && i >= 0 && i < paleta.length ? i : 0];
 const OJO = new THREE.Color(0x2b3440);
 const PANTALON = new THREE.Color(0x56637a);
-const NUBE = new THREE.Color(0xffffff);
-const NUBE_SOMBRA = new THREE.Color(0xdfe3f5);
+const NUBE = new THREE.Color(0xfffaf0); // igual que la coronilla de la cúpula
+const NUBE_SOMBRA = new THREE.Color(0xbcc5df); // ... y la panza
 
 const MAX_INST = 3000; // instancias por parte de pieza en el mundo cargado
 const MAX_HIERBA = 3000;
@@ -570,19 +571,47 @@ function geometriaPierna() {
   esfera(g, 0, -0.29, 0, 0.12, PANTALON, 2.6, 6);
   return aGeo(g);
 }
-// una nube: varias esferas aplastadas, blancas arriba y lavanda abajo
+// Una nube: bolas aplastadas, iluminadas como las de la cúpula (coronilla
+// al sol, panza en sombra de cielo), en dos pisos.
+// El piso de abajo es ancho y de bolas grandes: es la BASE PLANA que tiene
+// un cúmulo de verdad. Encima, bolas más pequeñas y hacia el sol, que es lo
+// que le da la coliflor. Con un solo piso de bolas del mismo tamaño la nube
+// era un montón de albóndigas: ni base ni copete.
 function geometriaNube(rnd) {
   const g = nuevaGeo();
-  const n = 4 + Math.floor(rnd() * 3);
-  for (let i = 0; i < n; i++) {
-    const r = 6 + rnd() * 7;
-    // Antes el color alternaba por ÍNDICE (i % 2) y salía una salchicha a
-    // franjas a lo largo, aunque el comentario dijera «blancas arriba y
-    // lavanda abajo». Ahora va por la altura de la normal, que es lo que
-    // decía. Y se reparten en volumen, no en fila.
-    esfera(g, (i - n / 2) * 6 + rnd() * 5, rnd() * 3, rnd() * 8 - 4, r, NUBE, 0.55, 8, NUBE_SOMBRA);
+  const largo = 16 + rnd() * 12;
+  const nBase = 4 + Math.floor(rnd() * 3);
+  for (let i = 0; i < nBase; i++) {
+    const u = (i + 0.5) / nBase - 0.5; // -0,5 .. 0,5 a lo largo
+    const r = (7.5 + rnd() * 3.5) * (1 - u * u * 0.9); // las de los extremos, menores
+    esferaNube(g, u * largo + (rnd() - 0.5) * 3, rnd() * 1.2, (rnd() - 0.5) * 7, r, 0.5);
+  }
+  const nAlto = 2 + Math.floor(rnd() * 3);
+  for (let i = 0; i < nAlto; i++) {
+    const u = (rnd() - 0.5) * 0.62;
+    const r = 5 + rnd() * 3.5;
+    esferaNube(g, u * largo, 3.5 + rnd() * 2.5, (rnd() - 0.5) * 4, r, 0.62);
   }
   return aGeo(g);
+}
+// Una bola de nube. El color no sale solo de mirar hacia arriba: se mezcla
+// con lo que le da el SOL, así que la cara suroeste se calienta y la noreste
+// se queda fría, igual que en la cúpula. Sin esto las dos familias de nube
+// —la banda pintada y estas— no contaban la misma tarde.
+function esferaNube(g, cx, cy, cz, r, sy) {
+  const base = nuevaGeo();
+  esfera(base, cx, cy, cz, r, NUBE, sy, 9);
+  const n = base.nor;
+  for (let i = 0; i < base.pos.length; i += 3) {
+    g.pos.push(base.pos[i], base.pos[i + 1], base.pos[i + 2]);
+    g.nor.push(n[i], n[i + 1], n[i + 2]);
+    const arriba = n[i + 1] * 0.5 + 0.5;
+    const alSol = Math.max(0, n[i] * SOL.x + n[i + 1] * SOL.y + n[i + 2] * SOL.z);
+    // dos escalones suaves, como la rampa toon del resto del mundo
+    const t = Math.min(1, arriba * 0.45 + alSol * 0.75);
+    const c = NUBE_SOMBRA.clone().lerp(NUBE, t * t * (3 - 2 * t));
+    g.col.push(c.r, c.g, c.b);
+  }
 }
 
 // color de dueño a partir del id: para pintar de quién es cada parcela sin
@@ -868,6 +897,13 @@ export default function Mundo() {
         }
         cumulos.push(bolas);
       }
+      // Tres pasadas, de la más baja y grande a la más alta y pequeña. El
+      // valor del canal NO es opacidad: es «cuánta luz le da». La pasada
+      // ancha y oscura pone la SILUETA (y con ella la panza en sombra), la
+      // media el cuerpo y la estrecha, subida hacia el sol, la coronilla
+      // iluminada. El shader las separa: el borde de la silueta decide dónde
+      // hay nube y el valor decide de qué color es. Antes las tres se
+      // aplastaban en una sola opacidad y el cúmulo salía de un color liso.
       const pinta = (color, dy, esc) => {
         for (const bolas of cumulos) {
           for (const b of bolas) {
@@ -883,8 +919,9 @@ export default function Mundo() {
           }
         }
       };
-      pinta('rgba(140,140,140,1)', 6, 1.08);
-      pinta('rgba(255,255,255,1)', 0, 1);
+      pinta('rgba(105,105,105,1)', 9, 1.12); // panza
+      pinta('rgba(190,190,190,1)', 2, 1.0); // cuerpo
+      pinta('rgba(255,255,255,1)', -6, 0.86); // coronilla, hacia el sol
       // la base de todos los cúmulos se funde con la calima del horizonte
       const base = c.createLinearGradient(0, H - 26, 0, H);
       base.addColorStop(0, 'rgba(255,255,255,0)');
@@ -906,6 +943,7 @@ export default function Mundo() {
         cHorizonte: { value: new THREE.Color(CIELO_HORIZONTE) },
         cCalima: { value: new THREE.Color(CIELO_CALIMA) },
         cNubes: { value: new THREE.Color(CIELO_NUBES) },
+        cNubeSombra: { value: new THREE.Color(CIELO_NUBES_SOMBRA) },
         uSol: { value: SOL },
       },
       vertexShader: `
@@ -921,6 +959,7 @@ export default function Mundo() {
         uniform vec3 cHorizonte;
         uniform vec3 cCalima;
         uniform vec3 cNubes;
+        uniform vec3 cNubeSombra;
         uniform vec3 uSol;
         varying vec3 vDir;
         float ajusta(float v, float a, float b) { return clamp((v - a) / (b - a), 0.0, 1.0); }
@@ -929,15 +968,35 @@ export default function Mundo() {
           float t = ajusta(d.y, -0.2, 0.35);
           t = t < 0.5 ? 2.0 * t * t : -1.0 + (4.0 - 2.0 * t) * t;
           vec3 color = mix(cHorizonte, cCenit, t);
-          // los cúmulos: la franja va del horizonte a unos 18 grados, y gira
+          // Los cúmulos: la franja va del horizonte a unos 18 grados, y gira.
+          // El valor de la textura NO es opacidad: es cuánta luz le da a esa
+          // parte del cúmulo. De ahí salen DOS cosas distintas, que es lo
+          // que le da volumen: cob (dónde hay nube) sale del borde de la
+          // silueta, y luz (de qué color) del valor dentro de ella. Antes
+          // las dos eran el mismo número, así que un cúmulo era una mancha
+          // de un solo color: ni panza ni coronilla.
           float v = ajusta(d.y, -0.03, 0.32);
           float u = atan(d.z, d.x) / 6.2831853 * 2.0 + tiempo * 0.0012;
           u += sin(v * 7.0 + tiempo * 0.03) * 0.004;
           float limites = smoothstep(0.0, 0.03, v) * smoothstep(1.0, 0.97, v);
-          float nubes = texture2D(tNubes, vec2(u, v)).r * limites;
-          float e = 1.0 - nubes;
-          nubes = 1.0 - e * e * e;
-          color = mix(color, cNubes, nubes);
+          float t0 = texture2D(tNubes, vec2(u, v)).r;
+          float cob = smoothstep(0.03, 0.30, t0) * limites;
+          float luz = smoothstep(0.34, 0.86, t0);
+          // La panza mira al suelo y le llega el verde rebotado; la coronilla
+          // mira al sol. Y el cúmulo que está DEL LADO del sol se calienta
+          // entero: es lo que hace que el cielo sepa dónde tiene la tarde.
+          float azN = dot(normalize(d.xz), normalize(uSol.xz));
+          vec3 cn = mix(cNubeSombra, cNubes, luz);
+          cn = mix(cn, cn * vec3(1.06, 1.01, 0.94), max(azN, 0.0) * 0.8);
+          color = mix(color, cn, cob);
+          // Una segunda capa, más alta, más fina y más lenta: cirros. Sin
+          // ella el cielo tiene UNA banda de nubes y encima nada, y se lee
+          // como un telón. Es el mismo mapa a otra escala, así que no cuesta
+          // ni una textura más.
+          float vC = ajusta(d.y, 0.16, 0.62);
+          float tC = texture2D(tNubes, vec2(u * 0.45 + 0.37, vC * 0.8 + 0.2)).r;
+          float cirro = smoothstep(0.30, 0.75, tC) * smoothstep(0.0, 0.25, vC) * smoothstep(1.0, 0.75, vC) * 0.30;
+          color = mix(color, mix(cNubeSombra, cNubes, 0.85), cirro);
           // La silueta del horizonte. Entre el suelo, que se desvanece en la
           // niebla, y la banda de cúmulos no había NADA: dos capas de lectura
           // y un hueco en medio. Esto son dos crestas pintadas en la cúpula
@@ -1165,14 +1224,62 @@ export default function Mundo() {
           if (distRioG(wpa.x, -wpa.z) > ${BANDA_AGUA.toFixed(1)}) transformed.y -= 60.0;`
         );
       sh.fragmentShader = sh.fragmentShader
-        .replace('#include <common>', '#include <common>\nuniform float tiempo;\nuniform vec3 uSol;\nvarying vec2 vXZ;\n' + GLSL_ALTURA)
+        .replace('#include <common>', '#include <common>\nuniform float tiempo;\nuniform vec3 uSol;\nvarying vec2 vXZ;\nvec3 nOlas;\n' + GLSL_RUIDO + GLSL_ALTURA + GLSL_FLUJO)
         .replace(
           '#include <color_fragment>',
           `#include <color_fragment>
           float prof = ${NIVEL_AGUA.toFixed(2)} - altura(vXZ);
-          vec3 someroC = vec3(0.42, 0.78, 0.80);
-          vec3 hondoC = vec3(0.10, 0.36, 0.62);
+          // Más oscuras que antes a propósito: sobre esto caen el sol (2,9)
+          // y el cielo (1,55) y luego ACES, así que un turquesa ya claro
+          // salía lavado. Lo que da el brillo son las crestas, no el fondo.
+          vec3 someroC = vec3(0.26, 0.63, 0.68);
+          vec3 hondoC = vec3(0.05, 0.24, 0.46);
           diffuseColor.rgb = mix(someroC, hondoC, smoothstep(0.0, 1.8, prof));
+          // El rizado. Se calcula EN COORDENADAS DEL RÍO: a lo largo va la
+          // corriente y a lo ancho el vaivén, así que las ondas siguen al
+          // cauce en vez de cruzarlo en diagonal como si fuera un mar.
+          vec2 flujo = flujoRio(vXZ.x, -vXZ.y);
+          vec2 cruz = vec2(-flujo.y, flujo.x);
+          float sL = dot(vXZ, flujo);
+          float sT = dot(vXZ, cruz);
+          // Tres ondas de longitudes que no son múltiplos unas de otras, con
+          // la fase y la fuerza DESORDENADAS POR RUIDO. Sin el ruido, tres
+          // senos puros vuelven a coincidir cada pocos metros y el río sale
+          // a escamas: da igual lo finas que se hagan las ondas, el ojo pilla
+          // la rejilla enseguida. El ruido va con el tiempo, así que además
+          // de romper el patrón hace que el rizado respire — unos tramos se
+          // encrespan y otros se calman, como un río de verdad.
+          float n1 = ruido(vXZ * 0.20 + vec2(tiempo * 0.07, tiempo * 0.03));
+          float n2 = ruido(vXZ * 0.07 + vec2(11.0 - tiempo * 0.05, 4.0));
+          float alabeo = (n1 - 0.5) * 7.0;
+          float fuerza = 0.45 + n2 * 1.1;
+          float f1 = sL * 2.4 + alabeo - tiempo * 2.6;
+          float f2 = sL * 4.3 + sT * 1.5 + alabeo * 0.7 - tiempo * 4.4;
+          float f3 = sT * 3.1 + sL * 0.9 - alabeo * 0.5 + tiempo * 2.0;
+          // la pendiente de la ola: derivada cerrada, sin muestrear nada
+          vec2 grad = (flujo * (0.048 * cos(f1) + 0.043 * cos(f2) + 0.012 * cos(f3)) + cruz * (0.015 * cos(f2) + 0.042 * cos(f3))) * fuerza;
+          vec3 Nr = normalize(vec3(-grad.x, 1.0, -grad.y));
+          nOlas = Nr;
+          // Lo que hace que el agua se lea DESDE ARRIBA: no el reflejo (que
+          // desde el cenit no existe) sino la pendiente CONTRA EL SOL. La
+          // cara de la ola que mira al suroeste se aclara y la de atrás se
+          // apaga, y como es un escalón y no un degradado, sale el rizado a
+          // bandas de un dibujo animado. Antes las olas solo movían el
+          // specular y el fresnel, los dos casi cero mirando hacia abajo:
+          // el río era una lámina de plástico azul.
+          float pend = dot(Nr.xz, normalize(uSol.xz));
+          // El rizado se apaga con la distancia. De cerca es detalle; a 150 m
+          // una onda mide menos de un píxel y lo que llega no es una ola, es
+          // ruido que hierve. Así el río de lejos vuelve a ser una cinta
+          // limpia y de cerca tiene superficie.
+          float det = mix(1.0, 0.30, smoothstep(50.0, 170.0, vFogDepth));
+          float cresta = smoothstep(-0.030, 0.040, pend);
+          diffuseColor.rgb *= mix(1.0, mix(0.87, 1.13, cresta), det);
+          // Y en lo más empinado de la cresta, el destello. Va con el MISMO
+          // ruido que desordena la ola, así que sale a rachas —unas olas
+          // brillan y otras no— en vez de encenderse todas a la vez, que es
+          // lo que lo hacía parecer un plástico de burbujas.
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.86, 0.96, 1.0), smoothstep(0.058, 0.084, pend) * smoothstep(0.5, 0.82, n1) * det * 0.5);
           // espuma: una banda en el primer palmo de agua, con el borde
           // rompiéndose despacio para que no sea una línea de goma
           float borde = 0.10 + 0.06 * sin(vXZ.x * 0.7 + tiempo * 0.8) + 0.05 * sin(vXZ.y * 0.9 - tiempo * 0.6);
@@ -1189,20 +1296,22 @@ export default function Mundo() {
             // cada 8 m y el río mide 18 m de banda, así que las olas del
             // vertex shader (lambda 15,6 y 12,6 m) van por debajo de Nyquist
             // y lo que se veía no era una ola, era aliasing en movimiento.
-            // Derivada cerrada de dos senos de lambda 4-8 m, por píxel.
-            float a1 = vXZ.x * 0.8 + vXZ.y * 0.45 + tiempo * 1.6;
-            float a2 = vXZ.x * 0.35 - vXZ.y * 1.1 - tiempo * 1.1;
-            vec3 N = normalize(vec3(-(0.05 * 0.8 * cos(a1) + 0.04 * 0.35 * cos(a2)), 1.0, -(0.05 * 0.45 * cos(a1) - 0.04 * 1.1 * cos(a2))));
+            // La normal es la MISMA que la del rizado de arriba (nOlas), que
+            // si no el brillo iba por un lado y el dibujo de la ola por otro.
             vec3 wp = vec3(vXZ.x, ${NIVEL_AGUA.toFixed(2)}, vXZ.y);
             vec3 V = normalize(cameraPosition - wp);
             vec3 H = normalize(normalize(uSol) + V);
             // el step() es lo que lo hace cartoon: un brillo con borde, no un
             // degradado de plástico
-            float esp = step(0.55, pow(max(dot(N, H), 0.0), 60.0));
-            // fresnel contra un color de horizonte constante: acotado a 0,6
-            // porque si domina, el agua pierde sus dos bandas toon
-            float F = min(0.6, 0.02 + 0.98 * pow(1.0 - max(dot(N, V), 0.0), 5.0));
-            gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(0.79, 0.92, 1.0), F * gl_FragColor.a);
+            float esp = step(0.55, pow(max(dot(nOlas, H), 0.0), 60.0));
+            // Fresnel contra un color de horizonte constante. Acotado a 0,42
+            // y contra un azul de cielo, no contra un blanco: con el tope en
+            // 0,6 y (0.79,0.92,1.0), mirando el río de canto —que es como se
+            // ve andando— el 60 % de la superficie era ese casi blanco y el
+            // agua se quedaba en una lámina gris. Un río visto de lejos SÍ se
+            // aclara, pero tiene que seguir siendo azul.
+            float F = min(0.42, 0.02 + 0.98 * pow(1.0 - max(dot(nOlas, V), 0.0), 5.0));
+            gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(0.60, 0.80, 0.95), F * gl_FragColor.a);
             gl_FragColor.rgb += esp * 0.5 * gl_FragColor.a;
           }`
         );
