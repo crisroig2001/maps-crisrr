@@ -2335,9 +2335,18 @@ export default function Mundo() {
     // La pieza seleccionada: {clave, z}. Se selecciona tocándola, y la recién
     // colocada queda seleccionada para poder ajustarla al momento.
     let seleccion = null;
+    // El anillo se dibujaba con `depthTest: false`, así que su arco de detrás
+    // se pintaba POR ENCIMA de la casa que rodea: se veía una elipse azul
+    // cruzando la fachada. Con la prueba de profundidad puesta, ese arco queda
+    // detrás del edificio, que es lo que dice dónde está la pieza. No
+    // desaparece dentro del muro porque el radio (ancho × 0,6 + 0,4) deja
+    // 1,4 m de margen por fuera de la planta de una casa de 10 m.
+    // Y con `conAltura` se dobla con la colina en vez de quedarse plano a la
+    // altura del centro: por eso la posición en y es un dedo sobre CERO, y la
+    // altura la pone el vertex shader.
     const anillo = new THREE.Mesh(
-      new THREE.RingGeometry(0.82, 1, 48),
-      new THREE.MeshBasicMaterial({ color: 0x2f6fed, transparent: true, opacity: 0.9, side: THREE.DoubleSide, depthTest: false })
+      new THREE.RingGeometry(0.84, 1, 64),
+      conAltura(new THREE.MeshBasicMaterial({ color: 0x2f6fed, transparent: true, opacity: 0.85, side: THREE.DoubleSide, depthWrite: false }))
     );
     anillo.rotation.x = -Math.PI / 2;
     anillo.renderOrder = 3;
@@ -2354,7 +2363,7 @@ export default function Mundo() {
       const wx = p.px * L + seleccion.z.x;
       const wy = p.py * L + seleccion.z.y;
       const a = ((PIEZAS[seleccion.z.t]?.ancho || 3) * 0.6) + 0.4;
-      anillo.position.set(wx, alturaEn(wx, wy) + 0.25, -wy);
+      anillo.position.set(wx, 0.09, -wy);
       anillo.scale.set(a, a, 1);
       anillo.visible = true;
     }
