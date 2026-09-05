@@ -62,7 +62,25 @@ servidor solo guarda qué hay en cada parcela y quién anda cerca.
   al pasar (vertex shader, instanciada a rodales de ruido en una rejilla fija
   del mundo alrededor del avatar, y encogiéndose con la distancia a la cámara
   hasta desaparecer: a 70 m una mata ocupa dos píxeles y lo que se ve no es
-  hierba, es un rascado que hierve al andar), copas que se mecen (el viento
+  hierba, es un rascado que hierve al andar). La mata son **pocas hojas y
+  anchas, con la punta roma**, y el filo lo **suaviza la GPU** con
+  `alphaToCoverage`: el `alphaTest` recorta a tijera y el MSAA del lienzo no
+  lo arregla, porque el multisample solo ve los bordes de la geometría y el de
+  una hoja está dentro de un quad; pasando la alfa a la máscara de cobertura
+  del propio MSAA el borde sale suave sin ordenar transparencias ni un pase
+  más. Con la fórmula que trae three (un smoothstep de `alphaTest` a
+  `alphaTest + fwidth`) no vale: reparte el medio tono por TODA la hoja cuando
+  la hoja mide cuatro píxeles y encima la adelgaza, así que escarchaba las
+  puntas de blanco. La de aquí convierte la alfa en **distancia al borde en
+  píxeles** y la recorta, y la hoja conserva su grosor. Y ninguna fórmula
+  salva una hoja que baja del píxel: por eso son pocas y gordas, y por eso la
+  textura va **un punto más oscura** de lo que pide el ojo, que al suavizar,
+  el píxel del filo se mezcla con el suelo —más claro— y la mata entera sube
+  de valor. Sin MSAA en el lienzo no se activa nada de esto. Cada mata lleva
+  además **su verde y su silueta**: el color sale de un hash de dónde está,
+  como las copas, y a la mitad se les da la vuelta a la textura, porque el
+  giro por instancia no disimula que una mata girada 180° sigue siendo el
+  mismo dibujo. Copas que se mecen (el viento
   estaba escrito y calibrado desde hacía tiempo,
   pero solo lo llevaba la bandera), **variación por instancia** —giro de ±22°,
   escala de 0,88 a 1,12 y el VERDE de cada copa, en brillo y en matiz, sacados
