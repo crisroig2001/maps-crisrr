@@ -184,7 +184,7 @@ function conNiebla(mat) {
 //   cesped: el verde del suelo se calcula aquí con ruido a varias escalas
 //          (dos verdes a manchas grandes, calvas más claras y matas más
 //          oscuras), como el terreno de la referencia
-function conAltura(mat, { tinta = false, viento = false, normales = false, nubes = false, cesped = false, pie = false } = {}) {
+function conAltura(mat, { tinta = false, viento = false, normales = false, nubes = false, cesped = false, pie = false, rio = false } = {}) {
   mat.onBeforeCompile = (sh) => {
     sh.uniforms.tiempo = uTiempo;
     sh.uniforms.tNubes = uNubes;
@@ -229,7 +229,10 @@ function conAltura(mat, { tinta = false, viento = false, normales = false, nubes
         }`
       );
     sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', '#include <common>\nuniform float tiempo;\nuniform sampler2D tNubes;\nvarying float vAltura;\nvarying vec2 vMundoXZ;' + (cesped ? GLSL_RUIDO : ''))
+      .replace(
+        '#include <common>',
+        '#include <common>\nuniform float tiempo;\nuniform sampler2D tNubes;\nvarying float vAltura;\nvarying vec2 vMundoXZ;' + (cesped || rio ? GLSL_RUIDO : '') + (tinta || rio ? GLSL_CAUCE : '')
+      )
       // la hierba es de doble cara y three le da la vuelta a la normal en
       // la cara trasera: la mitad de cada mata salía a oscuras. La normal
       // se queda mirando arriba, se vea por donde se vea.
@@ -237,6 +240,13 @@ function conAltura(mat, { tinta = false, viento = false, normales = false, nubes
       .replace(
         '#include <color_fragment>',
         `#include <color_fragment>
+        ${
+          // `tipoParcela` mira `paseo` ANTES que `rio`, así que 3/0, 4/0 y
+          // 5/0 salen «paseo» aunque el río las cruce: había piedra beige
+          // bajando el talud y tapizando el lecho a los dos lados del puente.
+          // El borde se rompe con ruido para que no sea un recorte de tijera.
+          rio ? 'if (cauce(vMundoXZ.x, -vMundoXZ.y) > 0.10 + ruido(vMundoXZ * 0.5) * 0.10) discard;' : ''
+        }
         ${
           cesped
             ? `float rA = ruido(vMundoXZ * 0.03);
@@ -249,7 +259,25 @@ function conAltura(mat, { tinta = false, viento = false, normales = false, nubes
                diffuseColor.rgb *= cesped;`
             : ''
         }
-        ${tinta ? 'diffuseColor.rgb *= mix(vec3(0.86, 0.93, 0.8), vec3(1.06, 1.04, 0.92), clamp((vAltura - 0.2) / 3.0, 0.0, 1.0)); diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.78, 0.72, 0.55), clamp((-0.2 - vAltura) / 2.0, 0.0, 1.0));' : ''}
+        ${
+          tinta
+            ? `// lo alto se aclara y lo bajo se apaga: eso se queda
+               diffuseColor.rgb *= mix(vec3(0.86, 0.93, 0.8), vec3(1.06, 1.04, 0.92), clamp((vAltura - 0.2) / 3.0, 0.0, 1.0));
+               // La arena iba por ALTURA ABSOLUTA (bajo y = -0,2), y como la
+               // pradera baja hasta -0,85 sin que haya río, salían manchas
+               // amarillentas por el campo lejos de cualquier agua: el 6,2 %
+               // del terreno sin cauce. Ahora va por lo que de verdad la
+               // explica: estar cerca del NIVEL DEL AGUA *y* dentro del
+               // cauce. El factor de cauce no es decorativo — sin él, cada
+               // hondonada de la pradera dispararía la arena igual que antes.
+               float cSuelo = cauce(vMundoXZ.x, -vMundoXZ.y);
+               float sob = vAltura - ${NIVEL_AGUA.toFixed(2)};
+               float arena = (1.0 - smoothstep(0.0, 1.1, sob)) * smoothstep(0.02, 0.15, cSuelo);
+               diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.80, 0.74, 0.57), arena);
+               // y el fondo del río, limo: más oscuro y menos saturado
+               diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.44, 0.46, 0.36), (1.0 - smoothstep(-0.6, 0.05, sob)) * smoothstep(0.02, 0.2, cSuelo));`
+            : ''
+        }
         ${
           // La mata se oscurece hacia la base: sin eso, 3.000 quads con el
           // mismo tono de arriba abajo flotan un dedo sobre el suelo. Es el
@@ -268,7 +296,7 @@ function conAltura(mat, { tinta = false, viento = false, normales = false, nubes
       );
     parcheaNiebla(sh);
   };
-  mat.customProgramCacheKey = () => 'altura' + (tinta ? 't' : '') + (viento ? 'v' : '') + (normales ? 'n' : '') + (nubes ? 'c' : '') + (cesped ? 'g' : '') + (pie ? 'p' : '');
+  mat.customProgramCacheKey = () => 'altura' + (tinta ? 't' : '') + (viento ? 'v' : '') + (normales ? 'n' : '') + (nubes ? 'c' : '') + (cesped ? 'g' : '') + (pie ? 'p' : '') + (rio ? 'r' : '');
   return mat;
 }
 // Las copas se mecen: un vaivén lento proporcional a la altura sobre el
@@ -958,18 +986,72 @@ export default function Mundo() {
     // El terreno se hunde bajo el río (cauce), así que el plano solo se ve
     // donde el suelo queda por debajo: en los ríos. Unas olas pequeñas en el
     // vertex shader para que no sea una lámina muerta.
-    const matAgua = new THREE.MeshToonMaterial({ color: 0x6db9e6, gradientMap: rampa, transparent: true, opacity: 0.86 });
+    // El agua sabe lo HONDA que es. `altura()` es la misma función que levanta
+    // el terreno, así que restándola al nivel del agua sale la profundidad en
+    // metros, por píxel y sin ningún pase extra ni depth buffer. De ahí sale
+    // todo: el color (turquesa en la orilla, azul en el centro), la ESPUMA, y
+    // sobre todo la opacidad — poniéndola a 0 en la orilla, la arista dura
+    // contra el terreno se disuelve sola, que es el «depth-based softening»
+    // sin buffer de profundidad. Y no hace falta salir de MeshToonMaterial:
+    // `diffuseColor` se inicializa como vec4(diffuse, opacity), así que
+    // escribiendo `.a` dentro de <color_fragment> hay opacidad por píxel y
+    // `parcheaNiebla` sigue intacto.
+    const matAgua = new THREE.MeshToonMaterial({ color: 0x6db9e6, gradientMap: rampa, transparent: true, opacity: 1 });
     matAgua.onBeforeCompile = (sh) => {
       sh.uniforms.tiempo = uTiempo;
+      sh.uniforms.uSol = { value: SOL };
       sh.vertexShader = sh.vertexShader
-        .replace('#include <common>', '#include <common>\nuniform float tiempo;\n' + GLSL_CAUCE)
+        .replace('#include <common>', '#include <common>\nuniform float tiempo;\nvarying vec2 vXZ;\n' + GLSL_CAUCE)
         .replace(
           '#include <begin_vertex>',
           `#include <begin_vertex>
           vec4 wpa = modelMatrix * vec4(transformed, 1.0);
+          vXZ = wpa.xz;
           transformed.y += sin(tiempo * 1.4 + wpa.x * 0.35 + wpa.z * 0.2) * 0.07 + sin(tiempo * 0.9 - wpa.z * 0.5) * 0.05;
           // fuera de la banda del río, el agua se hunde: no hay lagos en los valles
           if (distRioG(wpa.x, -wpa.z) > ${BANDA_AGUA.toFixed(1)}) transformed.y -= 60.0;`
+        );
+      sh.fragmentShader = sh.fragmentShader
+        .replace('#include <common>', '#include <common>\nuniform float tiempo;\nuniform vec3 uSol;\nvarying vec2 vXZ;\n' + GLSL_ALTURA)
+        .replace(
+          '#include <color_fragment>',
+          `#include <color_fragment>
+          float prof = ${NIVEL_AGUA.toFixed(2)} - altura(vXZ);
+          vec3 someroC = vec3(0.42, 0.78, 0.80);
+          vec3 hondoC = vec3(0.10, 0.36, 0.62);
+          diffuseColor.rgb = mix(someroC, hondoC, smoothstep(0.0, 1.8, prof));
+          // espuma: una banda en el primer palmo de agua, con el borde
+          // rompiéndose despacio para que no sea una línea de goma
+          float borde = 0.10 + 0.06 * sin(vXZ.x * 0.7 + tiempo * 0.8) + 0.05 * sin(vXZ.y * 0.9 - tiempo * 0.6);
+          float espuma = smoothstep(borde + 0.16, borde, prof) * smoothstep(0.0, 0.04, prof);
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.93, 0.98, 1.0), espuma * 0.85);
+          // el 0 en la orilla es lo que disuelve la arista contra el terreno
+          diffuseColor.a = mix(0.0, 0.95, smoothstep(0.0, 1.2, prof));`
+        )
+        .replace(
+          '#include <opaque_fragment>',
+          `#include <opaque_fragment>
+          {
+            // Olas EN EL FRAGMENT, no en el vertex: el plano tiene un vértice
+            // cada 8 m y el río mide 18 m de banda, así que las olas del
+            // vertex shader (lambda 15,6 y 12,6 m) van por debajo de Nyquist
+            // y lo que se veía no era una ola, era aliasing en movimiento.
+            // Derivada cerrada de dos senos de lambda 4-8 m, por píxel.
+            float a1 = vXZ.x * 0.8 + vXZ.y * 0.45 + tiempo * 1.6;
+            float a2 = vXZ.x * 0.35 - vXZ.y * 1.1 - tiempo * 1.1;
+            vec3 N = normalize(vec3(-(0.05 * 0.8 * cos(a1) + 0.04 * 0.35 * cos(a2)), 1.0, -(0.05 * 0.45 * cos(a1) - 0.04 * 1.1 * cos(a2))));
+            vec3 wp = vec3(vXZ.x, ${NIVEL_AGUA.toFixed(2)}, vXZ.y);
+            vec3 V = normalize(cameraPosition - wp);
+            vec3 H = normalize(normalize(uSol) + V);
+            // el step() es lo que lo hace cartoon: un brillo con borde, no un
+            // degradado de plástico
+            float esp = step(0.55, pow(max(dot(N, H), 0.0), 60.0));
+            // fresnel contra un color de horizonte constante: acotado a 0,6
+            // porque si domina, el agua pierde sus dos bandas toon
+            float F = min(0.6, 0.02 + 0.98 * pow(1.0 - max(dot(N, V), 0.0), 5.0));
+            gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(0.79, 0.92, 1.0), F * gl_FragColor.a);
+            gl_FragColor.rgb += esp * 0.5 * gl_FragColor.a;
+          }`
         );
       parcheaNiebla(sh);
     };
@@ -1312,7 +1394,7 @@ export default function Mundo() {
     scene.add(marcos);
     const plazas = new THREE.InstancedMesh(
       geoParcela,
-      conAltura(new THREE.MeshToonMaterial({ color: 0xdfd0b2, gradientMap: rampa }), { normales: true, nubes: true }),
+      conAltura(new THREE.MeshToonMaterial({ color: 0xdfd0b2, gradientMap: rampa }), { normales: true, nubes: true, rio: true }),
       MAX_PARC
     );
     plazas.count = 0;
