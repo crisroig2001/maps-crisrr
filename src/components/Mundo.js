@@ -1218,7 +1218,7 @@ export default function Mundo() {
         if (p.tinte) m.setColorAt(0, BLANCO); // hace falta tocarlo una vez para que exista
         m.userData.tipo = t;
         grupoPiezas.add(m);
-        par.partes.push({ mesh: m, tinte: !!p.tinte });
+        par.partes.push({ mesh: m, tinte: !!p.tinte, base: p.base || null });
       }
       mallas[t] = par;
     }
@@ -1245,6 +1245,13 @@ export default function Mundo() {
       const raiz = gltf.scene;
       raiz.updateMatrixWorld(true);
       const lisas = [];
+      const teñibles = []; // los materiales que el jugador puede pintar
+      // `tinte` en el catálogo puede ser `true` (piezas generadas) o el NOMBRE
+      // del material del .glb que se pinta (o una lista). `cargaModelo` ya
+      // trocea por `groups` y agrupa por material, así que mandar uno a su
+      // propia parte son cuatro líneas.
+      const pintables = new Set(typeof def.tinte === 'string' ? [def.tinte] : Array.isArray(def.tinte) ? def.tinte : []);
+      let baseTinte = null; // el color original, que es lo que se usa con c = 0
       const conTextura = new Map(); // textura → [geometrías]
       raiz.traverse((o) => {
         if (!o.isMesh) return;
@@ -1279,7 +1286,26 @@ export default function Mundo() {
             }
             g.setAttribute('color', new THREE.BufferAttribute(col, 3));
             g.deleteAttribute('uv');
-            lisas.push(g);
+            if (pintables.has(m.name)) {
+              // El color del material NO se hornea tal cual: se guarda
+              // RELATIVO al primero de los teñibles, que pasa a ser blanco.
+              // Así el vértice conserva la relación entre tonos (la valla
+              // tiene su listón claro y su poste oscuro) y el color de verdad
+              // lo pone `instanceColor`. Es lo que permite repintar la pieza
+              // de arriba abajo en vez de multiplicar un pastel sobre un
+              // naranja, que apenas se notaba.
+              if (!baseTinte) baseTinte = c.clone();
+              const rel = c.clone();
+              rel.r /= Math.max(baseTinte.r, 0.001);
+              rel.g /= Math.max(baseTinte.g, 0.001);
+              rel.b /= Math.max(baseTinte.b, 0.001);
+              for (let i = 0; i < n; i++) {
+                col[i * 3] = rel.r;
+                col[i * 3 + 1] = rel.g;
+                col[i * 3 + 2] = rel.b;
+              }
+              teñibles.push(g);
+            } else lisas.push(g);
           }
         }
       });
@@ -1292,6 +1318,18 @@ export default function Mundo() {
       // los pies y las copas de 8-10 m están clavadas se lee como un decorado.
       // La sombra se queda quieta, y con 0,18 m de amplitud no se echa de menos.
       if (lisas.length) partes.push({ geo: mergeGeometries(lisas, false), mat: def.viento ? matFijoViento : matFijo });
+      // La parte teñible conserva su color de vértice original y el tinte se
+      // MULTIPLICA encima. Es lo que hace que el cambio sea compatible: todo
+      // lo que ya está guardado lleva `c` a 0 —`validaPiezas` lo fuerza— así
+      // que si el vértice se pusiera a blanco, el día del cambio todas las
+      // vallas del mundo se volverían color arena. Con el tinte normalizado a
+      // luminancia 1, `c: 0` deja la pieza casi como estaba y los demás
+      // tintes la desplazan de tono sin apagarla.
+      // `base` es el color con el que vino la pieza: es lo que se pinta con
+      // c = 0, que es lo que lleva TODO lo ya guardado (`validaPiezas` fuerza
+      // el 0). Así el día del cambio no se mueve ni un píxel de lo que hay, y
+      // el resto de la paleta sí repinta de verdad.
+      if (teñibles.length) partes.push({ geo: mergeGeometries(teñibles, false), mat: def.viento ? matTinteViento : matTinte, tinte: true, base: baseTinte });
       for (const [tex, gs] of conTextura) {
         tex.colorSpace = THREE.SRGBColorSpace;
         partes.push({ geo: mergeGeometries(gs, false), mat: conNiebla(new THREE.MeshToonMaterial({ map: tex, gradientMap: rampa })) });
@@ -1332,6 +1370,13 @@ export default function Mundo() {
     });
 
     const coloresTinte = COLORES.map((h) => new THREE.Color(h));
+    // La misma paleta pero con luminancia 1: para multiplicar sobre un color
+    // que ya existe (las piezas de .glb) en vez de pintar sobre blanco.
+    const coloresTinteLin = COLORES.map((h) => new THREE.Color(h).convertSRGBToLinear());
+    // Con qué se pinta una parte: si la pieza vino con color propio (las de
+    // .glb) el índice 0 lo devuelve tal cual, y del 1 en adelante repinta.
+    // Las piezas generadas no tienen base: su vértice ya es blanco.
+    const tinteDe = (parte, c) => (parte.base ? (c ? coloresTinteLin[c] || parte.base : parte.base) : coloresTinte[c] || coloresTinte[0]);
 
     // --- hierba: matas que se mecen, alrededor del avatar ---
     const texHierba = (() => {
@@ -1589,7 +1634,7 @@ export default function Mundo() {
       cajaMini.makeEmpty();
       for (const q of par.partes) {
         q.mesh.setMatrixAt(0, mtx);
-        if (q.tinte) q.mesh.setColorAt(0, coloresTinte[0]);
+        if (q.tinte) q.mesh.setColorAt(0, tinteDe(q, Number(params.get('c')) || 0));
         q.geo = q.geo || q.mesh.geometry;
         q.mesh.geometry.computeBoundingBox();
         cajaMini.union(q.mesh.geometry.boundingBox);
@@ -1617,7 +1662,7 @@ export default function Mundo() {
             mtx.compose(posI, rotI, escPieza);
             for (const q of par.partes) {
               q.mesh.setMatrixAt(i, mtx);
-              if (q.tinte) q.mesh.setColorAt(i, coloresTinte[(k * 3) % coloresTinte.length]);
+              if (q.tinte) q.mesh.setColorAt(i, tinteDe(q, (k * 3) % COLORES.length));
             }
             cont[t] = i + 1;
           }
@@ -1666,7 +1711,12 @@ export default function Mundo() {
           rotI.setFromAxisAngle(ejeY, hash2(gx * 13, gy * 41) * Math.PI * 2);
           escPieza.set(escala, escala, escala);
           mtx.compose(posI, rotI, escPieza);
-          for (const q of par.partes) q.mesh.setMatrixAt(i2, mtx);
+          for (const q of par.partes) {
+            q.mesh.setMatrixAt(i2, mtx);
+            // si no se fija, la instancia arrastra el tinte de quien ocupara
+            // ese índice antes
+            if (q.tinte) q.mesh.setColorAt(i2, tinteDe(q, 0));
+          }
           cont[t] = i2 + 1;
         }
       }
@@ -1753,7 +1803,7 @@ export default function Mundo() {
           if (i >= MAX_INST) continue;
           for (const p of par.partes) {
             p.mesh.setMatrixAt(i, mtx);
-            if (p.tinte) p.mesh.setColorAt(i, coloresTinte[z.c] || coloresTinte[0]);
+            if (p.tinte) p.mesh.setColorAt(i, tinteDe(p, z.c | 0));
           }
           origen[z.t][i] = { clave, z };
           cont[z.t] = i + 1;
