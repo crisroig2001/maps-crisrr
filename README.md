@@ -36,27 +36,54 @@ servidor solo guarda qué hay en cada parcela y quién anda cerca.
   mano. El **cielo** es una cúpula pintada en el shader, como la de la
   referencia: azul intenso arriba, celeste pálido en el horizonte, una banda
   de **cúmulos** (textura de una franja, pintada al arrancar) que gira muy
-  despacio y una calima blanquecina a ras de horizonte. La **niebla** no tiñe
+  despacio, una segunda capa de **cirros** más alta y más lenta y una calima
+  blanquecina a ras de horizonte. El valor de la textura de cúmulos no es
+  opacidad sino **cuánta luz le da** a esa parte de la nube: el borde de la
+  silueta dice dónde hay nube y el valor de dentro de qué color es, así que
+  el cúmulo tiene panza gris azulada y coronilla blanca en vez de ser una
+  mancha de un color liso, y el que está del lado del sol se calienta entero.
+  Las nubes de bulto se iluminan con esos mismos dos colores. La **niebla** no tiñe
   de un color: con la distancia todo pierde saturación y se aclara (se mezcla
   en HSV), así el verde lejano sigue siendo verde, solo más pálido; y antes
   de ella un revelado ligero (algo más de saturación y contraste, lo que la
   referencia hace con una LUT). El **verde del suelo** lo calcula el shader
   con ruido a varias escalas (dos verdes a manchas grandes, calvas más claras
-  y matas más oscuras); la textura solo pone la trama de parcelas. Los verdes
+  y matas más oscuras, y una octava fina de 70 cm que tira a paja y solo vive
+  cerca: de lejos una mancha de ese tamaño no llega a un píxel y lo que se ve
+  es el suelo hirviendo); la textura solo pone la trama de parcelas. La
+  **plaza y el paseo** son losas de 2,4 m en coordenadas del mundo, con su
+  junta —que se ensancha con `fwidth`, así que se suaviza sola de lejos en
+  vez de centellear—, su grano y un tono por losa. Los verdes
   menta del Nature Kit se llevan al verde hierba, para que el follaje sea de
   la familia del suelo. Las formas son redondas (copas, arbustos, nubes y
   cabezas son esferas con normales suaves), hay **sombras de nubes** cruzando
   el suelo (dos capas de manchas que van cada una por su lado: solo hay
   sombra donde coinciden), **hierba** que se mece y **se aparta del avatar**
-  al pasar (vertex shader, instanciada a rodales en una rejilla fija del
-  mundo alrededor del avatar), copas que se mecen (el viento estaba escrito y calibrado desde hacía tiempo,
-  pero solo lo llevaba la bandera), **variación por instancia** —giro de ±22° y
-  escala de 0,88 a 1,12 sacados de un hash de la posición, así que un parque
+  al pasar (vertex shader, instanciada a rodales de ruido en una rejilla fija
+  del mundo alrededor del avatar, y encogiéndose con la distancia a la cámara
+  hasta desaparecer: a 70 m una mata ocupa dos píxeles y lo que se ve no es
+  hierba, es un rascado que hierve al andar), copas que se mecen (el viento
+  estaba escrito y calibrado desde hacía tiempo,
+  pero solo lo llevaba la bandera), **variación por instancia** —giro de ±22°,
+  escala de 0,88 a 1,12 y el VERDE de cada copa, en brillo y en matiz, sacados
+  de un hash de la posición, así que un parque
   deja de ser el mismo árbol clonado once veces sin que cueste un byte—,
+  **manchas de contacto** bajo cada pieza y bajo el avatar (no es la sombra
+  del sol, que cae al noreste y se separa del objeto: es la oclusión de justo
+  debajo, la que dice «esto se apoya aquí»), piezas **asentadas por su
+  huella** —el mínimo de cuatro puntos a `solido` metros del centro, así que
+  una casa de 10 m en pendiente no deja flotando la esquina baja—,
   **agua con profundidad**: la misma función `altura()` que levanta el terreno
   da, restada al nivel del agua, lo honda que es en cada píxel, y de ahí salen
   el color, la espuma de la orilla y sobre todo la opacidad, que puesta a cero
-  en la orilla disuelve sola la arista contra el terreno; **arena y limo**
+  en la orilla disuelve sola la arista contra el terreno; un **rizado** cuya
+  pendiente se lee CONTRA EL SOL y a escalón, que es lo que hace que el agua
+  se dibuje también mirándola desde arriba —el specular y el fresnel, que era
+  lo único que movían las olas, valen los dos casi cero desde el cenit y el
+  río era una lámina de plástico azul—, en coordenadas del cauce (las ondas
+  bajan con la corriente) y con la fase y la fuerza desordenadas por ruido,
+  que si no tres senos puros vuelven a coincidir cada pocos metros y el río
+  sale a escamas; **arena y limo**
   donde el cauce manda y no por altura absoluta; una **silueta de horizonte**
   pintada en la cúpula con armónicos enteros sobre el acimut (línea de
   arbolado, no cordillera); el **velo del sol** calentando la mitad suroeste
@@ -70,8 +97,17 @@ servidor solo guarda qué hay en cada parcela y quién anda cerca.
   suaves: una suma de senos escrita dos veces, en JS (para colocar piezas y
   avatares) y en GLSL (para desplazar suelo, marcos y plazas en el vertex
   shader y sacar su normal), y que nunca da más de medio metro de desnivel
-  en una parcela.
-- **El avatar**: cuerpo redondo del color elegido, cabeza, pelo y ojos. Mide
+  en una parcela. Ojo con ese desplazamiento: se suma en espacio de OBJETO,
+  así que en una instancia la escala lo multiplica y hay que dividir por ella
+  antes. Sin eso la mitad de la hierba del mundo se plantaba bajo tierra —una
+  mata de escala 0,4 sobre un terreno de 2,5 m acababa a 1 m— y solo se veían
+  las matas a las que el azar había dado una escala cercana a 1.
+- **El avatar**: cuerpo redondo del color elegido, cabeza, pelo y ojos, cada
+  bola con su oclusión horneada en el color del vértice —la barbilla sobre el
+  pecho, la panza, la cara de dentro del brazo—, que es lo que separa el brazo
+  del cuerpo cuando los dos son del color de la ropa y la rampa toon les da el
+  mismo escalón, y con brillo en los ojos, que dos puntos negros son dos
+  agujeros. Mide
   **1,8 m**, lo que mide una persona, y ese número es la vara de medir del
   mundo: las casas son de 6,4 a 8,8 m de alto, los árboles de 8 a 10 y la
   puerta de una casa 2, así que un avatar más alto las convertía en casitas de
@@ -416,29 +452,19 @@ se baje otro.
 
 Hay una auditoría de calidad visual hecha sobre este código (11 dimensiones,
 101 hallazgos juzgados, 12 refutados). Lo que se ha aplicado está en los
-commits; lo que queda, por si alguien lo retoma, más o menos por orden de lo
-que daría:
+commits —las manchas de contacto bajo las piezas, el asiento por huella, la
+densidad de la hierba, la cúpula al final de los opacos y el atlas
+deduplicado ya están—; lo que queda, por si alguien lo retoma, más o menos
+por orden de lo que daría:
 
-- **Manchas de contacto bajo las piezas**, como la que ya lleva el avatar: un
-  InstancedMesh de quads rellenado en el mismo bucle de `pintaMundo`, pasado
-  por `conAltura` (un quad plano de 5,8 m se hunde en pendiente si se fija a
-  `alturaEn` + constante).
-- **Asiento por huella**: hoy `pintaMundo` muestrea UN punto y hunde 12 cm
-  fijos, así que en pendiente la esquina baja de una casa de 10 m flota hasta
-  26 cm. Guardar `{rx, rz}` de la caja que ya calcula `cargaModelo` y colocar
-  en el mínimo de las cuatro esquinas.
 - **Rejilla de 4 m visible** al colocar piezas de rejilla (una textura en
   `texObra`, cero draw calls): es el «casar dos tramos de valla», que es el
   problema real.
-- **Densidad de la hierba**: medido, una mata cada 11,7 m² y un 9 % de
-  cobertura, con `MAX_HIERBA` (3.000) sin tocarse nunca.
 - **`MAX_INST` de 3.000 a ~400**: 33 mallas × 3.000 × 16 floats son 6,3 MB en
-  CPU y otros tantos en GPU, casi todo aire.
-- **La cúpula al final de los opacos**: con `renderOrder = -1000` su fragment
-  (atan2, texture2D, varios smoothstep) corre en el 100 % de los píxeles y
-  luego se sobrescribe.
-- **Deduplicar el atlas**: las cuatro casas cargan cada una su copia de
-  `colormap.png`, o sea 4 texturas y 4 materiales de la misma imagen.
+  CPU y otros tantos en GPU, casi todo aire. Ojo con el número: `MAX_PIEZAS`
+  es 150 por parcela y se cargan 13 × 13, así que el tope no es teórico —
+  bajarlo de más hace desaparecer piezas en un barrio construido, y en
+  silencio. Lo que hace falta de verdad es que el búfer crezca solo.
 - **Arrastre incremental**: `onMueve` sabe qué pieza se movió, pero llama a
   `pintaMundo()` entero en cada pointermove.
 - **Extraer `src/lib/look.js`** con las constantes de dirección de arte y un
