@@ -741,9 +741,26 @@ export default function Mundo() {
     const sol = new THREE.DirectionalLight(SOL_COLOR, SOL_FUERZA);
     sol.castShadow = true;
     sol.shadow.mapSize.set(2048, 2048);
-    Object.assign(sol.shadow.camera, { left: -75, right: 75, top: 75, bottom: -75, near: 20, far: 420 });
-    sol.shadow.bias = -0.0003;
-    sol.shadow.normalBias = 0.5;
+    const LADO_SOMBRA = 150; // lado de la caja de sombras, en metros
+    // El lado de la caja manda sobre el resto: 150 m con 2048 px son 7,3 cm
+    // por téxel, y el sesgo se mide en TÉXELES, no en metros a ojo.
+    Object.assign(sol.shadow.camera, { left: -LADO_SOMBRA / 2, right: LADO_SOMBRA / 2, top: LADO_SOMBRA / 2, bottom: -LADO_SOMBRA / 2, near: 110, far: 290 });
+    // `near/far` ceñidos: la luz está a 200 m del target y la caja, que es
+    // perpendicular al rayo, abarca ±77 m de profundidad sobre suelo llano
+    // (±75 / sin 44,1° × cos 44,1°). 110..290 deja margen para el relieve
+    // (−0,85 a +3,25) y la pieza más alta (la torre, 13,5 m) sin recortar
+    // nada. Lo que se gana: el rango pasa de 400 m a 180, así que el MISMO
+    // `bias` normalizado vale menos de la mitad en metros.
+    sol.shadow.bias = -0.0005; // ≈ 4,5 cm a lo largo del rayo
+    // Un `normalBias` de 0,5 m corría la sombra de TODO 0,52 m al noreste
+    // (0,5 × √(0,5² + 0,55²) / 0,72, que es la proyección del sol sobre el
+    // suelo): peter-panning de manual. Una silla mide 0,45 y una maceta 0,4,
+    // así que su sombra quedaba ENTERA separada de la pieza; y el avatar son
+    // esferas de 0,24 de radio, o sea que su sombra propia —la cabeza sobre
+    // el torso, el brazo sobre el costado— era imposible y el muñeco salía
+    // como una calcomanía plana. Era la mitad de la sensación de «flotante».
+    // Lo que hace falta de verdad es kilo y medio de téxel:
+    sol.shadow.normalBias = (1.5 * LADO_SOMBRA) / 2048;
     scene.add(sol);
     scene.add(sol.target);
     function sigueElSol(x, h, y) {
