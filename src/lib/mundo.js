@@ -49,7 +49,7 @@ let cache = null;
 // Versión de la semilla. Al cambiar el número, las parcelas del «mundo» (la
 // plaza y la casa de muestra) se reescriben en el arranque: la semilla solo
 // se creaba la primera vez y producción se quedaba con la muestra vieja.
-const SEMILLA = 3;
+const SEMILLA = 4;
 
 // Lo público de serie: la plaza, los paseos, los parques y la casa de
 // muestra, con dueño «mundo» (nadie las reclama ni las cambia). Sale del

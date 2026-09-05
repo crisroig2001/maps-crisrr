@@ -21,6 +21,18 @@ const args = process.argv.slice(2);
 const esBase = args.includes('--base');
 const solo = args.includes('--solo') ? args[args.indexOf('--solo') + 1] : null;
 const URL_APP = process.env.URL_BANCO || 'http://localhost:3000';
+// El segundo del mundo en el que se captura. Con el reloj congelado (`?t=`)
+// la hierba, las copas, el agua, las sombras de nube, los cúmulos y los
+// pájaros están SIEMPRE en la misma posición, así que dos pasadas seguidas
+// dan la misma imagen y el porcentaje vuelve a significar algo. Una vista
+// puede pedir otro segundo con `t` en vistas.config.mjs.
+const T_MUNDO = 12;
+// Con el reloj quieto lo que queda es ruido de compresión y de rasterizado,
+// que vive por debajo del 0,01 %: se puede apretar el umbral 5 veces.
+const UMBRAL = 0.01;
+// `--estricto` hace que el banco FALLE (exitCode 1) si alguna vista se mueve.
+// Sin él solo informa, que es lo que se quiere mientras se está iterando.
+const estricto = args.includes('--estricto');
 
 const dirBase = path.join(path.resolve(DIR_CAPTURAS), 'base');
 const dirAhora = path.join(path.resolve(DIR_CAPTURAS), 'ahora');
@@ -127,7 +139,7 @@ try {
 }
 
 for (const v of vistas) {
-  const q = `?x=${v.x}&y=${v.y}&d=${v.d}&pol=${v.pol}&az=${v.az}`;
+  const q = `?x=${v.x}&y=${v.y}&d=${v.d}&pol=${v.pol}&az=${v.az}&t=${v.t ?? T_MUNDO}` + (v.extra ? '&' + v.extra : '');
   process.stdout.write(`${v.id.padEnd(20)} `);
   await page.goto(URL_APP + '/' + q, { waitUntil: 'domcontentloaded', timeout: 60000 });
   await page.waitForSelector('#lienzo', { timeout: 30000 });
@@ -148,7 +160,7 @@ for (const v of vistas) {
     const r = await compara(fs.readFileSync(fBase), png);
     pct = r.pct;
     if (r.diff) fs.writeFileSync(path.join(dirDiff, v.id + '.png'), Buffer.from(r.diff, 'base64'));
-    console.log(pct < 0.05 ? 'igual' : `${pct.toFixed(2)}% de píxeles distintos`);
+    console.log(pct < UMBRAL ? 'igual' : `${pct.toFixed(2)}% de píxeles distintos`);
   }
   estado[v.id] = { pct, desc: v.desc, t: Date.now() };
 }
@@ -159,8 +171,8 @@ fs.writeFileSync(fEstado, JSON.stringify(estado, null, 2));
 const filas = VISTAS.filter((v) => estado[v.id])
   .map((v) => {
     const e = estado[v.id];
-    const pct = e.pct == null ? 'referencia' : e.pct < 0.05 ? 'igual' : e.pct.toFixed(2) + '% distinto';
-    const diff = e.pct != null && e.pct >= 0.05 ? `<img src="diff/${v.id}.png" alt="diferencias">` : '';
+    const pct = e.pct == null ? 'referencia' : e.pct < UMBRAL ? 'igual' : e.pct.toFixed(2) + '% distinto';
+    const diff = e.pct != null && e.pct >= UMBRAL ? `<img src="diff/${v.id}.png" alt="diferencias">` : '';
     return `<section><h2>${v.id} <small>${pct}</small></h2><p>${e.desc}</p><div class="par"><figure><img src="base/${v.id}.png" alt="referencia"><figcaption>referencia</figcaption></figure><figure><img src="ahora/${v.id}.png" alt="ahora"><figcaption>ahora</figcaption></figure>${diff}</div></section>`;
   })
   .join('\n');
@@ -171,6 +183,14 @@ fs.writeFileSync(
 if (problemas.length) {
   console.log('\nProblemas:');
   for (const p of [...new Set(problemas)]) console.log('  · ' + p);
+  process.exitCode = 1;
+}
+// Con `--estricto` el banco es una RED, no un visor: una vista que se mueve
+// sin que nadie haya aceptado la nueva referencia es un fallo.
+const movidas = VISTAS.filter((v) => estado[v.id]?.pct != null && estado[v.id].pct >= UMBRAL);
+if (estricto && movidas.length) {
+  console.log(`\nSe han movido ${movidas.length} vistas: ${movidas.map((v) => v.id).join(', ')}`);
+  console.log('Míralas en capturas/index.html y, si el cambio es el que buscabas:  npm run vistas -- --base');
   process.exitCode = 1;
 }
 console.log(`\nHoja de contactos: ${DIR_CAPTURAS}/index.html`);
