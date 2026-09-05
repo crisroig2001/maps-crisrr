@@ -602,25 +602,39 @@ const ALTO_AVATAR = 1.8;
 // por debajo al que anda por delante y no se sale por arriba con la cámara de
 // serie, que mira desde bastante alto.
 const ALTO_CARRETE = 2.6;
+// Cuánto se apaga una parte por debajo: la oclusión que ninguna luz rellena
+// —la barbilla sobre el pecho, la panza del cuerpo, la cara de dentro del
+// brazo— horneada en el color del vértice. Es gratis (el color ya viaja por
+// vértice) y es lo que separa el brazo del cuerpo cuando los dos son del
+// mismo color de ropa: sin ella el avatar de cerca es una calcomanía plana
+// de cinco bolas del mismo tono.
+const sombreado = (c, k) => c.clone().multiplyScalar(k);
 function geometriaAvatar(color, pelo, piel) {
   const g = nuevaGeo();
-  esfera(g, 0, 0.96, 0, 0.24, color, 1.4); // cuerpo
-  esfera(g, 0, 1.5, 0, 0.27, piel); // cabeza
-  esfera(g, 0, 1.6, -0.04, 0.28, pelo, 0.75); // pelo
+  // 14 lados y no 10: la silueta de la cabeza se veía poligonal de cerca, y
+  // son 400 vértices más en la única malla que se mira a un metro.
+  esfera(g, 0, 0.96, 0, 0.24, color, 1.4, 14, sombreado(color, 0.6)); // cuerpo
+  esfera(g, 0, 1.5, 0, 0.27, piel, 1, 14, sombreado(piel, 0.72)); // cabeza
+  esfera(g, 0, 1.6, -0.04, 0.28, pelo, 0.75, 14, sombreado(pelo, 0.66)); // pelo
   esfera(g, -0.1, 1.51, 0.23, 0.04, OJO, 1, 6); // ojos
   esfera(g, 0.1, 1.51, 0.23, 0.04, OJO, 1, 6);
+  // El brillo del ojo. Dos puntos negros son dos agujeros; con la chispa el
+  // ojo mira. Arriba y a la izquierda en los dos, que es de donde viene la
+  // luz del cielo.
+  esfera(g, -0.115, 1.525, 0.256, 0.015, BLANCO, 1, 5);
+  esfera(g, 0.085, 1.525, 0.256, 0.015, BLANCO, 1, 5);
   return aGeo(g);
 }
 // Los brazos van aparte, como las piernas: así se mueven al andar y al
 // saludar sin rehacer la geometría del cuerpo.
 function geometriaBrazo(color) {
   const g = nuevaGeo();
-  esfera(g, 0, -0.16, 0, 0.1, color, 1.9);
+  esfera(g, 0, -0.16, 0, 0.1, color, 1.9, 10, sombreado(color, 0.62));
   return aGeo(g);
 }
 function geometriaPierna() {
   const g = nuevaGeo();
-  esfera(g, 0, -0.29, 0, 0.12, PANTALON, 2.6, 6);
+  esfera(g, 0, -0.29, 0, 0.12, PANTALON, 2.6, 8, sombreado(PANTALON, 0.6));
   return aGeo(g);
 }
 // Una nube: bolas aplastadas, iluminadas como las de la cúpula (coronilla
@@ -1935,8 +1949,10 @@ export default function Mundo() {
           const i2 = cont[t];
           if (i2 >= MAX_INST) continue;
           const escala = 0.85 + hash2(gx * 71, gy * 53) * 0.3;
-          posI.set(wx, alturaEn(wx, wy) - 0.12, -wy);
-          rotI.setFromAxisAngle(ejeY, hash2(gx * 13, gy * 41) * Math.PI * 2);
+          const giroC = hash2(gx * 13, gy * 41) * Math.PI * 2;
+          ponMancha(PIEZAS[t], wx, wy, escala);
+          posI.set(wx, asiento(PIEZAS[t], wx, wy, escala), -wy);
+          rotI.setFromAxisAngle(ejeY, giroC);
           escPieza.set(escala, escala, escala);
           mtx.compose(posI, rotI, escPieza);
           for (const q of par.partes) {
@@ -1950,6 +1966,50 @@ export default function Mundo() {
       }
     }
 
+    // A qué altura se planta una pieza. Muestrear UN punto —el centro— y
+    // hundir 12 cm fijos vale para una silla, pero una casa de 10 m en una
+    // pendiente apoya el centro y deja la esquina baja flotando: se le ve el
+    // aire por debajo, y eso es la mitad de la sensación de decorado. Se mira
+    // el MÍNIMO de cuatro puntos a `solido` metros del centro, así que la
+    // casa se apoya en su punto más bajo y el resto se entierra un poco, que
+    // es lo que hace un edificio de verdad.
+    // La huella buena es `solido` —lo que el avatar no puede atravesar— y NO
+    // la caja de la geometría: la caja de un árbol es su COPA, así que
+    // asentar por ella hundiría el tronco un palmo por culpa de unas ramas
+    // que están a ocho metros del suelo. Por eso los cuatro puntos van sobre
+    // los ejes y no en las esquinas: en las esquinas de un cuadrado de lado
+    // 2r se sale del círculo que la pieza ocupa de verdad.
+    // Solo para lo que ocupa más de metro y medio: por debajo de eso el error
+    // no llega al centímetro, y son cuatro senos por pieza en un bucle que
+    // corre en CADA pointermove del arrastre.
+    let nManchas = 0;
+    // Pone la mancha de contacto de una pieza. Solo las que tienen `solido`:
+    // es el radio que el avatar no puede atravesar, o sea justo lo que la
+    // pieza ocupa EN EL SUELO. Un camino o una flor no la llevan —una losa a
+    // ras de suelo con un cerco oscuro alrededor se lee como un agujero— y
+    // sin `solido` no hay nada que ocluir.
+    function ponMancha(def, wx, wy, escala) {
+      const r = (def.solido || 0) * escala;
+      if (r < 0.15 || def.suelo || nManchas >= MAX_MANCHAS) return;
+      const d = r * 3.2; // el cerco tiene que asomar por fuera de la pieza
+      posI.set(wx, 0.05, -wy);
+      rotI.identity();
+      escS.set(d, 1, d);
+      mtx.compose(posI, rotI, escS);
+      manchas.setMatrixAt(nManchas++, mtx);
+    }
+
+    const ASIENTO_MIN = 1.5;
+    function asiento(def, wx, wy, escala) {
+      const r = (def.solido || 0) * escala;
+      // Los 12 cm de sobra son PARA ESTO: para que en pendiente se hunda el
+      // borde bajo en vez de flotar el alto. Cuando la huella ya se ha
+      // mirado, ese margen ya está puesto —y de sobra— así que sumarle otros
+      // 12 cm entierra el zócalo de la casa medio palmo.
+      if (r < ASIENTO_MIN) return alturaEn(wx, wy) - 0.12;
+      return Math.min(alturaEn(wx - r, wy), alturaEn(wx + r, wy), alturaEn(wx, wy - r), alturaEn(wx, wy + r)) - 0.04;
+    }
+
     function pintaMundo() {
       const cont = {};
       for (const t in mallas) {
@@ -1959,6 +2019,7 @@ export default function Mundo() {
       solidos = [];
       let nMarcos = 0;
       let nPlazas = 0;
+      nManchas = 0;
       for (const [clave, pc] of parcelas) {
         const p = parseParcela(clave);
         if (!p) continue;
@@ -2023,7 +2084,8 @@ export default function Mundo() {
           if (def.solido) solidos.push({ x: wx, y: wy, r: def.solido * escala });
           // un pelín enterrada: en pendiente, mejor que el borde bajo se hunda
           // a que el alto flote
-          posI.set(wx, alturaEn(wx, wy) - 0.12, -wy);
+          ponMancha(def, wx, wy, escala);
+          posI.set(wx, asiento(def, wx, wy, escala), -wy);
           rotI.setFromAxisAngle(ejeY, giro);
           escPieza.set(escala, escala, escala);
           mtx.compose(posI, rotI, escPieza);
@@ -2064,6 +2126,10 @@ export default function Mundo() {
       }
       pintaSeleccion();
       pideSombras(); // ha cambiado lo que hay: la sombra de antes ya no vale
+      manchas.count = nManchas;
+      manchas.instanceMatrix.clearUpdateRanges();
+      manchas.instanceMatrix.addUpdateRange(0, nManchas * 16);
+      manchas.instanceMatrix.needsUpdate = true;
       marcos.count = nMarcos;
       marcos.instanceMatrix.needsUpdate = true;
       if (marcos.instanceColor) marcos.instanceColor.needsUpdate = true;
@@ -2183,6 +2249,48 @@ export default function Mundo() {
       fog: false,
       toneMapped: false, // es oclusión, no luz: que ACES no la toque
     });
+
+    // La mancha de contacto de las PIEZAS, la misma que ya llevaba el avatar.
+    // No es la sombra del sol —esa cae al noreste y se va de la pieza en
+    // cuanto el sol está bajo— sino la oclusión de justo debajo, que ninguna
+    // luz rellena y que es lo que dice «esto se apoya aquí». Sin ella una
+    // casa es una calcomanía pegada sobre el césped. Va instanciada y se
+    // rellena en el mismo bucle que las piezas: cero draw calls nuevos por
+    // pieza y uno en total.
+    // Pasa por `conAltura`, así que las cuatro esquinas del cuadro suben con
+    // la colina: un cuadro plano de 12 m fijado a `alturaEn` + una constante
+    // se hundiría por un lado en cuanto hubiera pendiente.
+    // La del avatar no sirve tal cual: su degradado es un cono, y bajo una
+    // casa de 8,4 m lo oscuro queda TAPADO por la propia casa —solo asoma el
+    // borde, donde el alfa ya vale casi cero— así que no se veía nada. Esta
+    // mantiene el tono hasta pasado el objeto y se apaga después, que es lo
+    // que hace que asome un cerco de contacto alrededor de la pieza.
+    const texManchaPieza = (() => {
+      const S = 64;
+      const cv = document.createElement('canvas');
+      cv.width = cv.height = S;
+      const c = cv.getContext('2d');
+      const g = c.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
+      g.addColorStop(0, 'rgba(56,74,100,0.5)');
+      g.addColorStop(0.42, 'rgba(56,74,100,0.44)');
+      g.addColorStop(0.7, 'rgba(56,74,100,0.22)');
+      g.addColorStop(1, 'rgba(56,74,100,0)');
+      c.fillStyle = g;
+      c.fillRect(0, 0, S, S);
+      const tex = new THREE.CanvasTexture(cv);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      return tex;
+    })();
+    const MAX_MANCHAS = 700;
+    const manchas = new THREE.InstancedMesh(
+      new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2),
+      conAltura(new THREE.MeshBasicMaterial({ map: texManchaPieza, transparent: true, depthWrite: false, toneMapped: false })),
+      MAX_MANCHAS
+    );
+    manchas.count = 0;
+    manchas.frustumCulled = false;
+    manchas.renderOrder = 2; // sobre la losa de la plaza y el marco de parcela
+    scene.add(manchas);
 
     function creaFigura(c, p, s) {
       const grupo = new THREE.Group();
