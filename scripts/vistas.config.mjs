@@ -54,6 +54,15 @@ export const VISTAS = [
     az: 235,
   },
   {
+    id: 'rio-lejos',
+    desc: 'El río alejándose trescientos metros, casi desde arriba. Aquí se juzga el RIZADO a distancia: una onda que baja del par de píxeles no se puede dibujar y lo que sale es el batido con la rejilla de la pantalla, un enrejado regular de rombos. Si vuelve a aparecer un tramado en la parte de arriba del río, se ha roto el corte por Nyquist del shader del agua.',
+    x: 190,
+    y: 30,
+    d: 140,
+    pol: 40,
+    az: 235,
+  },
+  {
     id: 'parque',
     desc: 'Un parque público, sembrado por el plano: árboles, rocas y un banco, sin suelo de piedra.',
     x: 120,

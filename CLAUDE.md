@@ -14,13 +14,13 @@ En `README.md`, sección **Hoja de ruta**:
 
 - **Lo que dejó apuntado la auditoría visual** — primera auditoría.
 - **Lo que queda de la segunda auditoría visual** — la última (sept. 2026), por
-  orden de impacto: el rizado del agua que moirea, el naranja del kit, el
-  contraste de las losas del `camino`, y la carga diferida de los modelos.
-  Incluye una hipótesis **descartada** — apuntada para que nadie la "arregle"
-  otra vez.
-- **El horizonte, ya con relieve** — el primer punto de esa auditoría, hecho:
-  qué se metió, por qué cada número, lo que cuesta y las dos cosas que hay que
-  saber antes de tocarlo.
+  orden de impacto: el naranja del kit, el contraste de las losas del
+  `camino`, y la carga diferida de los modelos. Incluye una hipótesis
+  **descartada** — apuntada para que nadie la "arregle" otra vez.
+- **El horizonte, ya con relieve** y **El rizado del agua, sin moiré** — los dos
+  primeros puntos de esa auditoría, hechos: qué se metió, por qué cada número y
+  lo que hay que saber antes de tocarlo. En el del agua, además, la hipótesis
+  que traía la auditoría era la equivocada.
 - **Si se mete otro kit** — lo aprendido metiendo el City Kit Roads.
 - **Cabos sueltos**.
 
@@ -28,7 +28,7 @@ En `README.md`, sección **Hoja de ruta**:
 
 ```bash
 npm run dev          # la app
-npm run vistas       # banco visual: captura las 9 vistas y compara
+npm run vistas       # banco visual: captura las 10 vistas y compara
 npm run medidas      # qué mide cada pieza de verdad (altura vs. avatar 1,8 m)
 npm run miniaturas   # regenera public/miniaturas/*.png con el MOTOR
 npm run prueba       # integración: dos jugadores de verdad en dos pestañas
@@ -58,6 +58,11 @@ npm run prueba       # integración: dos jugadores de verdad en dos pestañas
   `a-ras-de-suelo` y `a-escala`): hace falta `pol` ≥ 65,4° para que el cielo
   entre en cuadro. Si tocas la corona del horizonte y las otras seis se mueven,
   has tocado otra cosa.
+- **Nada que se dibuje con un patrón fino puede llevar un `step()` pelado.**
+  Ni el agua ni la hierba ni las losas: el ancho del corte lo tiene que poner
+  `fwidth`, o de lejos el borde cae siempre dentro de un píxel y hierve. Y una
+  onda hay que apagarla cuando su fase avanza más de un píxel, no a los tantos
+  metros: los metros no saben cuántos píxeles mide una onda.
 - **Lo lejano NO lleva la niebla del mundo.** `scene.fog` satura a 325 m, así
   que cualquier cosa a más de 300 m con la niebla de serie sale del color
   exacto del cielo. La corona del horizonte y sus arboledas van con `fog:

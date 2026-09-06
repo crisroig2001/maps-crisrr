@@ -1761,8 +1761,28 @@ export default function Mundo() {
           float f1 = sL * 2.4 + alabeo - tiempo * 2.6;
           float f2 = sL * 4.3 + sT * 1.5 + alabeo * 0.7 - tiempo * 4.4;
           float f3 = sT * 3.1 + sL * 0.9 - alabeo * 0.5 + tiempo * 2.0;
+          // Cuánta fase avanza cada onda EN UN PÍXEL. Esta es la medida que
+          // importa, y no los metros: una onda cuya fase avanza más de π por
+          // píxel ya no se puede dibujar, y lo que aparece en su sitio no es
+          // el rizado sino el BATIDO entre la onda y la rejilla de la
+          // pantalla. Eso era el enrejado regular de rombos de la orilla
+          // lejana: no un patrón que se repite, moiré.
+          // Cada onda se apaga POR SEPARADO, que además es lo natural: la
+          // corta se va primero y la larga aguanta, así que el río no pierde
+          // el rizado de golpe sino por escalas.
+          float dL = fwidth(sL);
+          float dT = fwidth(sT);
+          // El corte de Nyquist son π radianes por píxel, pero aquí hay que
+          // apagar bastante antes: lo que se dibuja no es el seno, es un
+          // ESCALÓN sobre el seno (la cresta), y un escalón mete armónicos
+          // muy por encima de su fundamental. Con el corte en π quedaba
+          // enrejado en el tramo lejano; a 0,9..2,6 (de siete a dos píxeles y
+          // medio de onda) ya no.
+          float b1 = 1.0 - smoothstep(0.9, 2.6, 2.4 * dL);
+          float b2 = 1.0 - smoothstep(0.9, 2.6, 4.3 * dL + 1.5 * dT);
+          float b3 = 1.0 - smoothstep(0.9, 2.6, 3.1 * dT + 0.9 * dL);
           // la pendiente de la ola: derivada cerrada, sin muestrear nada
-          vec2 grad = (flujo * (0.048 * cos(f1) + 0.043 * cos(f2) + 0.012 * cos(f3)) + cruz * (0.015 * cos(f2) + 0.042 * cos(f3))) * fuerza;
+          vec2 grad = (flujo * (0.048 * cos(f1) * b1 + 0.043 * cos(f2) * b2 + 0.012 * cos(f3) * b3) + cruz * (0.015 * cos(f2) * b2 + 0.042 * cos(f3) * b3)) * fuerza;
           vec3 Nr = normalize(vec3(-grad.x, 1.0, -grad.y));
           nOlas = Nr;
           // Lo que hace que el agua se lea DESDE ARRIBA: no el reflejo (que
@@ -1773,18 +1793,28 @@ export default function Mundo() {
           // specular y el fresnel, los dos casi cero mirando hacia abajo:
           // el río era una lámina de plástico azul.
           float pend = dot(Nr.xz, normalize(uSol.xz));
-          // El rizado se apaga con la distancia. De cerca es detalle; a 150 m
-          // una onda mide menos de un píxel y lo que llega no es una ola, es
-          // ruido que hierve. Así el río de lejos vuelve a ser una cinta
-          // limpia y de cerca tiene superficie.
-          float det = mix(1.0, 0.30, smoothstep(50.0, 170.0, vFogDepth));
-          float cresta = smoothstep(-0.030, 0.040, pend);
-          diffuseColor.rgb *= mix(1.0, mix(0.87, 1.13, cresta), det);
+          // El río de lejos vuelve a ser una cinta limpia y de cerca tiene
+          // superficie, pero eso ya no hay que pedirlo aparte: al apagarse
+          // las ondas por Nyquist la pendiente se va a cero sola, la cresta
+          // se queda en su valor de agua plana y no queda nada que hierva.
+          // Antes esto era un «det» con la distancia en metros (50..170) y un
+          // suelo del 30 %, o sea la misma idea a ojo: no se apagaba nunca
+          // del todo, y al alejar la cámara el moiré volvía porque los metros
+          // no saben cuántos píxeles mide una onda.
+          // Y el ancho del escalón lo pone fwidth, igual que la junta de las
+          // losas de la plaza: de cerca es un corte duro —que es lo que hace
+          // el rizado a bandas de dibujo animado— y de lejos se suaviza solo
+          // en vez de centellear. Sin esto, el borde de la banda cae siempre
+          // dentro de un píxel por pequeña que sea la onda, y ese borde es
+          // justo lo que batía con la rejilla de la pantalla.
+          float wc = fwidth(pend) * 0.8;
+          float cresta = smoothstep(-0.030 - wc, 0.040 + wc, pend);
+          diffuseColor.rgb *= mix(0.87, 1.13, cresta);
           // Y en lo más empinado de la cresta, el destello. Va con el MISMO
           // ruido que desordena la ola, así que sale a rachas —unas olas
           // brillan y otras no— en vez de encenderse todas a la vez, que es
           // lo que lo hacía parecer un plástico de burbujas.
-          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.86, 0.96, 1.0), smoothstep(0.058, 0.084, pend) * smoothstep(0.5, 0.82, n1) * det * 0.5);
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.86, 0.96, 1.0), smoothstep(0.058 - wc, 0.084 + wc, pend) * smoothstep(0.5, 0.82, n1) * 0.5);
           // espuma: una banda en el primer palmo de agua, con el borde
           // rompiéndose despacio para que no sea una línea de goma
           float borde = 0.10 + 0.06 * sin(vXZ.x * 0.7 + tiempo * 0.8) + 0.05 * sin(vXZ.y * 0.9 - tiempo * 0.6);
@@ -1806,9 +1836,19 @@ export default function Mundo() {
             vec3 wp = vec3(vXZ.x, ${NIVEL_AGUA.toFixed(2)}, vXZ.y);
             vec3 V = normalize(cameraPosition - wp);
             vec3 H = normalize(normalize(uSol) + V);
-            // el step() es lo que lo hace cartoon: un brillo con borde, no un
-            // degradado de plástico
-            float esp = step(0.55, pow(max(dot(nOlas, H), 0.0), 60.0));
+            // El borde duro es lo que lo hace cartoon: un brillo con borde,
+            // no un degradado de plástico. Pero un step() sobre una potencia
+            // 60 es lo más fino de toda la escena —el lóbulo entero cabe en
+            // dos grados— y era lo único del agua sin ninguna atenuación: de
+            // lejos, ese borde caía siempre dentro de un píxel y hervía. El
+            // ancho lo pone fwidth, así que de cerca sigue siendo un corte y
+            // de lejos se funde solo.
+            float lobulo = pow(max(dot(nOlas, H), 0.0), 60.0);
+            // El mínimo no es cosmético: el lóbulo vale cero en casi toda la
+            // superficie, así que ahí fwidth da 0 clavado y un smoothstep con
+            // los dos bordes iguales es una división por cero.
+            float we = max(fwidth(lobulo) * 0.7, 1e-4);
+            float esp = smoothstep(0.55 - we, 0.55 + we, lobulo);
             // Fresnel contra un color de horizonte constante. Acotado a 0,42
             // y contra un azul de cielo, no contra un blanco: con el tope en
             // 0,6 y (0.79,0.92,1.0), mirando el río de canto —que es como se

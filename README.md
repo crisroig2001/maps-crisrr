@@ -101,7 +101,9 @@ servidor solo guarda qué hay en cada parcela y quién anda cerca.
   río era una lámina de plástico azul—, en coordenadas del cauce (las ondas
   bajan con la corriente) y con la fase y la fuerza desordenadas por ruido,
   que si no tres senos puros vuelven a coincidir cada pocos metros y el río
-  sale a escamas; **arena y limo**
+  sale a escamas; y cada onda **se apaga cuando su fase avanza más de un
+  píxel** —y los escalones de la cresta y del destello se ensanchan con
+  `fwidth`—, que es lo que quita el moiré de la orilla lejana; **arena y limo**
   donde el cauce manda y no por altura absoluta; un **horizonte con relieve de
   verdad** —una corona de terreno aparte, de 200 a 1.500 m, que sigue al avatar
   y lleva su propia altura de decenas de metros, con **arboledas de bajo
@@ -544,18 +546,11 @@ por orden de lo que daría:
 
 Una segunda pasada por las siete vistas (septiembre de 2026). Lo que salió
 arreglado —las hileras de hierba y las manchas de la losa— está en el commit
-`b405be2`, y **el horizonte vacío**, que era el primer punto y el más caro,
-está hecho (la sección siguiente cuenta cómo). Esto es lo que se miró y NO se
-ha tocado, por orden de lo que daría. Nada de esto está prototipado, así que el
-coste es estimación, no medida.
+`b405be2`, y los dos primeros puntos —**el horizonte vacío**, que era el más
+caro, y **el moiré del agua**— están hechos (las dos secciones siguientes
+cuentan cómo). Esto es lo que se miró y NO se ha tocado, por orden de lo que
+daría. Nada de esto está prototipado, así que el coste es estimación, no medida.
 
-- **El rizado del agua moirea.** Ampliando la orilla lejana en `rio-y-paseo` se
-  ve un enrejado regular de rombos, no un rizado. Es el mismo tipo de fallo que
-  tenían las hileras de hierba —un patrón que se repite donde debería haber
-  desorden— y el sitio a mirar es la fase del rizado en el shader del agua, que
-  va en coordenadas del cauce. El resto del agua está bien y no hay que
-  tocarlo: la profundidad, la espuma de la orilla y la opacidad que disuelve la
-  arista funcionan, se comprobó.
 - **El naranja del kit manda demasiado.** Vallas, troncos y bancos comparten un
   naranja muy saturado que domina cada encuadre verde. El mecanismo para
   remapearlo ya existe (`PALETA_KIT` y `acercaVerde` en `Mundo.js`, que es lo
@@ -660,6 +655,52 @@ Y dos cosas que conviene saber antes de tocarlo:
   salto de 48 m mueve una silueta 43 píxeles. Y las arboledas se resiembran
   cada 12 m andados, no en cada `pintaMundo`, que corre en cada `pointermove`
   de un arrastre.
+
+### El rizado del agua, sin moiré
+
+El segundo punto de esa auditoría también está hecho. La hipótesis apuntada era
+que faltaba desorden —«el mismo tipo de fallo que tenían las hileras de
+hierba»—, y **no era eso**: el desorden estaba bien. Era **aliasing**, que es lo
+que la palabra moiré decía literalmente.
+
+- **Lo que se veía.** Ampliando la orilla lejana en `rio-y-paseo`, un enrejado
+  regular de rombos con celdas de un píxel y medio. Ese tamaño es la pista: no
+  hay nada en el shader que mida píxel y medio, así que el dibujo no venía del
+  agua sino del BATIDO entre las ondas y la rejilla de la pantalla. Las ondas
+  del rizado miden de 1,4 a 2,6 m; cuando una de ellas baja del par de píxeles,
+  lo que aparece en su sitio es la interferencia, no la onda.
+- **Cada onda se apaga por Nyquist, y por separado.** Se mide cuánta fase
+  avanza cada onda EN UN PÍXEL (`fwidth` de las coordenadas del cauce) y se
+  apaga entre 0,9 y 2,6 radianes por píxel, o sea de siete a dos píxeles y
+  medio de longitud de onda. Por separado y no en bloque porque es lo natural:
+  la corta se va primero y la larga aguanta, así que el río no pierde el rizado
+  de golpe sino por escalas.
+- **Y los cortes duros se ensanchan con `fwidth`**, igual que la junta de las
+  losas de la plaza. Son tres —la banda de la cresta, el destello y sobre todo
+  el brillo especular, que es un `step()` sobre una potencia 60, lo más fino de
+  toda la escena y lo único del agua que no llevaba NINGUNA atenuación—. Un
+  escalón mete armónicos muy por encima de su fundamental, así que apagar solo
+  las ondas no bastaba: con el corte puesto en π radianes por píxel todavía
+  quedaba enrejado. De cerca siguen siendo cortes duros, que es lo que hace que
+  el rizado se lea a bandas de dibujo animado.
+- **Fuera el apagado por metros.** Había un `det` que bajaba el rizado con la
+  distancia (de 50 a 170 m) hasta un suelo del 30 %. Era la misma idea a ojo, y
+  fallaba por los dos lados: no llegaba a apagarse nunca —de ahí que el moiré
+  siguiera ahí— y al alejar la cámara volvía, porque los metros no saben
+  cuántos píxeles mide una onda. Lo de ahora sale solo con la resolución, el
+  campo de visión y el ángulo con que se mire el agua.
+
+Medido sobre el recorte de la orilla lejana de `rio-y-paseo`, la energía de
+alta frecuencia (media de |píxel − media 3×3|) baja de **3,02 a 0,46**; en el
+agua cercana se queda en **1,93 frente a 2,11**, o sea que conserva el 91 % del
+detalle. Que es justo lo que se buscaba: quitar lo que no se puede dibujar sin
+tocar lo que sí.
+
+Del banco se mueve solo `rio-y-paseo` (0,30 %); las demás salen idénticas. Y se
+añadió la vista **`rio-lejos`** —el río alejándose trescientos metros— porque
+en `rio-y-paseo` el tramo lejano ocupa una esquina y un tramado ahí se cuela
+por debajo del umbral. Se añadió DESPUÉS de arreglarlo, no antes: sirve para
+que no vuelva.
 
 ### Si se mete otro kit
 
