@@ -21,6 +21,9 @@ En `README.md`, sección **Hoja de ruta**:
   primeros puntos de esa auditoría, hechos: qué se metió, por qué cada número y
   lo que hay que saber antes de tocarlo. En el del agua, además, la hipótesis
   que traía la auditoría era la equivocada.
+- **La fuga de luz en la pared en sombra** — hecho: por qué el rayado de las
+  paredes NO se arregla con más resolución (con más sale peor) y qué se probó
+  antes de dar con la línea que lo cierra.
 - **Si se mete otro kit** — lo aprendido metiendo el City Kit Roads.
 - **Cabos sueltos**.
 
@@ -88,6 +91,11 @@ npm run prueba-chat  # el chat: texto, fotos y audios, dentro y fuera de un corr
   `fwidth`, o de lejos el borde cae siempre dentro de un píxel y hierve. Y una
   onda hay que apagarla cuando su fase avanza más de un píxel, no a los tantos
   metros: los metros no saben cuántos píxeles mide una onda.
+- **El `normalBias` de la sombra está en TÉXELES, no en metros.** Subir
+  `mapSize` o encoger `LADO_SOMBRA` sin tocarlo lo reduce en metros, y en
+  metros es donde se cierran las fugas de luz: más resolución sale PEOR. Y al
+  mapa de sombras van solo las caras que miran al sol (`shadowSide`), que es
+  lo que quita el rayado de las paredes en sombra: pide piezas cerradas.
 - **Lo lejano NO lleva la niebla del mundo.** `scene.fog` satura a 325 m, así
   que cualquier cosa a más de 300 m con la niebla de serie sale del color
   exacto del cielo. La corona del horizonte y sus arboledas van con `fog:

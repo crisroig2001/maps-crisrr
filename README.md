@@ -808,6 +808,60 @@ no se pone a un palmo de una casa **en un móvil** no se ve.
 - Y las **miniaturas** lo llevaban también (el tejado del bungaló pasa de 1,06
   a 0,53 con la misma medida), así que se regeneraron las 56.
 
+### La fuga de luz en la pared en sombra
+
+Otro aviso desde un iPhone: «se ve muy mal en las paredes, hay la sombra, pero
+está como con poca resolución». Y la pregunta que venía detrás —¿no se arregla
+con más resolución?— tenía la respuesta al revés: con más resolución sale PEOR.
+
+- **Lo que es.** En la pared que está de espaldas al sol se cuela una franja
+  diagonal de luz, del ancho de un par de téxeles del mapa de sombras. De lejos
+  parece un rayado; de cerca es una banda de pared que se libra de la sombra.
+- **Cómo se sabe que son las sombras.** Con `sol.castShadow = false` desaparece
+  entero y solo queda el bandeado horizontal del degradado del atlas, que es
+  legítimo. Y sin apagar nada: el patrón **cambia de dirección y de paso en cada
+  superficie** (medido sobre la captura del aviso, 0° en la pared entre
+  ventanas, 135° en el cristal, 165° en la planta baja y 105° en el tejado, con
+  pasos de 13 a 18 px). Una textura no puede hacer eso —las UV de Kenney son
+  islas de un téxel, no pueden dibujar un patrón a lo ancho de una cara—; algo
+  que vive en el espacio de la LUZ, sí.
+- **Por qué se ve, si esa pared está de espaldas al sol.** Por la rampa toon. El
+  escalón de media luz va de t = 0,44 a 0,56, o sea de N·L = −0,12 a +0,12: una
+  cara casi de canto al sol NO está a oscuras, sigue recibiendo el escalón
+  intermedio. Así que la máscara de sombra pinta ahí, y la fuga se nota.
+- **De dónde sale.** Al pintar el mapa de sombras, three le da la vuelta al
+  `side` por defecto: de un material `FrontSide` dibuja las TRASERAS. Eso mete
+  en el mapa la propia pared de espaldas al sol, a su misma profundidad — se
+  compara consigo misma, y una banda se escapa del test.
+- **Lo que NO lo arregla**, todo medido en la misma vista (la casa de muestra
+  por su lado en sombra, `?x=78&y=86&d=8&pol=82&az=45`, a densidad 3):
+  - **4096 dejando `normalBias` en 1,5 téxeles: PEOR.** El sesgo está escrito en
+    téxeles, así que al doblar el mapa se queda a la MITAD en metros (0,11 →
+    0,055), y lo que cierra la fuga son los metros, no los téxeles.
+  - **Caja de 100 m con el mismo 1,5 téxeles: peor**, por lo mismo (0,073 m), y
+    encima pierde alcance.
+  - **Sesgo a 3 téxeles (0,22 m): la cierra, pero aplana al avatar** — la cabeza
+    deja de sombrear la barbilla, que es justo lo que protege el comentario del
+    `normalBias`.
+  - **4096 con el sesgo igual EN METROS: la cierra**, y sin efecto medible. Es
+    la opción cara: 16,8 millones de téxeles de pasada de profundidad cada
+    0,25 m que anda el avatar, en el mismo teléfono donde se vio el defecto.
+- **El arreglo, una línea: `matAtlas.shadowSide = THREE.FrontSide`.** Al mapa
+  solo van las caras que miran al sol. Quien sombrea la pared de detrás pasa a
+  ser el lado ILUMINADO de la casa, metros por delante, y sale uniforme. No
+  toca el sesgo ni la memoria, y el autosombreado del avatar —que va con
+  `matFijo`, no con el atlas— se queda exactamente como estaba.
+- **Lo que cuesta.** La pared ILUMINADA gana algo de rayado: `npm run movil`
+  pasa de 0,0013 a **0,0091**, cinco veces por debajo del umbral de 0,05 y
+  veinte por debajo del tramado que sí se veía a simple vista. En el banco se
+  mueven cuatro vistas y ninguna más de 0,34 % (`a-escala`), y todo el
+  movimiento cae DENTRO de la casa: los marcos de las ventanas y la línea del
+  alero. Ninguna pieza perdió su sombra.
+- **Pide geometría cerrada.** Con solo las caras a la luz, una pieza de una sola
+  cara o abierta dejaría de proyectar sombra desde ciertos ángulos. Los kits de
+  Kenney son sólidos cerrados; el día que entre una pieza que no lo sea, es aquí
+  donde va a aparecer.
+
 ### Si se mete otro kit
 
 Lo aprendido metiendo el City Kit Roads, que es lo que va a doler la próxima vez:
