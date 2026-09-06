@@ -742,6 +742,14 @@ sueltos, así que es zona gris.
 
 ### Cabos sueltos
 
+- **El coste del horizonte no está medido en hardware real.** Lo único medido
+  es con Chromium por software (SwiftShader, que castiga la geometría mucho más
+  que una GPU), y ahí el fotograma pasa de 415 a 492 ms. Eso es un TECHO, no
+  una medida: falta abrir la web en un móvil y ver si se resiente. Si se
+  resiente, las palancas por orden de lo que ahorran son bajar `HOR_ARB_R1`,
+  subir el umbral de densidad de arboledas (`masa` en `siembraHorizonte`, y
+  entonces recalcular que `HOR_ARB_MAX` siga sobrando) y bajar el teselado de
+  la corona.
 - En el `mundo.json` de **producción** hay un jugador inerte `0000…0001`
   llamado «Sonda», en 900000/900000, de comprobar la API en vivo. No tiene
   parcela ni vuelve a aparecer; se quita a mano en el volumen si molesta.

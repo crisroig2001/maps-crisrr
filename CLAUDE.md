@@ -54,6 +54,13 @@ npm run prueba       # integración: dos jugadores de verdad en dos pestañas
   valiendo y significa 4.
 - **El reloj del mundo se congela con `?t=12`** para capturar. Si tocas algo que
   dependa del tiempo, el banco lo verá.
+- **Los shaders viven en template literals de JS**, así que un backtick dentro
+  de un comentario del GLSL cierra la cadena y rompe el build. Comillas
+  angulares o nada.
+- **Si el banco no abre Chromium**, es que la versión de Playwright del repo no
+  cuadra con el navegador instalado: `CHROMIUM_BIN=/ruta/al/chrome npm run
+  vistas`. Y un `npm run build` con el `npm run dev` levantado deja el dev
+  server sirviendo 404: mátalo, borra `.next` y relánzalo.
 - **Solo tres vistas del banco enseñan el horizonte** (`horizonte`,
   `a-ras-de-suelo` y `a-escala`): hace falta `pol` ≥ 65,4° para que el cielo
   entre en cuadro. Si tocas la corona del horizonte y las otras seis se mueven,
@@ -81,9 +88,32 @@ curl -X POST -H "Authorization: Bearer $COOLIFY_TOKEN" \
 deja la web como estaba.
 
 Para comprobar que lo servido es lo nuevo, el hash de `page-*.js` **no sirve**
-(es una envoltura de 3 KB que casi nunca cambia). Sigue el mapa de trozos de
-`webpack-*.js` hasta el trozo del mundo y busca ahí una cadena nueva; o mira si
-responde 200 un fichero estático que solo exista en ese commit.
+(es una envoltura de 3 KB que casi nunca cambia). Hay que seguir el mapa de
+trozos de `webpack-*.js` hasta el trozo del mundo:
+
+```bash
+HTML=$(curl -s https://maps.crisrr.com/)
+printf '%s' "$HTML" | grep -o '/_next/static/chunks/[A-Za-z0-9_./-]*\.js' | sort -u > lista.txt
+WP=$(grep -m1 'webpack-' lista.txt)
+curl -s "https://maps.crisrr.com$WP" > wp.js
+grep -o '[0-9]\{2,4\}:"[a-z0-9]\{12,\}"' wp.js \
+  | sed 's#\([0-9]*\):"\([a-z0-9]*\)"#/_next/static/chunks/\1.\2.js#' >> lista.txt
+sort -u lista.txt -o lista.txt
+while read -r t; do curl -s "https://maps.crisrr.com$t" | grep -q CADENA && echo "$t"; done < lista.txt
+```
+
+Dos avisos, los dos por haberlos sufrido:
+
+- En el mapa de webpack las entradas son `123:"hash"`, **sin comillas en la
+  clave**. Un regex que las espere no encuentra nada y se lee como «no está
+  desplegado» cuando sí lo está.
+- Busca **dos** cadenas: una que solo exista en el commit NUEVO y otra que solo
+  existiera en el VIEJO. Con una sola no distingues «no desplegado» de «mi
+  búsqueda está mal».
+
+Y ojo con el estado que devuelve Coolify: el contenido servido puede ser ya el
+nuevo mientras el registro del despliegue sigue en `in_progress`, porque cierra
+después de conmutar el tráfico. Manda lo que sirve la web.
 
 ## Estado
 
