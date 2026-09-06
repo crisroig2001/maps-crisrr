@@ -14,10 +14,14 @@ export const dynamic = 'force-dynamic';
 const limited = creaLimite(150);
 
 // POST {jugador, nombre, color, x, y, r, m: lo que dice, e: gesto,
+//       a: {k: foto|audio, d: data URL, s: segundos} una foto o un audio,
+//       trae: [ids de adjuntos que quiere],
 //       reporta: a quién, corro: {a: acción, q: a quién o a qué corro}}
-//   → {cerca: [{id, n, c, x, y, r, m, k: su corro, h: habla aparte}], conectados,
-//      corro: el tuyo, invita: quién quiere hablar contigo,
-//      llaman: quién llama a tu puerta, corros: los que se ven, corroR: qué tal}
+//   → {cerca: [{id, n, c, x, y, r, m, ma: ficha del adjunto, k: su corro,
+//      h: habla aparte}], conectados, adjuntos: {id: data URL} los pedidos,
+//      adjR: qué tal el adjunto, corro: el tuyo, invita: quién quiere hablar
+//      contigo, llaman: quién llama a tu puerta, corros: los que se ven,
+//      corroR: qué tal}
 // Todo lo social viaja por aquí y no por rutas propias: la presencia vive en
 // memoria y en Next cada ruta puede acabar con SU copia del módulo, así que
 // solo es de fiar en la ruta que la escribe (ver el reporte en lib/mundo.js).

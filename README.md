@@ -162,9 +162,20 @@ servidor solo guarda qué hay en cada parcela y quién anda cerca.
   y el de dos se le apaga. Con **ratón**, arrastrar gira y cambia el ángulo y
   la rueda acerca. El mapa nunca se aleja más de 120 m del avatar y vuelve a
   centrarlo en cuanto se anda: se puede mirar alrededor sin perderse.
-- **Hablar**: con el botón 💬 sale un anillo de **gestos** (👋 😄 ❤️ 🎉 🙏 😮)
-  y una caja de texto. Lo que dices sale en una **burbuja sobre tu cabeza** y
-  lo lee quien esté cerca. Un gesto no es solo un emoji que sube: **mueve el
+- **Hablar**: con el botón 💬 se abre el **chat**, un panel como el de
+  cualquier mensajería: la conversación en burbujas —lo de los demás a la
+  izquierda con su nombre y su color, lo tuyo a la derecha—, la hora de cada
+  mensaje, y abajo la caja de escribir con los **gestos** (👋 😄 ❤️ 🎉 🙏 😮),
+  una **foto** 📷 y un **audio** 🎤 que se graba manteniendo pulsado. Lo que
+  dices sale ADEMÁS en una **burbuja sobre tu cabeza** y lo lee quien esté
+  cerca: el chat es dónde se lee lo hablado, la burbuja es quién lo ha dicho y
+  desde dónde, y las dos cosas hacen falta —un chat sin burbujas es una sala
+  de chat con un mundo de fondo, y una burbuja sin chat se lleva lo dicho a
+  los nueve segundos—. El panel va **anclado a un lado** (a la izquierda en
+  escritorio, a lo ancho en el móvil) y no en el centro: abierto es grande, y
+  en medio tapaba justo lo que se está mirando, que es el avatar y la persona
+  a la que se le habla. Con el chat abierto se esconde el joystick: se está
+  escribiendo, no andando. Un gesto no es solo un emoji que sube: **mueve el
   cuerpo**, que es lo que hace que dos personas en el mismo sitio se noten.
   Saludar levanta un brazo y lo agita, la risa y la fiesta levantan los dos y
   dan un brinco, y el resto lleva los brazos al frente; qué hace cada uno lo
@@ -179,7 +190,36 @@ servidor solo guarda qué hay en cada parcela y quién anda cerca.
   desvanece y ahí se acaba. El texto entra acotado (80 caracteres, sin
   caracteres de control) y se pinta con `textContent`, nunca como marcado. Eso
   es hablar **a quien pase**; para hablar con alguien en concreto está el
-  **corro**, más abajo.
+  **corro**, más abajo. Lo que se lee en el chat de «Cerca» **vive en tu
+  navegador** y solo desde que entraste: el servidor sigue sin guardar una
+  conversación, y quien llegue después no lee lo de antes. Al **silenciar** a
+  alguien, lo que dijo antes se va también del chat: silenciar es dejar de
+  verle, no dejar de verle a partir de ahora.
+- **Fotos y audios** (`src/lib/adjuntos.js`): en el chat se puede mandar una
+  foto o un mensaje de voz, y van por donde va todo lo demás —montados en el
+  sondeo de presencia, sin ruta, sin subida aparte y sin almacén de ficheros—.
+  Como **data URL**, que es lo que un JSON lleva sin más: un 33 % más gordo
+  que el binario, y a cambio no hay nada que limpiar cuando la conversación se
+  acaba. La foto **se reduce en tu navegador** antes de salir (lado mayor a
+  720 px y JPEG a 0,72, apretando más si no cabe en 220 KB): un móvil hace
+  fotos de 4 MB y en el chat se ven a 220 px, así que subirla entera es
+  regalarle megas a todo el mundo. El audio se graba con `MediaRecorder` a 24
+  kbps, con tope de 30 s —un mensaje de voz, no un pódcast— y sale al soltar
+  el micrófono; cancelar lo tira sin que salga del navegador.
+  Lo importante es **cómo llega a los demás**: el mensaje lleva solo la FICHA
+  del adjunto (id, tipo, segundos) y quien lo quiere lo **pide por id** en su
+  siguiente sondeo. Si el adjunto viajara dentro de cada sondeo, un vecino con
+  la burbuja viva se lo tragaría seis veces (la burbuja dura 9 s y el sondeo va
+  cada 1,5), y en un corro de ocho cada foto serían cuarenta y ocho descargas;
+  pedido por id, es una por persona. Viven en la **memoria** del servidor diez
+  minutos (los de un corro se van con el corro, y los que se caen del hilo con
+  su línea), con un tope global de 48 MB en el que los viejos se caen solos: un
+  servidor de una instancia no puede dejar que una tarde de fotos se lo coma. Y
+  **solo llegan a quien puede leerlos**: el id es la llave y solo lo tiene
+  quien recibió el mensaje, y un adjunto dicho DENTRO de un corro no se le
+  sirve a nadie de fuera aunque tenga el id. Los tipos que se aceptan son una
+  lista cerrada (JPEG y WebP, y WebM/MP4/OGG para el audio), comprobada con una
+  expresión regular sobre el data URL entero.
 - **El corro**: hablar con alguien en concreto, y que se vea. Hasta ahora lo
   que decías lo oía todo el que pasara, y dos personas juntas no se
   distinguían de dos que se han cruzado. Un **corro** es un grupo hablando
@@ -219,8 +259,11 @@ servidor solo guarda qué hay en cada parcela y quién anda cerca.
   como la cámara de serie mira de cerca y desde alto, el punto del que cuelga
   se proyecta arriba del todo: se sujeta por debajo de la barra y dentro de
   la pantalla, y cuando le toca sujetarse pierde el pico, que ya no apunta a
-  nadie. Lo que no cabe se lee en **«Todo»**, una hoja normal con la
-  conversación entera. Quien pasa por al lado y no está dentro ve un **globo
+  nadie. **El globo se toca y abre el chat**, que es donde se lee la
+  conversación entera y donde se escribe: el globo enseña las últimas líneas
+  en el sitio en el que están pasando, y el chat es la conversación. Mientras
+  el chat está abierto el globo se esconde, que serían las mismas líneas dos
+  veces. Quien pasa por al lado y no está dentro ve un **globo
   mudo** sobre el grupo —tres puntos que laten y nada más—: sabe que ahí se
   está hablando, y lo que se dice es de los de dentro. El hilo lo guarda el
   **corro**, no quien habló: así los tres leen lo mismo aunque a uno se le
@@ -507,14 +550,17 @@ se baje otro.
    **corro**: tocar a alguien para hablar solo con él, un círculo en el suelo
    que enseña quién habla con quién, una puerta que abre quien lo empezó, y el
    hilo con lo hablado volando hasta un carrete sobre el grupo
-3. **Cuentas de usuario** ← lo siguiente. Hoy el id es del dispositivo y se
+3. ✅ El **chat**: un panel de mensajería de verdad (burbujas a un lado y a
+   otro, la hora, y fotos y audios) sobre lo que ya había, sin ruta ni almacén
+   nuevos y sin que nada se guarde
+4. **Cuentas de usuario** ← lo siguiente. Hoy el id es del dispositivo y se
    puede falsificar, y de ahí cuelga todo lo demás: la propiedad de una parcela
    es «quien tenga ese localStorage», bloquear a alguien cuesta lo que vaciarlo
    y volver, y un reporte señala a un id que puede no volver a existir. Es lo
    que convierte silenciar y bloquear en moderación de verdad.
-4. WebSockets para la presencia (hablar y los gestos ya van por el sondeo, que
+5. WebSockets para la presencia (hablar y los gestos ya van por el sondeo, que
    para eso sobra; lo que se nota es el retardo al ver andar a los demás)
-5. Más piezas, piezas apilables (plantas), interiores
+6. Más piezas, piezas apilables (plantas), interiores
 
 ### Lo que dejó apuntado la auditoría visual
 
