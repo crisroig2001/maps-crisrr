@@ -2175,6 +2175,27 @@ export default function Mundo() {
           tex.colorSpace = THREE.SRGBColorSpace;
           tex.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
           matAtlas = conNiebla(new THREE.MeshToonMaterial({ map: tex, gradientMap: rampa }));
+          // Al mapa de sombras solo van las caras que MIRAN AL SOL. Por
+          // defecto three hace lo contrario —le da la vuelta al `side`, así
+          // que de un material `FrontSide` dibuja las traseras— y eso mete en
+          // el mapa la propia pared que está de espaldas al sol, a su misma
+          // profundidad: se compara consigo misma y una franja del ancho de
+          // un par de téxeles se libra del test. En la pared en sombra de una
+          // casa eso se ve como un rayado diagonal, y con la rampa toon se ve
+          // MÁS de lo que parece, porque el escalón de media luz (t entre
+          // 0,44 y 0,56) hace que una cara casi de canto al sol siga
+          // recibiendo algo: no está a oscuras, así que la fuga se nota.
+          // Con las caras iluminadas, quien sombrea esa pared es el lado
+          // iluminado de la casa, metros por delante, y sale uniforme.
+          // Ojo con lo que NO vale para arreglarlo, que está medido: subir el
+          // mapa a 4096 dejando `normalBias` en 1,5 téxeles lo empeora —el
+          // sesgo está escrito en téxeles, así que en METROS se queda a la
+          // mitad, y lo que cierra la fuga son los metros—; y doblar el sesgo
+          // a 3 téxeles la cierra pero aplana al avatar (la cabeza deja de
+          // sombrear la barbilla), que es justo lo que protege el comentario
+          // del `normalBias`. Pide geometría cerrada, que es lo que son los
+          // kits de Kenney.
+          matAtlas.shadowSide = THREE.FrontSide;
           materialesAtlas.set(clave, matAtlas);
         }
         partes.push({ geo: mergeGeometries(gs, false), mat: matAtlas });
