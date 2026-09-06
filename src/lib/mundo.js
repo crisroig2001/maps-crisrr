@@ -12,7 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { PARCELA_M, claveParcela } from './parcela';
 import { validaPiezas, limpiaNombre, limpiaMensaje, COLORES, PELOS, PIELES, MAX_NOMBRE, EMOTES, MENSAJE_MS, EMOTE_MS, RE_JUGADOR } from './piezas';
-import { tipoParcela, esPublica, piezasPublicas, RADIO_RESIDENCIAL } from './paisaje';
+import { tipoParcela, esPublica, piezasPublicas, enCalle, RADIO_RESIDENCIAL } from './paisaje';
 import { CORRO_MAX, CORRO_CERCA_M, CORRO_RADIO_M, INVITACION_MS, ACCIONES_CORRO, RE_CORRO, CORRO_LINEAS } from './corro';
 import { limpiaAdjunto, fichaAdjunto, etiquetaAdjunto, ADJUNTO_MS, ADJUNTOS_MAX_BYTES, ADJUNTO_CADA_MS, RE_ADJUNTO_ID } from './adjuntos';
 
@@ -50,7 +50,7 @@ let cache = null;
 // Versión de la semilla. Al cambiar el número, las parcelas del «mundo» (la
 // plaza y la casa de muestra) se reescriben en el arranque: la semilla solo
 // se creaba la primera vez y producción se quedaba con la muestra vieja.
-const SEMILLA = 4;
+const SEMILLA = 5; // 5: la urbanización
 
 // Lo público de serie: la plaza, los paseos, los parques y la casa de
 // muestra, con dueño «mundo» (nadie las reclama ni las cambia). Sale del
@@ -181,6 +181,10 @@ export function setPiezas(clave, jugador, lista) {
   if (e.o !== jugador) return 'ajena';
   const d = validaPiezas(lista, PARCELA_M);
   if (!d) return 'bad_piezas';
+  // la calle del barrio pasa por la linde de algunos solares: esos 4 m son
+  // calzada y no se construye encima (el visor lo avisa antes de llegar aquí)
+  const [px, py] = clave.split('/').map(Number);
+  if (d.some((z) => enCalle(px * PARCELA_M + z.x, py * PARCELA_M + z.y))) return 'en_calle';
   e.d = d;
   e.t = Date.now(); // el delta por `desde` tiene que traer este cambio
   save();

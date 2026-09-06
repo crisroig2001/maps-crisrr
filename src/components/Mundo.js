@@ -20,7 +20,7 @@ import { PIEZAS, CATEGORIAS, COLORES, PELOS, PIELES, MAX_PIEZAS, MAX_NOMBRE, MAX
 import { ADJUNTO_MAX, AUDIO_MAX_S, FOTO_LADO, etiquetaAdjunto, duracion } from '../lib/adjuntos';
 import { perfil, guardaPerfil, gustaVisto, guardaGustaVisto, silenciados, silencia, quitaSilencio } from '../lib/jugador';
 import { CORRO_MAX, CORRO_CERCA_M, CORRO_AVISO_M, CORRO_LINEAS_VISTA } from '../lib/corro';
-import { tipoParcela, conSuelo, cauce, distRio, rioEsteX as rioEsteXEnEscena, rioSurY as rioSurYEnEscena, GLSL_CAUCE, GLSL_FLUJO, RIO_ANCHO, NIVEL_AGUA, LECHO, BANDA_AGUA } from '../lib/paisaje';
+import { tipoParcela, conSuelo, cauce, distRio, rioEsteX as rioEsteXEnEscena, rioSurY as rioSurYEnEscena, GLSL_CAUCE, GLSL_FLUJO, RIO_ANCHO, NIVEL_AGUA, LECHO, BANDA_AGUA, piezasCalle, enCalle, ladosCalle, CAJA_CALLES, CALLE_ANCHO } from '../lib/paisaje';
 const LECHO_G = LECHO.toFixed(1);
 
 const L = PARCELA_M;
@@ -2611,6 +2611,7 @@ export default function Mundo() {
           if (Math.hypot(wx - yo.x, wy - yo.y) > RADIO_CAMPO) continue;
           // ni en el agua ni en su orilla, ni en lo público, ni en lo de nadie
           if (distRio(wx, wy).d < RIO_ANCHO + 6) continue;
+          if (enCalle(wx, wy, 2.5)) continue; // ni en la calzada del barrio ni con el tronco en la acera
           const p = parcelaDe(wx, wy);
           const tipo = tipoParcela(p.px, p.py);
           if (tipo !== 'campo' && tipo !== 'residencial' && tipo !== 'parque') continue;
@@ -2783,6 +2784,68 @@ export default function Mundo() {
       return Math.min(alturaEn(wx - r, wy), alturaEn(wx + r, wy), alturaEn(wx, wy - r), alturaEn(wx, wy + r)) - 0.04;
     }
 
+    // Una pieza al mundo: su instancia, su mancha de contacto y su sólido.
+    // Con «clave», es de esa parcela y se puede tocar (seleccionar, arrastrar);
+    // sin ella es del plano —una baldosa de calle, la farola de una acera— y
+    // no se toca. `origen` es lo que el rayo de selección consulta.
+    function ponPieza(cont, clave, z, bx, by) {
+      const par = mallas[z.t];
+      if (!par) return;
+      const wx = bx + z.x;
+      const wy = by + z.y;
+      const def = PIEZAS[z.t];
+      // Variación por instancia. Un parque son 7-11 árboles clonados
+      // píxel a píxel, mismo ángulo y mismo tamaño, y eso es lo que hace
+      // que un bosque se lea como papel pintado. El giro y la escala
+      // salen de un hash de la POSICIÓN, así que son deterministas: los
+      // mismos datos dan el mismo mundo en todos los clientes, sin tocar
+      // el formato guardado {t,x,y,r,c} ni pedirle nada al servidor.
+      // Solo la naturaleza: una casa, un banco o una mesa se colocan a
+      // propósito, y torcerlos 20° se lee como descuido, no como bosque.
+      // Las de rejilla y las de suelo quedan fuera por definición: tienen
+      // que casar unas con otras.
+      const suelta = def.cat === 'naturaleza' && !def.rejilla && !def.suelo;
+      let giro = (z.r || 0) * (Math.PI / 2);
+      let escala = 1;
+      if (suelta) {
+        const hx = Math.round(wx * 10);
+        const hy = Math.round(wy * 10);
+        giro += (hash2(hx, hy) - 0.5) * 0.78; // ±22°
+        escala = 0.88 + hash2(hy + 7919, hx + 104729) * 0.24; // 0,88..1,12
+      }
+      if (def.solido) solidos.push({ x: wx, y: wy, r: def.solido * escala });
+      // un pelín enterrada: en pendiente, mejor que el borde bajo se hunda
+      // a que el alto flote
+      ponMancha(def, wx, wy, escala);
+      posI.set(wx, asiento(def, wx, wy, escala), -wy);
+      rotI.setFromAxisAngle(ejeY, giro);
+      escPieza.set(escala, escala, escala);
+      mtx.compose(posI, rotI, escPieza);
+      const i = cont[z.t];
+      if (i >= MAX_INST) return;
+      for (const p of par.partes) {
+        p.mesh.setMatrixAt(i, mtx);
+        if (p.tinte) p.mesh.setColorAt(i, tinteDe(p, z.c | 0));
+      }
+      origen[z.t][i] = clave ? { clave, z } : null;
+      cont[z.t] = i + 1;
+    }
+
+    // Las parcelas por las que pasa una calle del barrio, de las cargadas.
+    // Una parcela sin nada guardado no está en `parcelas`, así que se
+    // recorre la caja y no el mapa: la calle pasa igual por un solar vacío.
+    function conCalle(fn) {
+      const caja = cajaAlrededor();
+      for (let px = Math.max(caja.px0, CAJA_CALLES.px0); px <= Math.min(caja.px1, CAJA_CALLES.px1); px++) {
+        for (let py = Math.max(caja.py0, CAJA_CALLES.py0); py <= Math.min(caja.py1, CAJA_CALLES.py1); py++) {
+          const pc = parcelas.get(claveParcela(px, py));
+          // el cartel de «solar libre» solo mientras lo sea
+          const libre = !pc?.o && tipoParcela(px, py) === 'residencial';
+          fn(px, py, piezasCalle(px, py, libre));
+        }
+      }
+    }
+
     function pintaMundo() {
       const cont = {};
       for (const t in mallas) {
@@ -2810,8 +2873,34 @@ export default function Mundo() {
             // árboles de ±11 m sobre hierba, que es justo lo que se busca.
             posI.set(cen.x, 0.04, -cen.y);
             rotI.identity();
-            if (tipoP === 'paseo') escPaseo.set(p.py === 0 ? 1 : ANCHO_PASEO / L, 1, p.py === 0 ? ANCHO_PASEO / L : 1);
-            else escPaseo.set(1, 1, 1);
+            if (tipoP === 'paseo') {
+              // Donde una calle del barrio cruza el paseo, la losa se acorta
+              // media calzada por ese extremo: si no, la piedra tapaba el
+              // asfalto y el paso de cebra, y solo asomaban los bordillos.
+              const lc = ladosCalle(p.px, p.py);
+              const corte = CALLE_ANCHO / 2;
+              let largo = L;
+              let corre = 0;
+              // por cada extremo con calle, media calzada menos y el centro
+              // corrido un cuarto hacia el otro lado
+              const a = p.py === 0 ? lc.w : lc.s;
+              const b = p.py === 0 ? lc.e : lc.n;
+              if (a) {
+                largo -= corte;
+                corre += corte / 2;
+              }
+              if (b) {
+                largo -= corte;
+                corre -= corte / 2;
+              }
+              if (p.py === 0) {
+                escPaseo.set(largo / L, 1, ANCHO_PASEO / L);
+                posI.x += corre;
+              } else {
+                escPaseo.set(ANCHO_PASEO / L, 1, largo / L);
+                posI.z -= corre; // hacia el norte es -z
+              }
+            } else escPaseo.set(1, 1, 1);
             mtx.compose(posI, rotI, escPaseo);
             plazas.setMatrixAt(nPlazas++, mtx);
           }
@@ -2829,48 +2918,15 @@ export default function Mundo() {
           }
           marcos.setColorAt(nMarcos++, col);
         }
-        for (const z of MUESTRARIO || MINIATURA ? [] : pc.d || []) {
-          const par = mallas[z.t];
-          if (!par) continue;
-          const wx = bx + z.x;
-          const wy = by + z.y;
-          const def = PIEZAS[z.t];
-          // Variación por instancia. Un parque son 7-11 árboles clonados
-          // píxel a píxel, mismo ángulo y mismo tamaño, y eso es lo que hace
-          // que un bosque se lea como papel pintado. El giro y la escala
-          // salen de un hash de la POSICIÓN, así que son deterministas: los
-          // mismos datos dan el mismo mundo en todos los clientes, sin tocar
-          // el formato guardado {t,x,y,r,c} ni pedirle nada al servidor.
-          // Solo la naturaleza: una casa, un banco o una mesa se colocan a
-          // propósito, y torcerlos 20° se lee como descuido, no como bosque.
-          // Las de rejilla y las de suelo quedan fuera por definición: tienen
-          // que casar unas con otras.
-          const suelta = def.cat === 'naturaleza' && !def.rejilla && !def.suelo;
-          let giro = (z.r || 0) * (Math.PI / 2);
-          let escala = 1;
-          if (suelta) {
-            const hx = Math.round(wx * 10);
-            const hy = Math.round(wy * 10);
-            giro += (hash2(hx, hy) - 0.5) * 0.78; // ±22°
-            escala = 0.88 + hash2(hy + 7919, hx + 104729) * 0.24; // 0,88..1,12
-          }
-          if (def.solido) solidos.push({ x: wx, y: wy, r: def.solido * escala });
-          // un pelín enterrada: en pendiente, mejor que el borde bajo se hunda
-          // a que el alto flote
-          ponMancha(def, wx, wy, escala);
-          posI.set(wx, asiento(def, wx, wy, escala), -wy);
-          rotI.setFromAxisAngle(ejeY, giro);
-          escPieza.set(escala, escala, escala);
-          mtx.compose(posI, rotI, escPieza);
-          const i = cont[z.t];
-          if (i >= MAX_INST) continue;
-          for (const p of par.partes) {
-            p.mesh.setMatrixAt(i, mtx);
-            if (p.tinte) p.mesh.setColorAt(i, tinteDe(p, z.c | 0));
-          }
-          origen[z.t][i] = { clave, z };
-          cont[z.t] = i + 1;
-        }
+        for (const z of MUESTRARIO || MINIATURA ? [] : pc.d || []) ponPieza(cont, clave, z, bx, by);
+      }
+      // Las calles del barrio, con sus farolas y el cartel de los solares
+      // libres: no están guardadas en ninguna parcela, salen del plano y se
+      // pintan encima de lo que haya, sea de quien sea la parcela.
+      if (!MUESTRARIO && !MINIATURA) {
+        conCalle((px, py, lista) => {
+          for (const z of lista) ponPieza(cont, null, z, px * L, py * L);
+        });
       }
       // ANTES del bucle que fija los `count`: si no, las instancias del campo
       // se escriben pero no se dibujan.
@@ -2939,6 +2995,10 @@ export default function Mundo() {
           if (!p) continue;
           for (const z of pc.d || []) if (PIEZAS[z.t]?.suelo) caminos.push([p.px * L + z.x, p.py * L + z.y, margenSuelo(PIEZAS[z.t])]);
         }
+        // y las baldosas de la calle del barrio, que no están en ninguna parcela
+        conCalle((px, py, lista) => {
+          for (const z of lista) if (PIEZAS[z.t]?.suelo) caminos.push([px * L + z.x, py * L + z.y, margenSuelo(PIEZAS[z.t])]);
+        });
       }
       let n = 0;
       for (let i = -R; i <= R && n < MAX_HIERBA; i++) {
@@ -4144,6 +4204,12 @@ export default function Mundo() {
       const y = p.y - obraBase.by;
       if (x < 0 || x > L || y < 0 || y > L) {
         avisaObra?.({ fuera: true });
+        return;
+      }
+      // los 4 m de calle del barrio que le tocan a un solar son calzada: el
+      // servidor tampoco lo guardaría ('en_calle')
+      if (enCalle(p.x, p.y)) {
+        avisaObra?.({ calle: true });
         return;
       }
       const pc = parcelas.get(obraClave);
@@ -5394,6 +5460,7 @@ export default function Mundo() {
     if (!eng || !donde?.mia) return;
     const n = eng.construye(donde.clave, (ev) => {
       if (ev.fuera) avisa('Toca dentro de tu parcela');
+      else if (ev.calle || ev.error === 'en_calle') avisa('Eso es la calle: construye del bordillo para dentro');
       else if (ev.lleno) avisa('Tu parcela ya tiene ' + MAX_PIEZAS + ' piezas: borra alguna para poner otra');
       else if (ev.error === 'ajena') avisa('Esta parcela no es tuya: no se ha guardado');
       else if (ev.error) avisa('No se pudo guardar (¿sin conexión?)');
@@ -5960,7 +6027,11 @@ export default function Mundo() {
                       ? 'Río: aquí no se construye'
                       : donde.tipo === 'muestra'
                         ? 'Casa de muestra'
-                        : 'Campo: se construye cerca de la plaza'}
+                        : donde.tipo === 'barrio'
+                          ? 'Casa de la urbanización'
+                          : donde.tipo === 'comun'
+                            ? 'Zona común de la urbanización'
+                            : 'Campo: se construye cerca de la plaza'}
             </span>
           )}
         </div>
