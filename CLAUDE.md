@@ -65,6 +65,13 @@ npm run prueba       # integración: dos jugadores de verdad en dos pestañas
   `a-ras-de-suelo` y `a-escala`): hace falta `pol` ≥ 65,4° para que el cielo
   entre en cuadro. Si tocas la corona del horizonte y las otras seis se mueven,
   has tocado otra cosa.
+- **Todo lo social va montado en el POST de presencia**, sin ruta propia: lo
+  que se dice, los gestos, el corro, los reportes y ahora las **fotos y los
+  audios** (`src/lib/adjuntos.js`). La presencia vive en memoria y en Next cada
+  ruta puede acabar con SU copia del módulo, así que esa memoria solo es de
+  fiar en la ruta que la escribe. Un adjunto no viaja dentro del sondeo: con el
+  mensaje va su FICHA (id, tipo, segundos) y quien lo quiere lo pide por id
+  (`trae: [...]`), que si no una foto se manda seis veces a cada vecino.
 - **Nada que se dibuje con un patrón fino puede llevar un `step()` pelado.**
   Ni el agua ni la hierba ni las losas: el ancho del corte lo tiene que poner
   `fwidth`, o de lejos el borde cae siempre dentro de un píxel y hierve. Y una
@@ -120,3 +127,12 @@ después de conmutar el tráfico. Manda lo que sirve la web.
 56 piezas en 5 pestañas (casas, naturaleza, jardín, suelo, calle). 42 modelos
 glTF de Kenney (CC0), 1,3 MB, **todos cargados al arrancar** — cuando el
 catálogo crezca otra vez, toca cargar por pestaña.
+
+El **chat** es un panel de mensajería (burbujas a un lado y a otro, hora,
+fotos y audios) que convive con las burbujas sobre las cabezas: el chat es
+dónde se lee lo hablado y la burbuja es quién lo dijo y desde dónde. Va
+anclado a un lado, nunca en el centro —tapaba al avatar y a quien se le
+habla— y esconde el joystick mientras está abierto. Fuera de un corro lo
+hablado vive en el navegador (`charlaCerca`); dentro, el hilo es el del corro
+y lo guarda el servidor mientras dure. Se prueba con `capturas/chat/` si sigue
+ahí, o con `npm run prueba`, que ya toca la caja de escribir.

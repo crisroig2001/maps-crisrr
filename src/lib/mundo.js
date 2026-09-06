@@ -14,6 +14,7 @@ import { PARCELA_M, claveParcela } from './parcela';
 import { validaPiezas, limpiaNombre, limpiaMensaje, COLORES, PELOS, PIELES, MAX_NOMBRE, EMOTES, MENSAJE_MS, EMOTE_MS, RE_JUGADOR } from './piezas';
 import { tipoParcela, esPublica, piezasPublicas, RADIO_RESIDENCIAL } from './paisaje';
 import { CORRO_MAX, CORRO_CERCA_M, CORRO_RADIO_M, INVITACION_MS, ACCIONES_CORRO, RE_CORRO, CORRO_LINEAS } from './corro';
+import { limpiaAdjunto, fichaAdjunto, etiquetaAdjunto, ADJUNTO_MS, ADJUNTOS_MAX_BYTES, ADJUNTO_CADA_MS, RE_ADJUNTO_ID } from './adjuntos';
 
 const DIR = process.env.DATA_DIR || path.join(process.cwd(), '.data');
 const FILE = path.join(DIR, 'mundo.json');
@@ -334,6 +335,66 @@ function deshaceCorro(c) {
   for (const x of c.m) deQuien.delete(x);
   corros.delete(c.k);
   alaPuerta.delete(c.k);
+  // las fotos y los audios del corro se van con él, como su hilo
+  for (const [id, a] of adjuntos) if (a.k === c.k) borraAdjunto(id);
+}
+
+// --- adjuntos: las fotos y los audios del chat (memoria) ---
+// Ver src/lib/adjuntos.js. Viven aquí un rato (ADJUNTO_MS) y se van; los de
+// un corro, con el corro. Se sirven por id a quien los pida en su sondeo, y
+// los de un corro solo a los de dentro: la ficha del adjunto viaja con el
+// mensaje, y el mensaje ya solo le llega a quien puede leerlo, así que el id
+// es la llave. Hay un tope global de memoria: al llegar, se caen los viejos.
+const adjuntos = new Map(); // id → {d: data URL, t: cuándo, k: corro o null, de: quién, n: bytes}
+let adjuntosBytes = 0;
+const ultimoAdjunto = new Map(); // jugador → cuándo mandó el último
+
+function borraAdjunto(id) {
+  const a = adjuntos.get(id);
+  if (!a) return;
+  adjuntosBytes -= a.n;
+  adjuntos.delete(id);
+}
+
+function guardaAdjunto(de, k, adj, now) {
+  // caducan al guardar el siguiente, que es cuando importa: sin temporizador
+  for (const [id, a] of adjuntos) if (now - a.t > ADJUNTO_MS) borraAdjunto(id);
+  // y de paso el apunte de quién mandó el último: si no, crece una entrada
+  // por jugador mientras viva el proceso, como le pasaba al rate limit
+  for (const [q, t] of ultimoAdjunto) if (now - t > ADJUNTO_MS) ultimoAdjunto.delete(q);
+  let id;
+  do {
+    id = Math.random().toString(36).slice(2, 14);
+  } while (adjuntos.has(id));
+  const n = adj.d.length;
+  // el tope: se van los más viejos hasta que quepa (el Map guarda el orden
+  // de inserción, que aquí es el de llegada)
+  for (const [vid] of adjuntos) {
+    if (adjuntosBytes + n <= ADJUNTOS_MAX_BYTES) break;
+    borraAdjunto(vid);
+  }
+  adjuntos.set(id, { d: adj.d, t: now, k, de, n });
+  adjuntosBytes += n;
+  return { id, k: adj.k, s: adj.s };
+}
+
+// Los que pide alguien: solo los que puede leer. Uno de corro, si está en ese
+// corro; uno suelto (dicho a quien pase), cualquiera que tenga el id, que
+// solo lo tiene quien recibió el mensaje.
+function traeAdjuntos(id, ids, now) {
+  if (!Array.isArray(ids)) return null;
+  const miK = deQuien.get(id) || null;
+  const out = {};
+  let alguno = false;
+  for (const aid of ids.slice(0, 12)) {
+    if (typeof aid !== 'string' || !RE_ADJUNTO_ID.test(aid)) continue;
+    const a = adjuntos.get(aid);
+    if (!a || now - a.t > ADJUNTO_MS) continue;
+    if (a.k && a.k !== miK) continue;
+    out[aid] = a.d;
+    alguno = true;
+  }
+  return alguno ? out : null;
 }
 
 // Salir es salir: si el que se va era el anfitrión, la puerta pasa al que
@@ -513,7 +574,21 @@ export function presencia(id, datos) {
   // lo dicho se arrastra de un sondeo al siguiente mientras dure: el cliente
   // manda el mensaje UNA vez y la burbuja sigue viva para quien llegue luego
   const antes = vivos.get(id);
-  const dicho = limpiaMensaje(datos.m);
+  const texto = limpiaMensaje(datos.m);
+  // una foto o un audio: se guarda aparte y con el mensaje viaja su ficha.
+  // Si viene sin texto, la burbuja dice lo que es («📷 Foto»)
+  let adjR = null;
+  let adj = null;
+  if (datos.a !== undefined) {
+    const limpio = limpiaAdjunto(datos.a);
+    if (!limpio) adjR = 'no_vale';
+    else if (now - (ultimoAdjunto.get(id) || 0) < ADJUNTO_CADA_MS) adjR = 'rapido';
+    else {
+      ultimoAdjunto.set(id, now);
+      adj = limpio;
+    }
+  }
+  const dicho = texto || (adj ? etiquetaAdjunto(adj) : null);
   const gesto = typeof datos.e === 'string' && EMOTES[datos.e] ? datos.e : null;
   const mio = { n: nombre.slice(0, MAX_NOMBRE), c: color, p: pelo, s: piel, x, y, r, t: now };
   if (dicho) {
@@ -522,6 +597,7 @@ export function presencia(id, datos) {
   } else if (antes?.m && now - antes.mt < MENSAJE_MS) {
     mio.m = antes.m;
     mio.mt = antes.mt;
+    if (antes.ma) mio.ma = antes.ma;
   }
   if (gesto) {
     mio.e = gesto;
@@ -548,9 +624,17 @@ export function presencia(id, datos) {
   // de resolver la acción, porque en este mismo sondeo puede haber entrado.
   if (dicho) {
     const suyo = miCorro(id);
+    // el adjunto se guarda ya sabiendo si es de un corro: es lo que decide
+    // quién puede pedirlo luego
+    if (adj) mio.ma = guardaAdjunto(id, suyo ? suyo.k : null, adj, now);
     if (suyo) {
-      suyo.h.push({ q: id, n: mio.n, t: dicho, ts: now });
-      if (suyo.h.length > CORRO_LINEAS) suyo.h.splice(0, suyo.h.length - CORRO_LINEAS);
+      const linea = { q: id, n: mio.n, t: dicho, ts: now };
+      if (mio.ma) linea.a = fichaAdjunto(mio.ma);
+      suyo.h.push(linea);
+      if (suyo.h.length > CORRO_LINEAS) {
+        // las líneas que se caen del hilo se llevan su adjunto
+        for (const l of suyo.h.splice(0, suyo.h.length - CORRO_LINEAS)) if (l.a) borraAdjunto(l.a.id);
+      }
     }
   }
 
@@ -580,6 +664,7 @@ export function presencia(id, datos) {
       if (!suK || suK === miK) {
         d.m = v.m;
         d.mt = v.mt;
+        if (v.ma) d.ma = fichaAdjunto(v.ma);
       } else d.h = 1;
     }
     if (v.e && now - v.et < EMOTE_MS) {
@@ -606,6 +691,13 @@ export function presencia(id, datos) {
   }
   const salida = { cerca, conectados: vivos.size };
   if (corroR) salida.corroR = corroR;
+  if (adjR) salida.adjR = adjR;
+  // las fotos y los audios que este pide por id (los de los mensajes que ha
+  // recibido y aún no tiene)
+  if (datos.trae) {
+    const tr = traeAdjuntos(id, datos.trae, now);
+    if (tr) salida.adjuntos = tr;
+  }
   const mic = miCorro(id);
   if (mic) {
     salida.corro = {

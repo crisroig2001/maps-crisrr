@@ -17,6 +17,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { PARCELA_M, parcelaDe, claveParcela, parseParcela, centroParcela } from '../lib/parcela';
 import { PIEZAS, CATEGORIAS, COLORES, PELOS, PIELES, MAX_PIEZAS, MAX_NOMBRE, MAX_MENSAJE, MENSAJE_MS, EMOTES, limpiaMensaje, pasoRejilla } from '../lib/piezas';
+import { ADJUNTO_MAX, AUDIO_MAX_S, FOTO_LADO, etiquetaAdjunto, duracion } from '../lib/adjuntos';
 import { perfil, guardaPerfil, gustaVisto, guardaGustaVisto, silenciados, silencia, quitaSilencio } from '../lib/jugador';
 import { CORRO_MAX, CORRO_CERCA_M, CORRO_AVISO_M, CORRO_LINEAS_VISTA } from '../lib/corro';
 import { tipoParcela, conSuelo, cauce, distRio, rioEsteX as rioEsteXEnEscena, rioSurY as rioSurYEnEscena, GLSL_CAUCE, GLSL_FLUJO, RIO_ANCHO, NIVEL_AGUA, LECHO, BANDA_AGUA } from '../lib/paisaje';
@@ -991,6 +992,103 @@ function ruido2(x, y) {
   return ab + (cd - ab) * sy;
 }
 
+// La hora de un mensaje del chat, como en cualquier mensajería: solo hora y
+// minutos, que un chat de aquí no dura días.
+function hora(ts) {
+  try {
+    // en español y a 24 h: el mundo está en español entero, y con el reloj
+    // del navegador en inglés salía «12:49 PM» en mitad de una frase en
+    // castellano
+    return new Date(ts).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+  } catch {
+    return '';
+  }
+}
+
+// Una foto reducida para el chat: el lado mayor a FOTO_LADO píxeles y JPEG
+// apretado hasta que quepa en ADJUNTO_MAX. Devuelve el data URL, o null si
+// ni a 320 px cabe (no debería: una foto de 320 px a 0,5 son 15 KB).
+async function reduceFoto(fichero) {
+  let bitmap = null;
+  try {
+    // `imageOrientation` aplica el giro EXIF: sin él, una foto vertical de
+    // un móvil sale tumbada
+    bitmap = await createImageBitmap(fichero, { imageOrientation: 'from-image' });
+  } catch {
+    bitmap = await new Promise((res, rej) => {
+      const img = new Image();
+      const url = URL.createObjectURL(fichero);
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        res(img);
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(url);
+        rej(new Error('no se lee'));
+      };
+      img.src = url;
+    });
+  }
+  const w0 = bitmap.width || bitmap.naturalWidth;
+  const h0 = bitmap.height || bitmap.naturalHeight;
+  if (!w0 || !h0) return null;
+  const lienzo = document.createElement('canvas');
+  const ctx = lienzo.getContext('2d');
+  for (const [lado, calidad] of [
+    [FOTO_LADO, 0.72],
+    [FOTO_LADO, 0.55],
+    [520, 0.55],
+    [320, 0.5],
+  ]) {
+    const f = Math.min(1, lado / Math.max(w0, h0));
+    lienzo.width = Math.max(1, Math.round(w0 * f));
+    lienzo.height = Math.max(1, Math.round(h0 * f));
+    ctx.drawImage(bitmap, 0, 0, lienzo.width, lienzo.height);
+    const d = lienzo.toDataURL('image/jpeg', calidad);
+    if (d.length <= ADJUNTO_MAX) return d;
+  }
+  return null;
+}
+
+// El reproductor de un audio del chat: un botón, la barra y lo que dura. Es
+// el <audio> de siempre por debajo, sin sus controles, que ocupan media
+// burbuja y en cada navegador son de una manera.
+function Reproductor({ src, s }) {
+  const ref = useRef(null);
+  const [sonando, setSonando] = useState(false);
+  const [pos, setPos] = useState(0);
+  const total = s || 0;
+  function alterna() {
+    const a = ref.current;
+    if (!a) return;
+    if (a.paused) a.play().catch(() => {});
+    else a.pause();
+  }
+  return (
+    <span className={'audio' + (sonando ? ' sonando' : '')}>
+      <audio
+        ref={ref}
+        src={src}
+        preload="metadata"
+        onPlay={() => setSonando(true)}
+        onPause={() => setSonando(false)}
+        onEnded={() => {
+          setSonando(false);
+          setPos(0);
+        }}
+        onTimeUpdate={(e) => setPos(e.currentTarget.currentTime)}
+      />
+      <button type="button" onClick={alterna} aria-label={sonando ? 'Pausar el audio' : 'Escuchar el audio'}>
+        {sonando ? '❚❚' : '▶'}
+      </button>
+      <i className="barra" aria-hidden="true">
+        <i style={{ width: total ? Math.min(100, (pos / total) * 100) + '%' : '0%' }} />
+      </i>
+      <small>{duracion(sonando ? pos : total)}</small>
+    </span>
+  );
+}
+
 export default function Mundo() {
   const canvasRef = useRef(null);
   const rotulosRef = useRef(null);
@@ -1005,6 +1103,19 @@ export default function Mundo() {
   const [sinGL, setSinGL] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
+  // --- el chat ---
+  // Lo que se ha dicho CERCA desde que entraste: lo que dice quien pasa y lo
+  // que dices tú, apuntado en este navegador y nada más (el servidor no lo
+  // guarda). Dentro de un corro, el hilo es el del corro (`corro.h`).
+  const [charla, setCharla] = useState([]); // [{q, n, t, ts, a: {id, k, s}}]
+  // las fotos y los audios que ya han llegado, por id → data URL
+  const [adjuntos, setAdjuntos] = useState(() => new Map());
+  const [grabando, setGrabando] = useState(null); // {t0} mientras se graba un audio
+  const [segundos, setSegundos] = useState(0); // lo que lleva grabado, para el contador
+  const [fotoGrande, setFotoGrande] = useState(null); // una foto del chat, a pantalla
+  const fotoRef = useRef(null); // el <input type=file>
+  const hiloRef = useRef(null); // la lista de mensajes, para bajarla al final
+  const grabRef = useRef(null); // {rec, stream, t0, trozos, cancelado, tope}
   const [yo, setYo] = useState(null); // {id, nombre, color, pelo, piel}
   const [colorElegido, setColorElegido] = useState(0);
   const [peloElegido, setPeloElegido] = useState(0);
@@ -1019,7 +1130,6 @@ export default function Mundo() {
   const [llamadas, setLlamadas] = useState([]); // quién llama a la puerta de TU corro
   // la ficha de alguien a quien has tocado en el mundo: {id, nombre, dist, ...}
   const [ficha, setFicha] = useState(null);
-  const [registro, setRegistro] = useState(false); // la hoja con todo lo hablado
   const [conectados, setConectados] = useState(1);
   // dónde está el avatar: {clave, dueno, mia, libre, n}
   const [donde, setDonde] = useState(null);
@@ -1045,13 +1155,22 @@ export default function Mundo() {
     return () => clearInterval(t);
   }, [panelVecinos]);
 
+  // El chat abierto se lo dice al motor: mientras se lee aquí, el carrete
+  // sobre el corro se esconde, que serían las mismas líneas dos veces.
+  useEffect(() => {
+    engineRef.current?.chatAbierto(chatOpen);
+  }, [chatOpen]);
+
+  // el contador de la grabación, mientras dura
+  useEffect(() => {
+    if (!grabando) return;
+    setSegundos(0);
+    const t = setInterval(() => setSegundos(Math.min(AUDIO_MAX_S, Math.round((Date.now() - grabando.t0) / 1000))), 250);
+    return () => clearInterval(t);
+  }, [grabando]);
+
   // La ficha de un vecino se refresca como la hoja de vecinos: la distancia
   // que pone cambia mientras uno de los dos anda, y una congelada engaña.
-  // sin corro no hay nada que leer: la hoja se cierra sola
-  useEffect(() => {
-    if (!corro) setRegistro(false);
-  }, [corro]);
-
   useEffect(() => {
     if (!ficha) return;
     const t = setInterval(() => setFicha((f) => (f ? engineRef.current?.fichaDe(f.id) || null : null)), 900);
@@ -3293,18 +3412,59 @@ export default function Mundo() {
     let carreteLineas = null;
     let ultimaLinea = null; // {ts, q} de lo último que ya se ha pintado
     let centroMio = null; // dónde está el centro de MI corro, para colgar el carrete
+    let chatAbierto = false; // con el chat abierto el carrete se esconde: serían las mismas líneas dos veces
+
+    // --- las fotos y los audios: qué tengo, qué me falta ---
+    // El mensaje trae la FICHA del adjunto (id, tipo, segundos); el dato se
+    // pide por id en el siguiente sondeo, que se adelanta. Lo que llega se
+    // guarda aquí, por id, y se le pasa a React para el chat; y las <img> de
+    // las burbujas y del carrete que estaban esperándolo se rellenan solas.
+    const adjuntosTengo = new Map(); // id → data URL
+    const porTraer = new Set(); // ids pedidos y aún sin llegar
+    const imgsEsperando = new Map(); // id → [<img>] a rellenar cuando llegue
+    function pideAdjunto(id) {
+      if (!id || adjuntosTengo.has(id) || porTraer.has(id)) return;
+      porTraer.add(id);
+      sacaLoDicho();
+    }
+    function llegaAdjunto(id, d) {
+      adjuntosTengo.set(id, d);
+      porTraer.delete(id);
+      for (const img of imgsEsperando.get(id) || []) img.src = d;
+      imgsEsperando.delete(id);
+    }
+    // una <img> para una foto del hilo o de una burbuja: con el dato si ya
+    // está, y si no, a la espera
+    function imgDeFoto(id) {
+      const img = document.createElement('img');
+      img.alt = 'Foto';
+      img.draggable = false;
+      const d = adjuntosTengo.get(id);
+      if (d) img.src = d;
+      else {
+        const l = imgsEsperando.get(id) || imgsEsperando.set(id, []).get(id);
+        l.push(img);
+        pideAdjunto(id);
+      }
+      return img;
+    }
 
     function haceCarrete() {
       const cont = rotulosRef.current;
       if (carrete || !cont) return;
       carrete = document.createElement('div');
       carrete.className = 'carrete';
+      carrete.setAttribute('role', 'button');
+      carrete.title = 'Abrir el chat del corro';
       const cab = document.createElement('div');
       cab.className = 'cab';
       carreteLineas = document.createElement('div');
       carreteLineas.className = 'lineas';
       carrete.append(cab, carreteLineas);
       carrete._cab = cab;
+      // tocar el globo abre el chat, como en cualquier mensajería: el globo
+      // enseña las últimas líneas, y ahí dentro se lee todo y se escribe
+      carrete.addEventListener('click', () => setChatOpen(true));
       cont.appendChild(carrete);
     }
     function quitaCarrete() {
@@ -3328,9 +3488,14 @@ export default function Mundo() {
         b.style.color = l.q === jugador.id ? '#2f6fed' : colorNombre(l.q);
         el.appendChild(b);
       } else el.classList.add('sigue');
-      const t = document.createElement('span');
-      t.textContent = l.t; // textContent, nunca marcado: lo escribe otra persona
-      el.appendChild(t);
+      // una foto se ve en miniatura también aquí, en el mundo; un audio se
+      // queda en su etiqueta («🎤 Audio 0:12»), que se escucha en el chat
+      if (l.a?.k === 'foto') el.appendChild(imgDeFoto(l.a.id));
+      if (!l.a || l.t !== etiquetaAdjunto(l.a)) {
+        const t = document.createElement('span');
+        t.textContent = l.t; // textContent, nunca marcado: lo escribe otra persona
+        el.appendChild(t);
+      }
       carreteLineas.appendChild(el);
       while (carreteLineas.children.length > CORRO_LINEAS_VISTA) carreteLineas.firstElementChild.remove();
     }
@@ -3395,6 +3560,7 @@ export default function Mundo() {
       for (let i = desde; i < h.length; i++) {
         const l = h[i];
         ultimaLinea = { ts: l.ts, q: l.q };
+        if (l.a) pideAdjunto(l.a.id);
         // solo vuela lo que acaba de decirse; al entrar en un corro con hilo,
         // lo de antes se pone de golpe y no cae una lluvia de cuentas
         if (Date.now() - l.ts < 4000) lanzaCuenta(l, () => meteLinea(l));
@@ -3717,7 +3883,7 @@ export default function Mundo() {
     function pintaNombres() {
       const cont = rotulosRef.current;
       if (!cont) return;
-      const pinta = (id, nombre, dice, x, y, h, propio) => {
+      const pinta = (id, nombre, dice, x, y, h, propio, foto) => {
         let el = nodos.get(id);
         if (!el) {
           el = document.createElement('div');
@@ -3738,17 +3904,31 @@ export default function Mundo() {
         if (b.textContent !== nombre) b.textContent = nombre;
         // textContent, nunca innerHTML: lo que escribe otra persona entra
         // como TEXTO y no como marcado
-        if (sp._txt !== dice) {
+        if (sp._txt !== dice || sp._foto !== foto) {
           sp.textContent = dice || '';
           sp.hidden = !dice;
           sp._txt = dice;
+          sp._foto = foto;
+          // una foto se enseña en la burbuja, en pequeño: en el mundo se ve
+          // QUÉ ha enseñado, y en el chat se abre a pantalla
+          if (foto) {
+            if (dice === '📷 Foto') sp.textContent = '';
+            const img = document.createElement('img');
+            img.alt = 'Foto';
+            img.draggable = false;
+            img.src = foto;
+            sp.appendChild(img);
+          }
         }
         const dist = sitúa(el, x, y, h, ALTO_AVATAR + 0.3);
         if (dist === null) return;
         el.style.opacity = dist > 110 ? ((160 - dist) / 50).toFixed(2) : '1';
       };
       const yoP = perfil();
-      if (yoP.nombre) pinta('yo', yoP.nombre, !corroMio && miDice && Date.now() - miDice.t < MENSAJE_MS ? miDice.txt : null, yo.x, yo.y, yo.h, true);
+      if (yoP.nombre) {
+        const digo = !corroMio && miDice && Date.now() - miDice.t < MENSAJE_MS;
+        pinta('yo', yoP.nombre, digo ? miDice.txt : null, yo.x, yo.y, yo.h, true, digo && miDice.a?.k === 'foto' ? miDice.a.d : null);
+      }
       for (const [id, o] of otros) {
         const callado = callados.has(id);
         // Tres burbujas distintas: lo que dice (si lo oyes), el «…» de quien
@@ -3762,7 +3942,8 @@ export default function Mundo() {
         // globo mudo del grupo, que es de quien es la conversación.
         const conmigo = !!(corroMio && o.corro === corroMio.k);
         const dice = callado || conmigo ? null : llama ? '✋ quiere entrar' : o.corro ? null : o.dice;
-        pinta(id, callado ? 'silenciado' : o.nombre, dice, o.o.x, o.o.y, o.o.h, false);
+        const foto = dice && dice === o.dice && o.diceA?.k === 'foto' ? adjuntosTengo.get(o.diceA.id) || null : null;
+        pinta(id, callado ? 'silenciado' : o.nombre, dice, o.o.x, o.o.y, o.o.h, false, foto);
         const el = nodos.get(id);
         if (!el) continue;
         el.classList.toggle('callado', callado);
@@ -3790,7 +3971,7 @@ export default function Mundo() {
       // por los lados. Cuando toca sujetarlo pierde el pico, que ya no
       // apunta a nadie.
       if (carrete) {
-        const p = centroMio ? enPantalla(centroMio.x, centroMio.y, centroMio.h, ALTO_AVATAR + ALTO_CARRETE) : null;
+        const p = centroMio && !chatAbierto ? enPantalla(centroMio.x, centroMio.y, centroMio.h, ALTO_AVATAR + ALTO_CARRETE) : null;
         if (!p) carrete.style.display = 'none';
         else {
           carrete.style.display = '';
@@ -4362,8 +4543,20 @@ export default function Mundo() {
     // vive en memoria y en Next cada ruta puede acabar con SU copia del
     // módulo: solo es de fiar en la ruta que la escribe.
     let porCorro = null;
+    let porAdjuntar = null; // {k, d, s}: una foto o un audio, con lo que se dice
     let miDice = null; // lo mío se pinta ya, sin esperar a la respuesta
     let esperaDicho = null;
+    // Lo hablado CERCA, fuera de un corro: lo que dice quien pasa y lo que
+    // dices tú. Es lo que se lee en el chat cuando no estás en un corro. Vive
+    // en este navegador y solo desde que entraste: el servidor no guarda nada,
+    // y la burbuja sobre la cabeza sigue siendo la de siempre.
+    const charlaCerca = [];
+    const CHARLA_MAX = 80;
+    function apuntaCerca(l) {
+      charlaCerca.push(l);
+      if (charlaCerca.length > CHARLA_MAX) charlaCerca.splice(0, charlaCerca.length - CHARLA_MAX);
+      setCharla(charlaCerca.slice());
+    }
     // Lo dicho sale AHORA, o en cuanto se pueda. Si se acaba de sondear se
     // espera lo que falte con un temporizador y NO con el bucle de dibujo:
     // una pestaña de fondo se queda sin fotogramas, y lo escrito se quedaba
@@ -4388,19 +4581,61 @@ export default function Mundo() {
       const dicho = porDecir;
       const gesto = porGesticular;
       const pedido = porCorro;
+      const adjunto = porAdjuntar;
+      const trae = porTraer.size ? [...porTraer] : undefined;
       porDecir = null;
       porGesticular = null;
       porCorro = null;
+      porAdjuntar = null;
       try {
         const r = await fetch('/api/presencia', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ jugador: p.id, nombre: p.nombre, color: p.color, p: p.pelo, s: p.piel, x: Math.round(yo.x * 10) / 10, y: Math.round(yo.y * 10) / 10, r: Math.round(yo.rumbo * 100) / 100, m: dicho || undefined, e: gesto || undefined, corro: pedido || undefined, ...extra }),
+          body: JSON.stringify({
+            jugador: p.id,
+            nombre: p.nombre,
+            color: p.color,
+            p: p.pelo,
+            s: p.piel,
+            x: Math.round(yo.x * 10) / 10,
+            y: Math.round(yo.y * 10) / 10,
+            r: Math.round(yo.rumbo * 100) / 100,
+            m: dicho || undefined,
+            e: gesto || undefined,
+            a: adjunto || undefined,
+            trae,
+            corro: pedido || undefined,
+            ...extra,
+          }),
         });
-        if (!r.ok) return null;
+        if (!r.ok) {
+          // un adjunto que no ha salido no se pierde en silencio
+          if (adjunto) avisa(r.status === 413 ? 'Eso pesa demasiado para mandarlo' : 'No se ha podido mandar (¿sin conexión?)');
+          return null;
+        }
         const j = await r.json();
         if (!vivo) return null;
         const ahora = Date.now();
+        // los adjuntos pedidos, y el mío recién mandado: en un corro vuelve
+        // en el hilo con el id que le ha puesto el servidor, y el dato ya lo
+        // tengo, así que no hay que pedírselo
+        if (j.adjuntos) {
+          let alguno = false;
+          for (const [id, d] of Object.entries(j.adjuntos)) {
+            if (typeof d !== 'string' || d.length > ADJUNTO_MAX) continue;
+            llegaAdjunto(id, d);
+            alguno = true;
+          }
+          if (alguno) setAdjuntos(new Map(adjuntosTengo));
+        }
+        if (adjunto && j.corro?.h) {
+          const mia = [...j.corro.h].reverse().find((l) => l.q === jugador.id && l.a);
+          if (mia && !adjuntosTengo.has(mia.a.id)) {
+            llegaAdjunto(mia.a.id, adjunto.d);
+            setAdjuntos(new Map(adjuntosTengo));
+          }
+        }
+        if (j.adjR) avisa(j.adjR === 'rapido' ? 'Espera un momento antes de mandar otra' : 'Eso no se ha podido mandar');
         const vistos = new Set();
         for (const d of j.cerca || []) {
           vistos.add(d.id);
@@ -4420,7 +4655,14 @@ export default function Mundo() {
           if ((d.mt || 0) !== o.diceT) {
             o.dice = callado ? null : d.m || null;
             o.diceT = d.mt || 0;
+            o.diceA = o.dice && d.ma ? d.ma : null;
             if (o.dice && dichosRef.current) dichosRef.current.textContent = o.nombre + ' dice: ' + o.dice;
+            // lo que dice quien pasa se apunta en el chat de «cerca»; lo de
+            // los de mi corro llega por el hilo del corro, no por aquí
+            if (o.dice && !(corroMio && o.corro === corroMio.k)) {
+              if (o.diceA) pideAdjunto(o.diceA.id);
+              apuntaCerca({ q: d.id, n: o.nombre, t: o.dice, ts: o.diceT, a: o.diceA || undefined });
+            }
           }
           if (d.et && d.et !== o.gestoT) {
             o.gestoT = d.et;
@@ -4464,6 +4706,9 @@ export default function Mundo() {
       // mundos abiertos a la vez (la prueba) el navegador congela la que no
       // mira nadie y quien está ahí desaparece del mundo para los demás.
       sondea: () => mandaPresencia(),
+      // el chat de «cerca» y qué adjuntos han llegado, para la prueba
+      charla: () => charlaCerca.slice(),
+      adjuntos: () => [...adjuntosTengo.keys()],
       // Qué gesto está haciendo cada cual y cómo le ha quedado el brazo. El
       // GESTO es lo que comprueba la prueba: se pone en cuanto llega por la
       // red y dura segundo y medio, sin depender de que se pinte. El ángulo
@@ -4526,6 +4771,14 @@ export default function Mundo() {
         callados.add(id);
         const o = otros.get(id);
         if (o) o.dice = null; // lo que estuviera diciendo se va de la pantalla
+        // y lo que dijo ANTES se va del chat: silenciar es dejar de verle, no
+        // dejar de verle a partir de ahora
+        const quedan = charlaCerca.filter((l) => l.q !== id);
+        if (quedan.length !== charlaCerca.length) {
+          charlaCerca.length = 0;
+          charlaCerca.push(...quedan);
+          setCharla(charlaCerca.slice());
+        }
         pintaNombres();
         sincronizaCarteles();
       },
@@ -4698,12 +4951,31 @@ export default function Mundo() {
       // siguiente sondeo, que se adelanta. Si se acaba de sondear se espera
       // lo que falte en vez de disparar otro seguido: el servidor limita a 90
       // peticiones por minuto y el sondeo ya gasta 40.
-      di(texto) {
+      // Decir algo: texto, o una foto o un audio ({k, d, s}), o las dos cosas.
+      di(texto, adjunto) {
         const t = limpiaMensaje(texto);
-        if (!t) return;
+        if (!t && !adjunto) return false;
+        const ahora = Date.now();
+        const etiqueta = t || etiquetaAdjunto(adjunto);
         porDecir = t;
-        miDice = { txt: t, t: Date.now() };
+        porAdjuntar = adjunto || null;
+        miDice = { txt: etiqueta, t: ahora, a: adjunto || null };
+        // fuera de un corro, lo mío no vuelve del servidor: se apunta aquí
+        // ya, con un id propio para el adjunto, que el dato lo tengo
+        if (!corroMio) {
+          let a;
+          if (adjunto) {
+            a = { id: 'mio-' + ahora.toString(36), k: adjunto.k, s: adjunto.s };
+            llegaAdjunto(a.id, adjunto.d);
+            setAdjuntos(new Map(adjuntosTengo));
+          }
+          apuntaCerca({ q: jugador.id, n: perfil().nombre, t: etiqueta, ts: ahora, a });
+        }
         sacaLoDicho();
+        return true;
+      },
+      chatAbierto(v) {
+        chatAbierto = !!v;
       },
       gesto(clave) {
         if (!EMOTES[clave]) return;
@@ -5212,7 +5484,6 @@ export default function Mundo() {
   }
   function onSaleCorro() {
     pideCorro({ a: 'sale' });
-    setRegistro(false);
   }
   function onAbreCorro() {
     pideCorro({ a: 'abre', v: !corro?.ab });
@@ -5226,9 +5497,111 @@ export default function Mundo() {
   function onDecir(e) {
     e.preventDefault();
     const t = decirRef.current?.value || '';
-    engineRef.current?.di(t);
-    if (decirRef.current) decirRef.current.value = '';
+    if (engineRef.current?.di(t) && decirRef.current) decirRef.current.value = '';
   }
+
+  // Una foto: se reduce AQUÍ, en el navegador, antes de mandarla. Un móvil
+  // hace fotos de 4 MB y en el chat se ven a 220 px: 720 de lado y JPEG a
+  // 0,72 dan 60-130 KB, y si aun así no cabe se aprieta más. Nunca sale del
+  // navegador nada más grande de lo que el servidor va a aceptar.
+  async function onFoto(e) {
+    const f = e.target.files?.[0];
+    e.target.value = ''; // que se pueda elegir la misma dos veces
+    if (!f) return;
+    try {
+      const d = await reduceFoto(f);
+      if (!d) return avisa('Esa foto no se ha podido reducir para mandarla');
+      engineRef.current?.di(decirRef.current?.value || '', { k: 'foto', d, s: 0 });
+      if (decirRef.current) decirRef.current.value = '';
+    } catch {
+      avisa('No se ha podido leer la foto');
+    }
+  }
+
+  // Un audio: se graba con el micrófono y se manda al soltar (o al volver a
+  // tocar, si se tocó en vez de mantener). Tope de AUDIO_MAX_S segundos: un
+  // mensaje de voz, no un pódcast. Nada se manda hasta que se suelta, y
+  // cancelar lo tira sin que salga del navegador.
+  async function empiezaGrabar(e) {
+    if (grabRef.current) {
+      // ya se estaba grabando (se tocó en vez de mantener): tocar otra vez para
+      acabaGrabar(false);
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') return avisa('Este navegador no puede grabar audio');
+    try {
+      e.currentTarget?.setPointerCapture?.(e.pointerId);
+    } catch {}
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch {
+      return avisa('Sin permiso para el micrófono no se puede grabar');
+    }
+    // Opus en WebM es lo que graban Chrome y Firefox; Safari graba MP4/AAC
+    const tipo = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus'].find((t) => MediaRecorder.isTypeSupported?.(t));
+    let rec;
+    try {
+      rec = new MediaRecorder(stream, { mimeType: tipo || undefined, audioBitsPerSecond: 24000 });
+    } catch {
+      rec = new MediaRecorder(stream);
+    }
+    const g = { rec, stream, t0: Date.now(), trozos: [], cancelado: false, tope: null };
+    rec.ondataavailable = (ev) => {
+      if (ev.data?.size) g.trozos.push(ev.data);
+    };
+    rec.onstop = () => {
+      stream.getTracks().forEach((t) => t.stop());
+      clearTimeout(g.tope);
+      if (grabRef.current === g) grabRef.current = null;
+      setGrabando(null);
+      if (g.cancelado) return;
+      const s = (Date.now() - g.t0) / 1000;
+      if (s < 0.6 || !g.trozos.length) return avisa('Mantén pulsado el micrófono para grabar');
+      const blob = new Blob(g.trozos, { type: rec.mimeType || g.trozos[0].type || 'audio/webm' });
+      const lector = new FileReader();
+      lector.onload = () => {
+        const d = String(lector.result || '');
+        if (!d.startsWith('data:audio/')) return avisa('Este navegador graba en un formato que no se puede mandar');
+        if (d.length > ADJUNTO_MAX) return avisa('El audio pesa demasiado: prueba con uno más corto');
+        engineRef.current?.di('', { k: 'audio', d, s: Math.min(AUDIO_MAX_S, Math.round(s * 10) / 10) });
+      };
+      lector.readAsDataURL(blob);
+    };
+    grabRef.current = g;
+    setGrabando({ t0: g.t0 });
+    rec.start(250);
+    g.tope = setTimeout(() => acabaGrabar(false), AUDIO_MAX_S * 1000);
+  }
+  function sueltaGrabar() {
+    const g = grabRef.current;
+    if (!g) return;
+    // soltar antes de 0,7 s es un toque: se sigue grabando hasta el siguiente
+    if (Date.now() - g.t0 < 700) return;
+    acabaGrabar(false);
+  }
+  function acabaGrabar(cancela) {
+    const g = grabRef.current;
+    if (!g) return;
+    g.cancelado = !!cancela;
+    try {
+      if (g.rec.state !== 'inactive') g.rec.stop();
+      else g.rec.onstop?.();
+    } catch {
+      g.stream.getTracks().forEach((t) => t.stop());
+      grabRef.current = null;
+      setGrabando(null);
+    }
+  }
+
+  // el hilo baja al final solo cuando llega algo o al abrirlo, como en
+  // cualquier chat
+  const lineas = corro ? corro.h || [] : charla;
+  function bajaHilo() {
+    const el = hiloRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }
+  useEffect(bajaHilo, [chatOpen, lineas.length, adjuntos]);
 
   if (sinGL) {
     return (
@@ -5353,30 +5726,12 @@ export default function Mundo() {
         </div>
       )}
 
-      {registro && corro && (
-        <div className="ui velo" onClick={() => setRegistro(false)}>
-          <div className="hoja glass registro" onClick={(e) => e.stopPropagation()}>
-            <h2>Lo hablado en el corro</h2>
-            {!corro.h?.length ? (
-              <p>Todavía no ha dicho nadie nada. Lo que se diga aquí solo lo leéis los {corro.m.length} del corro.</p>
-            ) : (
-              <ol>
-                {corro.h.map((l) => (
-                  <li key={l.ts + '-' + l.q}>
-                    <b style={{ color: l.q === yo?.id ? 'var(--accent)' : colorNombre(l.q) }}>{l.q === yo?.id ? 'Tú' : l.n}</b>
-                    <span>{l.t}</span>
-                  </li>
-                ))}
-              </ol>
-            )}
-            <p className="nota">
-              Esto vive en la memoria del servidor mientras dure el corro y se va con él: no se guarda en ningún sitio ni queda registro. Quien entre
-              después empieza a leer desde que entra, no lo de antes.
-            </p>
-            <button className="btn-principal" onClick={() => setRegistro(false)}>
-              Cerrar
-            </button>
-          </div>
+      {fotoGrande && (
+        <div className="ui velo foto-velo" onClick={() => setFotoGrande(null)}>
+          <img className="foto-grande" src={fotoGrande} alt="Foto del chat" />
+          <button className="btn-sec" onClick={() => setFotoGrande(null)}>
+            Cerrar
+          </button>
         </div>
       )}
 
@@ -5422,7 +5777,7 @@ export default function Mundo() {
             <b>Construye</b> en tu parcela: casas, árboles, rocas, caminos, vallas, muebles… Elige una pieza del panel y toca el suelo para colocarla. <b>Arrastra</b> una pieza para llevarla donde quieras; tócala para girarla o borrarla. Lo ve todo el mundo al momento.
           </p>
           <p>
-            <b>Habla con quien te encuentres</b> con el botón 💬: lo que digas sale en una burbuja sobre tu cabeza y lo ve quien esté cerca, y los gestos son de un toque. No se guarda nada: la burbuja se desvanece y ahí acaba.
+            <b>Habla con quien te encuentres</b> con el botón 💬: se abre el chat, con lo que dice quien anda cerca a la izquierda y lo tuyo a la derecha, y abajo se escribe, se manda una foto 📷 o se graba un audio 🎤 manteniendo pulsado. Lo que digas sale además en una burbuja sobre tu cabeza, y los gestos son de un toque. No se guarda nada: el chat vive en tu navegador mientras estés, y las fotos y los audios, unos minutos en la memoria del servidor.
           </p>
           <p>
             <b>Para hablar con alguien en concreto, tócale</b> en el mundo: sale su ficha y desde ahí le pides hablar. Si acepta, hacéis un <b>corro</b>: un círculo de luz en el suelo que os rodea a los dos y que ve todo el mundo, para saber que ahí hay una conversación. Lo que se diga dentro solo lo leéis los de dentro; los de fuera ven un «…» sobre vuestras cabezas, no lo que decís.
@@ -5443,8 +5798,8 @@ export default function Mundo() {
               <i className="punto" />
               <b>Corro</b>
               <span className="gente">{corro.m.map((v) => (v.id === yo?.id ? 'tú' : v.n)).join(' · ')}</span>
-              <button className="btn-sec" onClick={() => setRegistro(true)} title="Todo lo que se ha hablado desde que entraste">
-                💬 Todo{corro.h?.length ? ' · ' + corro.h.length : ''}
+              <button className="btn-sec" onClick={() => setChatOpen(true)} title="El chat del corro: todo lo hablado desde que entraste">
+                💬 Chat{corro.h?.length ? ' · ' + corro.h.length : ''}
               </button>
               {corro.a === yo?.id && (
                 <button
@@ -5678,51 +6033,134 @@ export default function Mundo() {
       )}
 
       {presentado && !obra && (
-        <div className={'ui chat' + (chatOpen ? ' abierto' : '')}>
+        <div className={'ui chat' + (chatOpen ? ' abierto glass' : '') + (tactil ? ' contactil' : '')}>
           {chatOpen ? (
             <>
+              {/* La cabecera dice con QUIÉN se habla: con quien pase, o con el
+                  corro. Es lo primero que se mira antes de escribir. */}
+              <div className="chat-cab">
+                <i className={'punto' + (corro ? ' corro' : '')} />
+                <div className="quien">
+                  <b>{corro ? 'Corro' : 'Cerca'}</b>
+                  <small>
+                    {corro
+                      ? corro.m.map((v) => (v.id === yo?.id ? 'tú' : v.n)).join(' · ')
+                      : conectados > 1
+                        ? 'lo lee quien esté a la vista · ' + conectados + ' en el mundo'
+                        : 'lo lee quien esté a la vista'}
+                  </small>
+                </div>
+                <button type="button" className="cerrar" onClick={() => setChatOpen(false)} aria-label="Cerrar el chat">
+                  ✕
+                </button>
+              </div>
+              {/* sin aria-live: lo que llega ya lo canta el párrafo de
+                  #dichos, y con los dos se leería cada mensaje dos veces */}
+              <div className="chat-hilo" ref={hiloRef} aria-label={corro ? 'El chat del corro' : 'El chat de cerca'}>
+                {lineas.length === 0 ? (
+                  <p className="vacio">
+                    {corro
+                      ? 'Todavía no ha dicho nadie nada. Lo que se diga aquí solo lo leéis los ' + corro.m.length + ' del corro, y se va con él.'
+                      : 'Aquí se lee lo que dice quien anda cerca. No se guarda nada: es lo hablado desde que entraste.'}
+                  </p>
+                ) : (
+                  lineas.map((l, i) => {
+                    const mio = l.q === yo?.id;
+                    const sigue = i > 0 && lineas[i - 1].q === l.q && l.ts - lineas[i - 1].ts < 5 * 60_000;
+                    const d = l.a ? adjuntos.get(l.a.id) : null;
+                    const soloEtiqueta = l.a && l.t === etiquetaAdjunto(l.a);
+                    return (
+                      <div className={'msg' + (mio ? ' mio' : '') + (sigue ? ' sigue' : '')} key={l.ts + '-' + l.q}>
+                        {!mio && !sigue && <b style={{ color: colorNombre(l.q) }}>{l.n}</b>}
+                        {l.a?.k === 'foto' &&
+                          (d ? (
+                            <button type="button" className="foto" onClick={() => setFotoGrande(d)} aria-label="Ver la foto a pantalla">
+                              {/* al cargar la foto el hilo crece: se vuelve a bajar al final */}
+                              <img src={d} alt="Foto" draggable={false} onLoad={bajaHilo} />
+                            </button>
+                          ) : (
+                            <span className="espera">📷 Cargando la foto…</span>
+                          ))}
+                        {l.a?.k === 'audio' && (d ? <Reproductor src={d} s={l.a.s} /> : <span className="espera">🎤 Cargando el audio…</span>)}
+                        {!soloEtiqueta && <span className="texto">{l.t}</span>}
+                        <time dateTime={new Date(l.ts).toISOString()}>{hora(l.ts)}</time>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
               <div className="emotes" role="group" aria-label="Gestos">
                 {Object.entries(EMOTES).map(([k, e]) => (
-                  <button key={k} className="emote" onClick={() => engineRef.current?.gesto(k)} title={e.nombre} aria-label={e.nombre}>
+                  <button key={k} type="button" className="emote" onClick={() => engineRef.current?.gesto(k)} title={e.nombre} aria-label={e.nombre}>
                     {e.emoji}
                   </button>
                 ))}
+                {/* que se vea SIEMPRE a dónde va lo que escribes: dentro de un
+                    corro, solo a los de dentro */}
+                {corro && <span className="solo-corro">🔒 Solo lo lee el corro</span>}
               </div>
-              {/* que se vea SIEMPRE a dónde va lo que escribes: dentro de un
-                  corro, solo a los de dentro */}
-              {corro && <span className="solo-corro glass">🔒 Lo que digas solo lo lee el corro</span>}
               <form className="decir" onSubmit={onDecir}>
-                <input
-                  ref={decirRef}
-                  type="text"
-                  maxLength={MAX_MENSAJE}
-                  placeholder={corro ? 'Di algo al corro…' : 'Di algo…'}
-                  autoComplete="off"
-                  aria-label={corro ? 'Lo que dices al corro' : 'Lo que dices'}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Escape') {
-                      e.currentTarget.blur();
-                      setChatOpen(false);
-                    }
-                  }}
-                />
-                <button type="submit" className="btn-principal" aria-label="Decir">
-                  ➤
+                <input ref={fotoRef} type="file" accept="image/*" hidden onChange={onFoto} tabIndex={-1} aria-hidden="true" />
+                {grabando ? (
+                  <>
+                    <span className="grabando" role="status">
+                      <i /> {duracion(segundos)}
+                      <small>{segundos >= 1 ? 'suelta o toca 🎤 para mandar' : 'grabando…'}</small>
+                    </span>
+                    <button type="button" className="btn-adj" onClick={() => acabaGrabar(true)} aria-label="Cancelar la grabación" title="Cancelar">
+                      🗑
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button type="button" className="btn-adj" onClick={() => fotoRef.current?.click()} aria-label="Mandar una foto" title="Mandar una foto">
+                      📷
+                    </button>
+                    <input
+                      ref={decirRef}
+                      type="text"
+                      maxLength={MAX_MENSAJE}
+                      placeholder={corro ? 'Escribe al corro…' : 'Escribe…'}
+                      autoComplete="off"
+                      aria-label={corro ? 'Lo que dices al corro' : 'Lo que dices'}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Escape') {
+                          e.currentTarget.blur();
+                          setChatOpen(false);
+                        }
+                      }}
+                    />
+                  </>
+                )}
+                <button
+                  type="button"
+                  className={'btn-adj mic' + (grabando ? ' on' : '')}
+                  onPointerDown={empiezaGrabar}
+                  onPointerUp={sueltaGrabar}
+                  onPointerCancel={() => acabaGrabar(true)}
+                  onContextMenu={(e) => e.preventDefault()}
+                  aria-label={grabando ? 'Mandar el audio' : 'Grabar un audio: mantén pulsado'}
+                  title={grabando ? 'Mandar el audio' : 'Mantén pulsado para grabar un audio'}
+                  aria-pressed={!!grabando}
+                >
+                  🎤
                 </button>
-                <button type="button" className="btn-sec" onClick={() => setChatOpen(false)} aria-label="Cerrar">
-                  ✕
+                <button type="submit" className="btn-principal" aria-label="Mandar" disabled={!!grabando}>
+                  ➤
                 </button>
               </form>
             </>
           ) : (
-            <button className="btn-cuad" aria-label="Hablar y hacer gestos" title="Hablar y hacer gestos" onClick={() => setChatOpen(true)}>
+            <button className="btn-cuad" aria-label="Abrir el chat" title="Abrir el chat" onClick={() => setChatOpen(true)}>
               💬
             </button>
           )}
         </div>
       )}
 
-      {presentado && !obra && tactil && (
+      {/* con el chat abierto no sale el joystick: se está escribiendo, no
+          andando, y en el móvil el panel se le pone encima */}
+      {presentado && !obra && tactil && !chatOpen && (
         <div
           className="ui joy"
           ref={joyRef}

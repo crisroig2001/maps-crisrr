@@ -95,6 +95,18 @@ body {
   box-shadow: 0 4px 14px rgba(43, 52, 64, 0.22);
   overflow-wrap: anywhere;
 }
+/* una foto en la burbuja: en pequeño, que en el mundo se ve QUÉ ha enseñado
+   y en el chat se abre a pantalla */
+.rotulo .dice img {
+  display: block;
+  width: 96px;
+  height: auto;
+  max-height: 96px;
+  object-fit: cover;
+  border-radius: 8px;
+  margin: 0 auto;
+}
+.rotulo .dice img:not(:first-child) { margin-top: 5px; }
 .rotulo .dice::after {
   content: '';
   position: absolute;
@@ -150,7 +162,14 @@ body {
   box-shadow: 0 6px 20px rgba(43, 52, 64, 0.26);
   backdrop-filter: blur(6px);
   will-change: transform;
+  /* el globo se TOCA: abre el chat del corro. El contenedor de los rótulos
+     no captura el puntero (arrastrar sobre un nombre gira la cámara); este
+     sí, que es un botón. */
+  pointer-events: auto;
+  cursor: pointer;
 }
+.carrete:hover { box-shadow: 0 8px 24px rgba(43, 52, 64, 0.32); }
+.carrete .linea img { display: block; width: 88px; height: auto; max-height: 88px; object-fit: cover; border-radius: 7px; margin: 2px 0; }
 /* el pico, apuntando al corro que tiene debajo */
 .carrete.sujeto::after { display: none; }
 .carrete::after {
@@ -478,33 +497,6 @@ body {
 .vecinos .nota { margin-top: 14px; font-size: 12px; line-height: 1.5; color: var(--ink-2); font-weight: 600; }
 .vecinos .nota b { color: var(--ink); }
 .vecinos .btn-principal { margin-top: 12px; width: 100%; }
-
-/* la hoja con todo lo hablado en el corro */
-.registro { display: grid; }
-.registro ol {
-  list-style: none;
-  margin: 10px 0 0;
-  padding: 0;
-  display: grid;
-  gap: 8px;
-  max-height: 46vh;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
-.registro li {
-  display: grid;
-  gap: 1px;
-  padding: 8px 11px;
-  border-radius: 12px;
-  background: var(--card-line);
-  font-size: 13.5px;
-  line-height: 1.4;
-  color: var(--ink);
-  overflow-wrap: anywhere;
-}
-.registro li b { font-size: 11.5px; font-weight: 800; }
-.registro .nota { margin-top: 12px; font-size: 12px; line-height: 1.5; color: var(--ink-2); font-weight: 600; }
-.registro .btn-principal { margin-top: 12px; width: 100%; }
 
 /* la hoja del perfil: una fila de muestras por cada cosa que se elige */
 .pinta { display: grid; gap: 6px; }
@@ -858,6 +850,8 @@ body {
   pointer-events: none;
 }
 .toast.on { opacity: 1; }
+/* con el chat abierto el aviso sube por encima del botón (en el móvil, por
+   encima del panel entero: ver el bloque de abajo) */
 .toast.arriba { bottom: calc(196px + env(safe-area-inset-bottom)); }
 .carga {
   top: 66px;
@@ -890,71 +884,242 @@ body {
   .paleta .fila.abajo .colores { flex-basis: 100%; }
 }
 
-/* hablar: el anillo de gestos y la caja de texto. Va encima de las acciones
-   y, en el móvil, a la derecha del joystick para no taparlo. */
+/* ===================================================================
+   EL CHAT
+   Un panel como el de cualquier mensajería: la conversación en burbujas
+   —lo de los demás a la izquierda con su nombre, lo tuyo a la derecha—,
+   y abajo la caja de escribir con la foto y el micrófono. Cerrado es un
+   botón 💬 encima de las acciones; abierto, un panel que se pega abajo y
+   en el móvil ocupa el ancho de la pantalla (y tapa el joystick: se está
+   escribiendo, no andando).
+   =================================================================== */
+:root { --chat-alto: min(60vh, 520px); }
+/* Anclado a un LADO, no en el centro: abierto es un panel grande, y en el
+   centro tapaba justo lo que se está mirando —el avatar, y a quien se le
+   habla—. A la izquierda, además, no se pelea con la ficha de un vecino ni
+   con los botones de la derecha; el joystick se esconde mientras, que con el
+   chat abierto se escribe, no se anda. */
 .chat {
-  left: 50%;
-  transform: translateX(-50%);
+  left: 14px;
   bottom: calc(76px + env(safe-area-inset-bottom));
-  width: min(420px, calc(100vw - 28px));
+  width: auto;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 8px;
+  align-items: flex-start;
 }
-.chat:not(.abierto) { width: auto; }
-.chat .emotes { display: flex; gap: 6px; }
+/* con joystick (cualquier pantalla táctil, no solo el móvil) el botón se
+   aparta a su derecha: cerrado vive justo donde está el joystick */
+.chat.contactil:not(.abierto) { left: 148px; }
+.chat.abierto {
+  width: min(420px, calc(100vw - 28px));
+  height: var(--chat-alto);
+  align-items: stretch;
+  overflow: hidden;
+  padding: 0;
+  border-radius: 18px;
+  /* sin desenfoque: es el rectángulo más grande de la pantalla y encima
+     de él se desplaza texto, que con blur() va a tirones en un móvil */
+  backdrop-filter: none;
+  background: rgba(255, 255, 255, 0.96);
+}
+.chat-cab {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 8px 9px 13px;
+  border-bottom: 1px solid var(--card-line);
+}
+/* el punto es el color de a quién le llega: verde a quien pase, azul (el
+   del círculo del suelo) al corro */
+.chat-cab .punto { width: 9px; height: 9px; border-radius: 50%; flex: none; background: #3aa65b; }
+.chat-cab .punto.corro { background: var(--accent); animation: late 1.6s ease-in-out infinite; }
+.chat-cab .quien { flex: 1; min-width: 0; display: grid; gap: 1px; }
+.chat-cab .quien b { font-size: 14px; font-weight: 800; color: var(--ink); }
+.chat-cab .quien small { font-size: 11px; font-weight: 700; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chat-cab .cerrar {
+  border: none;
+  background: none;
+  cursor: pointer;
+  font: 800 14px/1 inherit;
+  color: var(--ink-2);
+  padding: 8px 10px;
+  border-radius: 10px;
+}
+.chat-cab .cerrar:focus-visible { outline: 2px solid var(--accent); }
+
+.chat-hilo {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 10px 6px;
+  /* el fondo un punto más oscuro que las burbujas, que si no las blancas
+     no se recortan */
+  background: #eef2f6;
+}
+.chat-hilo .vacio {
+  margin: auto 12px;
+  text-align: center;
+  font-size: 12.5px;
+  line-height: 1.5;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+/* la burbuja: hasta el 78 % del ancho, que un mensaje corto no se estire.
+   El texto lo escribe otra persona, así que se parte donde haga falta. */
+.msg {
+  position: relative;
+  align-self: flex-start;
+  max-width: 78%;
+  display: grid;
+  gap: 3px;
+  padding: 7px 10px 5px;
+  border-radius: 14px 14px 14px 4px;
+  background: #fff;
+  color: var(--ink);
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.38;
+  box-shadow: 0 1px 3px rgba(43, 52, 64, 0.12);
+  overflow-wrap: anywhere;
+  animation: cae-linea 0.25s cubic-bezier(0.2, 0.9, 0.3, 1) both;
+}
+.msg.mio {
+  align-self: flex-end;
+  border-radius: 14px 14px 4px 14px;
+  background: #dfe9ff;
+}
+/* la misma persona seguida: una burbuja pegada a la anterior y sin repetir
+   el nombre, como en cualquier chat de grupo */
+.msg.sigue { margin-top: -3px; border-radius: 14px; }
+.msg b { font-size: 11px; font-weight: 800; line-height: 1.2; }
+.msg .texto { display: block; }
+/* la hora, pequeña y a la derecha, en la esquina de abajo */
+.msg time { justify-self: end; font-size: 10px; font-weight: 700; color: var(--ink-2); margin-top: -1px; }
+.msg .espera { font-size: 12px; color: var(--ink-2); }
+/* la foto: a lo ancho de la burbuja hasta 220 px, y se abre a pantalla */
+.msg .foto {
+  display: block;
+  border: none;
+  background: none;
+  padding: 0;
+  margin: 0 -4px;
+  cursor: zoom-in;
+  border-radius: 10px;
+  overflow: hidden;
+  max-width: 220px;
+}
+.msg .foto img { display: block; width: 100%; height: auto; max-height: 260px; object-fit: cover; }
+.msg .foto:focus-visible { outline: 2px solid var(--accent); }
+/* el audio: play, la barra y lo que dura, como un mensaje de voz */
+.msg .audio { display: flex; align-items: center; gap: 8px; min-width: 170px; padding: 2px 0; }
+.msg .audio audio { display: none; }
+.msg .audio button {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  font: 800 12px/1 inherit;
+  cursor: pointer;
+  flex: none;
+  display: grid;
+  place-items: center;
+}
+.msg .audio button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.msg .audio .barra { flex: 1; display: block; height: 4px; border-radius: 2px; background: rgba(43, 52, 64, 0.18); overflow: hidden; }
+.msg .audio .barra i { display: block; height: 100%; background: var(--accent); width: 0; transition: width 0.2s linear; }
+.msg .audio small { font-size: 11px; font-weight: 700; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+
+/* los gestos, en fila sobre la caja de escribir */
+.chat .emotes { display: flex; align-items: center; gap: 4px; padding: 7px 10px 0; }
 .chat .emote {
-  width: 42px;
-  height: 42px;
+  width: 36px;
+  height: 36px;
   border-radius: 50%;
   display: grid;
   place-items: center;
-  font-size: 21px;
+  font-size: 19px;
   line-height: 1;
   cursor: pointer;
-  border: 1px solid var(--card-line);
-  background: var(--card);
-  box-shadow: 0 4px 16px rgba(43, 52, 64, 0.16);
-  backdrop-filter: blur(8px);
+  border: 1px solid transparent;
+  background: transparent;
 }
+.chat .emote:hover { background: #eef2f6; }
 .chat .emote:active { transform: scale(0.9); }
 .chat .emote:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 /* dentro de un corro, lo que escribes NO lo lee quien pase: se dice aquí,
    pegado a la caja, que es donde se mira al escribir */
-.chat .solo-corro {
-  padding: 5px 12px;
-  border-radius: 99px;
-  font-size: 11.5px;
-  font-weight: 800;
-  color: var(--accent);
-}
-.chat .decir { display: flex; gap: 6px; width: 100%; }
-.chat .decir input {
+.chat .solo-corro { margin-left: auto; font-size: 11px; font-weight: 800; color: var(--accent); white-space: nowrap; }
+.chat .decir { display: flex; align-items: center; gap: 6px; padding: 6px 8px 8px; }
+.chat .decir input[type='text'] {
   flex: 1;
   min-width: 0;
   padding: 11px 14px;
   border-radius: 99px;
   border: 1px solid var(--card-line);
-  background: var(--card);
+  background: #f4f6f8;
   color: var(--ink);
   font: 700 14px/1.2 inherit;
-  backdrop-filter: blur(8px);
 }
-.chat .decir input:focus { outline: none; border-color: var(--accent); }
-.chat .decir .btn-principal { padding: 11px 15px; }
-.chat .decir .btn-sec { padding: 11px 14px; background: var(--card); }
+.chat .decir input[type='text']:focus { outline: none; border-color: var(--accent); background: #fff; }
+.chat .decir .btn-principal { padding: 11px 15px; flex: none; }
+.chat .decir .btn-principal:disabled { opacity: 0.4; box-shadow: none; cursor: default; }
+/* la foto y el micrófono: 40 px, lo que pide un dedo */
+.chat .btn-adj {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: none;
+  background: #eef2f6;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  flex: none;
+  display: grid;
+  place-items: center;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.chat .btn-adj:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.chat .btn-adj.mic.on { background: #e5383b; color: #fff; box-shadow: 0 0 0 6px rgba(229, 56, 59, 0.22); }
+/* mientras se graba: el punto rojo que late, el contador y qué hacer */
+.chat .grabando {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 6px 0 10px;
+  font: 800 14px/1 inherit;
+  color: #b3262a;
+  font-variant-numeric: tabular-nums;
+}
+.chat .grabando i { width: 10px; height: 10px; border-radius: 50%; background: #e5383b; animation: late 1s ease-in-out infinite; flex: none; }
+.chat .grabando small { font-size: 11px; font-weight: 700; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* una foto del chat, a pantalla */
+.foto-velo { flex-direction: column; gap: 12px; display: flex; align-items: center; justify-content: center; background: rgba(20, 24, 30, 0.82); }
+.foto-grande { max-width: min(100%, 900px); max-height: calc(100vh - 90px); border-radius: 12px; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4); }
 
 @media (max-width: 719px) {
-  .chat {
-    left: 148px;
-    right: 8px;
-    width: auto;
-    transform: none;
-    align-items: flex-end;
-    bottom: calc(72px + env(safe-area-inset-bottom));
-  }
-  .chat .emote { width: 38px; height: 38px; font-size: 19px; }
+  :root { --chat-alto: min(72vh, 560px); }
+  /* el botón, a la derecha del joystick para no taparlo; el panel, a lo ancho
+     de la pantalla, que es lo que se espera de un chat en el móvil */
+  .chat { left: 148px; right: 8px; width: auto; align-items: flex-end; bottom: calc(72px + env(safe-area-inset-bottom)); }
+  .chat.abierto { left: 8px; right: 8px; bottom: calc(8px + env(safe-area-inset-bottom)); width: auto; }
+  .msg { max-width: 84%; }
+  /* en el móvil el panel llega hasta abajo: el aviso sube por encima */
+  .toast.arriba { bottom: calc(24px + var(--chat-alto) + env(safe-area-inset-bottom)); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .msg { animation: none; }
+  .chat-cab .punto.corro, .chat .grabando i { animation: none; }
 }
 
 /* joystick táctil */

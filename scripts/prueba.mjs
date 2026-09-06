@@ -67,7 +67,7 @@ await bea.screenshot({ path: path.join(OUT, 'm3-bea-ve-a-ana.png') });
 // cabeza de Ana. Va por el sondeo de presencia, así que tarda un sondeo suyo
 // (que se dispara al hablar) más uno de Bea.
 await pulsa(ana, '.chat .btn-cuad');
-await ana.$eval('.chat .decir input', (i) => (i.value = '¡Hola, Bea!'));
+await ana.$eval('.chat .decir input[type=text]', (i) => (i.value = '¡Hola, Bea!'));
 await pulsa(ana, '.chat .decir button[type=submit]');
 // El gesto es del CUERPO: Ana saluda y a Bea le tiene que salir el saludo en
 // el avatar de Ana, no solo el emoji flotando. Se mira el GESTO y no el
@@ -146,7 +146,7 @@ console.log('corro de Bea:', corroBea ? JSON.stringify(await bea.evaluate(() => 
 console.log('círculos dibujados en el suelo:', await ana.evaluate(() => window.__mundo.corros().length), '(Ana)', await bea.evaluate(() => window.__mundo.corros().length), '(Bea)');
 
 // Ana dice algo dentro del corro: Bea lo lee entero...
-await ana.$eval('.chat .decir input', (i) => (i.value = 'esto solo lo lees tú'));
+await ana.$eval('.chat .decir input[type=text]', (i) => (i.value = 'esto solo lo lees tú'));
 await pulsa(ana, '.chat .decir button[type=submit]');
 // los dos sondeos se fuerzan: una pestaña de fondo se queda sin fotogramas y
 // el sondeo normal va con el bucle de dibujo
@@ -206,7 +206,7 @@ await ana.screenshot({ path: path.join(OUT, 'm3f-corro-de-tres.png') });
 // globo mudo sobre el grupo —sabe que hablan— y NO lo que dicen.
 await pulsa(bea, '.corro-cab .btn-sec:has-text("Salir")');
 await bea.waitForTimeout(1800);
-await ana.$eval('.chat .decir input', (i) => (i.value = 'esto Bea ya no lo lee'));
+await ana.$eval('.chat .decir input[type=text]', (i) => (i.value = 'esto Bea ya no lo lee'));
 await pulsa(ana, '.chat .decir button[type=submit]');
 await ana.evaluate(() => window.__mundo.sondea());
 await sondeaCid();
@@ -241,7 +241,7 @@ await bea.waitForSelector(filaAna, { state: 'attached', timeout: 15000 });
 console.log('Bea, en la hoja de vecinos:', (await bea.textContent(filaAna)).trim());
 await pulsa(bea, filaAna + ' .btn-sec');
 await bea.waitForTimeout(400);
-await ana.$eval('.chat .decir input', (i) => (i.value = 'esto ya no lo lee Bea'));
+await ana.$eval('.chat .decir input[type=text]', (i) => (i.value = 'esto ya no lo lee Bea'));
 await pulsa(ana, '.chat .decir button[type=submit]');
 // se fuerza el sondeo de Ana: su pestaña está de fondo y el navegador puede
 // dejarla sin fotogramas, que es lo que mueve el sondeo normal
@@ -266,7 +266,7 @@ try {
   /* no hay fichero: no se guardó */
 }
 console.log('reporte guardado:', reporte ? `${reporte.deNombre} → ${reporte.aNombre}, dijo «${reporte.dijo}»` : 'NINGUNO');
-await pulsa(ana, '.chat .decir button[aria-label="Cerrar"]');
+await pulsa(ana, '.chat .chat-cab .cerrar');
 
 // el teclado mueve: un par de segundos hacia el oeste y la x baja
 const antes = await ana.evaluate(() => window.__mundo.pos());
