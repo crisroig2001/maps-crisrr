@@ -115,6 +115,10 @@ export const PIEZAS = {
   arenero: { nombre: 'Arenero', icono: '🏖️', mini: true, ancho: 3, suelo: true, cat: 'jardin' },
   buzon: { nombre: 'Buzón', icono: '📮', mini: true, tinte: true, ancho: 0.7, cat: 'jardin', solido: 0.2 },
   barbacoa: { nombre: 'Barbacoa', icono: '🍖', mini: true, ancho: 1.2, cat: 'jardin', solido: 0.6 },
+  // Generada: un vaso de agua con su borde de piedra (que es lo que se tiñe)
+  // y una escalerilla. De SUELO, que la hierba no crezca en el agua, y sin
+  // sólido: es plana y el avatar pasa por encima como por un patio.
+  piscina: { nombre: 'Piscina', icono: '🏊', mini: true, tinte: true, ancho: 8, suelo: true, cat: 'jardin' },
   // --- la calle (City Kit Roads, CC0) ---
   // El kit de calles es hermano del de las casas, pero trae SU PROPIO atlas
   // con el mismo nombre de fichero, así que vive en su carpeta (`calles/`) y

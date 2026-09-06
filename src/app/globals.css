@@ -312,6 +312,7 @@ body {
 .cartel i { display: block; width: 9px; height: 9px; border-radius: 50%; }
 .cartel b { color: var(--ink); font-weight: 800; }
 .cartel.mia b { color: var(--accent); }
+.cartel .venta { font-weight: 700; color: #7a5a1a; background: #ffe9a8; border-radius: 99px; padding: 1px 7px; margin-left: 2px; }
 
 /* un gesto: el emoji sube y se desvanece. El JS lleva el .gesto pegado a la
    cabeza (que anda) y el CSS anima la subida dentro. */

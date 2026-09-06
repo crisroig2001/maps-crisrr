@@ -17,8 +17,10 @@ servidor solo guarda qué hay en cada parcela y quién anda cerca.
   este a oeste y otro hacia el sur con losas, farolas, árboles y bancos, dos
   **ríos** que serpentean (uno al este, otro al sur) con un **puente** donde
   los cruza el paseo, tres **parques** públicos sembrados con árboles, rocas
-  y flores, una **casa de muestra** en 1/1 y una **urbanización** al sur del
-  paseo del este, entre los dos ríos (más abajo, «La urbanización de serie»).
+  y flores, una **casa de muestra** en 1/1 y una **urbanización** alrededor
+  del paseo del sur, entre los dos ríos (más abajo, «La urbanización de
+  serie»), con sus casas hechas EN VENTA: quien las reclama se las queda con
+  todo lo de dentro, y cualquiera puede poner la suya en venta igual.
   Todo eso es del «mundo»: nadie
   lo reclama ni lo cambia, y el servidor lo resiembra si cambia el plano
   (la semilla lleva versión). Solo se puede reclamar en la **zona
@@ -307,7 +309,16 @@ servidor solo guarda qué hay en cada parcela y quién anda cerca.
   WebSockets es el paso siguiente si se llena.
 - **Parcelas**: ponte en un solar libre y pulsa «Reclamar». Una por jugador,
   de momento (`MAX_PARCELAS_POR_JUGADOR`): el mundo se llena de vecinos, no
-  de un solo constructor. Se puede abandonar, y vuelve a ser un solar.
+  de un solo constructor. Se puede abandonar, y vuelve a ser un solar. Y se
+  puede **poner en venta** («🏷️ Vender», al lado de «Construir»): mientras
+  lo esté sigue siendo tuya, pero quien pase y pulse «Quedártela» se la queda
+  **con todo lo construido**, y tú puedes reclamar otra. No hay dinero por
+  medio —es «que se la quede quien quiera»—, y es lo mismo que hacen de serie
+  las casas de la urbanización, que nacen en venta. La casa en venta lleva un
+  cartel en la entrada y la etiqueta «En venta» en el rótulo que flota
+  encima; el que la compra empieza con los me gusta a cero, que eran de la
+  casa de otro. Guardado: `v: 1` en la parcela, y el POST de `/api/parcela`
+  con `accion: 'venta'`.
   Cada parcela reclamada lleva un marco en el suelo del color de su dueño
   (derivado de su id, sin preguntarle a nadie); la tuya, en azul.
 - **De quién es cada casa**: sobre cada parcela reclamada flota un **cartel**
@@ -326,11 +337,11 @@ servidor solo guarda qué hay en cada parcela y quién anda cerca.
   cuenta y, para ti, si tú eras uno. Tope de `MAX_GUSTA` por parcela, que es
   lo que impide que una parcela famosa se coma el fichero. El «cuántos había
   la última vez» vive en tu dispositivo: es un aviso, no un dato del mundo.
-- **Construir**: en tu parcela, «Construir» abre la paleta con **56 piezas**
+- **Construir**: en tu parcela, «Construir» abre la paleta con **57 piezas**
   en cinco pestañas: casas (nueve del City Kit, más torre, tienda, caseta y
   cobertizo), naturaleza (árboles, arbustos, flores, setas, calabazas, rocas,
   troncos), jardín (banco, mesa, silla, maceta, farola, fuente, hoguera,
-  cartel, bandera, tendedero, arenero, buzón, barbacoa), **suelo** (camino,
+  cartel, bandera, tendedero, arenero, buzón, barbacoa, piscina), **suelo** (camino,
   puente, valla, losa, patio, patio grande y parterre) y **calle** (recta,
   curva, cruce, cruce en T, paso de cebra, fin de calle, entrada, semáforo,
   señal y contenedor). El suelo era el hueco
@@ -911,11 +922,13 @@ sueltos, así que es zona gris.
 
 Hasta aquí el mundo de serie era una plaza, dos paseos, tres parques y UNA
 casa: quien llegaba veía una pradera con una casa de muestra, y reclamar una
-parcela era plantarse en medio de la nada. Ahora hay un **barrio** al sur del
-paseo del este, entre los dos ríos (`src/lib/paisaje.js`, sección «la
-urbanización»): calles, cinco casas hechas con su jardín, una zona común con
-fuente y tres solares libres EN MEDIO, que se reclaman como cualquier otro y
-que son los que más apetece reclamar, que es la idea. Cómo está hecho, y por
+parcela era plantarse en medio de la nada. Ahora hay un **barrio** alrededor
+del paseo del sur y a lo largo del del este, entre los dos ríos
+(`src/lib/paisaje.js`, sección «la urbanización»): calles, doce casas hechas
+con su jardín (cinco con piscina), una zona común con fuente y una decena de
+solares libres EN MEDIO, que se reclaman como cualquier otro y que son los que
+más apetece reclamar, que es la idea. Y las casas hechas **nacen en venta**:
+quien las reclama se las queda con todo lo de dentro. Cómo está hecho, y por
 qué así:
 
 - **Las calles van por las LINDES de las parcelas, no dentro de ellas.** Son
@@ -924,11 +937,14 @@ qué así:
   a cada una y a ninguna se le come más que eso. Como las lindes son
   múltiplos de 48, que lo son de 8, las baldosas caen en la rejilla de 8 del
   mundo y un cruce casa con la calle de la linde de al lado sin cortar nada.
-  Tres tramos: la principal, de este a oeste por y = −48 (del parque del
-  suroeste al río del este, cruzando el paseo del sur con un **paso de
-  cebra**), y dos de norte a sur por x = ±96, del paseo a la principal (la del
-  este sigue hasta el río). La del oeste se paró en la principal porque más al
-  sur partía el parque en dos.
+  Cinco tramos: la principal, de este a oeste por y = −48 (de la punta oeste
+  al río del este, cruzando el paseo del sur con un **paso de cebra**); una
+  segunda por y = −96 solo en la manzana del oeste, que acaba en el parque; y
+  tres de norte a sur, por x = −192 y x = −96 —que cruzan el paseo del este,
+  también con paso de cebra, y suben una fila más al norte— y por x = 96, del
+  paseo al río. La de x = −96 se para en la principal porque más al sur
+  partía el parque en dos, y ninguna toca la casa de muestra, que tiene la
+  valla en la linde.
 - **Las calles no se guardan en ninguna parcela.** La mitad de cada calle cae
   en un solar que alguien puede reclamar, y una parcela reclamada guarda solo
   lo suyo. Así que salen del plano (`piezasCalle`) y el visor las pinta
@@ -962,14 +978,47 @@ qué así:
   del paseo que caían en la calzada no se siembran (`enCalle` en el
   generador del paseo).
 - **Las casas están escritas UNA vez, en un marco canónico** (la calle al
-  sur) y se giran a la calle que les toca: valla a 6 m de la linde por los
-  lados con calle (4 de calzada, 2 de hierba) y a 2 por los demás, con la
-  puerta delante del camino; la casa mirando a la calle con su camino, su
-  buzón y sus flores; detrás, el jardín de estar (merendero, banco, y un
-  tendedero o un arenero según la semilla). Cada una es de un modelo
-  distinto —chalet, cochera, casa grande, villa en la orilla y bungaló— y la
-  valla, el buzón y el tendedero van teñidos de un pastel y no del naranja del
-  kit, que ya manda bastante en el mundo (está apuntado en la auditoría).
+  sur) y se giran a la calle que les toca —las de la fila norte miran al
+  este, que es lo que prueba los otros dos giros—: valla a 6 m de la linde
+  por los lados con calle (4 de calzada, 2 de hierba) y a 2 por los demás,
+  con la puerta delante del camino; la casa mirando a la calle con su camino,
+  su buzón y sus flores; detrás, el jardín de estar (merendero, un banco o la
+  **piscina** con dos sillas, y un tendedero o un arenero según la semilla).
+  Nueve modelos distintos entre doce casas, y la valla, el buzón, el
+  tendedero y el borde de la piscina van teñidos de un pastel y no del
+  naranja del kit, que ya manda bastante en el mundo (está apuntado en la
+  auditoría).
+- **La piscina es una pieza nueva del catálogo** (`piscina`, en Jardín):
+  geometría generada, 0 bytes de descarga. El borde de piedra son CUATRO
+  tiras y no una tapa con el agua encima —`caja` tapa por arriba, y una tapa
+  de 8 × 4 dejaría el agua debajo sin verse—, el agua va un palmo más baja y
+  lleva escalerilla. Es de `suelo` (la hierba no crece en el agua y se
+  asienta por el punto alto de su huella, como una calzada) y sin sólido: el
+  avatar pasa por encima como por un patio.
+- **Y destapó un fallo viejo: las tapas de `caja` miraban hacia abajo.** El
+  agua salía verde botella con el MISMO azul que la fuente, que sale celeste.
+  No era el color ni la sombra (se probó con el agua por encima del borde y
+  con el color exacto de la fuente: igual de oscura): la fuente es un
+  `prisma` y la piscina una `caja`, y la tapa de la caja estaba enrollada en
+  sentido horario vista desde arriba. Con un material de dos caras eso no se
+  ve como un agujero sino como SOMBRA: la GPU le da la vuelta a la normal y
+  la cara cae en el escalón oscuro de la rampa aunque le dé el sol de lleno.
+  Llevaba así desde el primer día en toda tapa de caja: la losa, el patio, el
+  parterre, el arenero, el buzón. Arreglado el orden de los vértices, todo
+  eso se aclara a la vez (se mueven `catalogo` y las vistas con patio en
+  cuadro, y las miniaturas se regeneraron), y es lo que hay que saber si
+  alguien se pregunta por qué el patio de la zona común es de otro tono que
+  en las capturas de antes.
+- **En venta.** Las casas del barrio nacen con `v: 1` y `reclama` acepta
+  una parcela de otro si está en venta: cambia de dueño CON sus piezas, el
+  vendedor se queda sin parcela (y puede reclamar otra) y los me gusta
+  empiezan de cero. Cualquier dueño hace lo mismo con la suya («🏷️ Vender»,
+  `accion: 'venta'`). Lo que se ve: un `cartel` a la entrada (en la puerta
+  de la valla en las de serie, a pie de calle en las de la gente) y la
+  etiqueta «En venta» en el rótulo que flota encima, que las casas del mundo
+  solo llevan mientras están en venta. Y una casa del barrio abandonada por
+  quien la compró vuelve a ser un solar —`esReclamable` acepta `barrio` y
+  `residencial`—, con su cartel de solar libre.
 - **La zona común** es una parcela sin valla con la fuente en un patio, seis
   bancos, farolas, una bandera, un arenero, un merendero con barbacoa y dos
   caminos que entran desde sus dos calles. Y el parque del suroeste queda
@@ -977,16 +1026,17 @@ qué así:
 - **En el pie** las parcelas del barrio dicen «Casa de la urbanización» y
   «Zona común de la urbanización»; los solares, «Reclamar esta parcela» como
   cualquier otro.
-- **Tres vistas nuevas del banco**: `urbanizacion` (desde el puente del sur,
-  con horizonte), `urbanizacion-calle` (a ras de calle, en el cruce) y
-  `urbanizacion-plano` (casi cenital sobre el paso de cebra). De las de
-  antes se mueven las que tienen el barrio en cuadro, que es lo esperado.
+- **Cuatro vistas nuevas del banco**: `urbanizacion` (la manzana del oeste
+  desde arriba), `urbanizacion-calle` (a ras de calle, en el cruce),
+  `urbanizacion-piscina` (una casona por detrás, con su piscina y el rótulo
+  de en venta) y `urbanizacion-plano` (casi cenital sobre el paso de cebra).
+  De las de antes se mueven las que tienen el barrio en cuadro, que es lo
+  esperado.
 
-Lo que NO se ha hecho, por si se retoma: las casas hechas son del mundo y no
-se pueden reclamar (son decorado, como la de muestra); no hay coches ni nada
-que ande por la calle; y las calles no llegan a la plaza —la principal cruza
-el paseo, que es de losas, con un paso de cebra, y eso es a propósito: la
-plaza y los paseos son peatonales—.
+Lo que NO se ha hecho, por si se retoma: no hay coches ni nada que ande por la
+calle; las calles no llegan a la plaza —la principal cruza el paseo, que es de
+losas, con un paso de cebra, y eso es a propósito: la plaza y los paseos son
+peatonales—; y vender no cobra nada, porque no hay nada con que pagar.
 
 ### Cabos sueltos
 

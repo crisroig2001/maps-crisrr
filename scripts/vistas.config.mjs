@@ -91,11 +91,11 @@ export const VISTAS = [
   },
   {
     id: 'urbanizacion',
-    desc: 'La urbanización desde el puente del sur, con el horizonte: la calle principal cruzando el paseo, las casas hechas con su jardín, la zona común con la fuente y los solares libres entre medias. Aquí se juzga que se lea como un barrio y no como piezas sueltas.',
-    x: 24,
-    y: -100,
-    d: 120,
-    pol: 64,
+    desc: 'La manzana del oeste desde arriba y un poco de lado: la calle principal y la de abajo, las dos de norte a sur, las casas hechas con su jardín (dos con piscina), el parque y los solares libres entre medias. Aquí se juzga que se lea como un barrio y no como piezas sueltas, y que las calles casen (rectas, cruces, T, finales, entradas de coches).',
+    x: -150,
+    y: -70,
+    d: 190,
+    pol: 30,
     az: 180,
   },
   {
@@ -106,6 +106,15 @@ export const VISTAS = [
     d: 32,
     pol: 60,
     az: 160,
+  },
+  {
+    id: 'urbanizacion-piscina',
+    desc: 'La casona del -4/-1 por detrás, con su piscina: el borde de piedra teñido, el agua un palmo más baja, la escalerilla y las dos sillas. Aquí se juzga la piscina, que es geometría generada, y el cartel de «en venta» flotando sobre una casa del mundo.',
+    x: -160,
+    y: -16,
+    d: 28,
+    pol: 60,
+    az: 340,
   },
   {
     id: 'urbanizacion-plano',

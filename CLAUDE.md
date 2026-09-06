@@ -26,8 +26,10 @@ En `README.md`, sección **Hoja de ruta**:
   antes de dar con la línea que lo cierra.
 - **Si se mete otro kit** — lo aprendido metiendo el City Kit Roads.
 - **La urbanización de serie** — hecha: un barrio con calles por las LINDES
-  de las parcelas, casas hechas, zona común y solares libres. Las calles no
-  se guardan: salen del plano y el visor las pinta encima de lo que haya.
+  de las parcelas, doce casas hechas EN VENTA (se reclaman con todo dentro),
+  piscinas, zona común y solares libres. Las calles no se guardan: salen del
+  plano y el visor las pinta encima de lo que haya. Y cualquier dueño puede
+  poner su parcela en venta (`v: 1`, `accion: 'venta'`).
 - **Cabos sueltos**.
 
 ## Comandos
@@ -154,7 +156,7 @@ después de conmutar el tráfico. Manda lo que sirve la web.
 
 ## Estado
 
-56 piezas en 5 pestañas (casas, naturaleza, jardín, suelo, calle). 42 modelos
+57 piezas en 5 pestañas (casas, naturaleza, jardín, suelo, calle). 42 modelos
 glTF de Kenney (CC0), 1,3 MB, **todos cargados al arrancar** — cuando el
 catálogo crezca otra vez, toca cargar por pestaña.
 

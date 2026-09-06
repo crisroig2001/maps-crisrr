@@ -20,7 +20,7 @@ import { PIEZAS, CATEGORIAS, COLORES, PELOS, PIELES, MAX_PIEZAS, MAX_NOMBRE, MAX
 import { ADJUNTO_MAX, AUDIO_MAX_S, FOTO_LADO, etiquetaAdjunto, duracion } from '../lib/adjuntos';
 import { perfil, guardaPerfil, gustaVisto, guardaGustaVisto, silenciados, silencia, quitaSilencio } from '../lib/jugador';
 import { CORRO_MAX, CORRO_CERCA_M, CORRO_AVISO_M, CORRO_LINEAS_VISTA } from '../lib/corro';
-import { tipoParcela, conSuelo, cauce, distRio, rioEsteX as rioEsteXEnEscena, rioSurY as rioSurYEnEscena, GLSL_CAUCE, GLSL_FLUJO, RIO_ANCHO, NIVEL_AGUA, LECHO, BANDA_AGUA, piezasCalle, enCalle, ladosCalle, CAJA_CALLES, CALLE_ANCHO } from '../lib/paisaje';
+import { tipoParcela, conSuelo, cauce, distRio, rioEsteX as rioEsteXEnEscena, rioSurY as rioSurYEnEscena, GLSL_CAUCE, GLSL_FLUJO, RIO_ANCHO, NIVEL_AGUA, LECHO, BANDA_AGUA, piezasCalle, enCalle, ladosCalle, esReclamable, CAJA_CALLES, CALLE_ANCHO } from '../lib/paisaje';
 const LECHO_G = LECHO.toFixed(1);
 
 const L = PARCELA_M;
@@ -69,6 +69,7 @@ const TEJA = new THREE.Color(0xe07a62);
 const MADERA = new THREE.Color(0xa87550);
 const PIEDRA_C = new THREE.Color(0xd0c8b6);
 const AGUA = new THREE.Color(0x8fcbe6);
+const AGUA_PISCINA = new THREE.Color(0x74d3ef); // la de la piscina: un punto más viva que la de la fuente
 const POSTE = new THREE.Color(0x7a828c);
 const LUZ = new THREE.Color(0xffe38f);
 const MASTIL = new THREE.Color(0xefe9dc);
@@ -604,7 +605,14 @@ function vert(g, color, nx, ny, nz) {
   g.col.push(color.r, color.g, color.b);
   g.nor.push(nx, ny, nz);
 }
-// caja alineada a los ejes (x: este, z: sur), con tapa y sin fondo
+// caja alineada a los ejes (x: este, z: sur), con tapa y sin fondo.
+// La tapa va en sentido antihorario vista desde ARRIBA, que es lo que three
+// toma por cara delantera. Iba al revés, y como el material es de dos caras
+// no se notaba como agujero sino como SOMBRA: la GPU le daba la vuelta a la
+// normal y toda tapa de caja —losa, patio, arenero, el agua de la piscina—
+// caía en el escalón oscuro de la rampa aunque le diera el sol de lleno. El
+// agua de la piscina salía verde botella con el mismo azul que la fuente,
+// que es un prisma y sí miraba hacia arriba.
 function caja(g, x0, y0, z0, x1, y1, z1, color) {
   const { pos } = g;
   const lado = (ax, az, bx, bz, nx, nz) => {
@@ -615,7 +623,7 @@ function caja(g, x0, y0, z0, x1, y1, z1, color) {
   lado(x1, z1, x1, z0, 1, 0); // este
   lado(x1, z0, x0, z0, 0, -1); // norte
   lado(x0, z0, x0, z1, -1, 0); // oeste
-  pos.push(x0, y1, z0, x1, y1, z0, x1, y1, z1, x0, y1, z0, x1, y1, z1, x0, y1, z1);
+  pos.push(x0, y1, z0, x1, y1, z1, x1, y1, z0, x0, y1, z0, x0, y1, z1, x1, y1, z1);
   for (let q = 0; q < 6; q++) vert(g, color, 0, 1, 0);
 }
 // prisma regular de n lados con tapa; r1 permite que el remate sea más
@@ -779,6 +787,20 @@ function geometriaPieza(tipo) {
         caja(T, x + 0.06, 0, z + 0.06, x + 3.94, h, z + 3.94, BLANCO);
       }
     }
+  } else if (tipo === 'piscina') {
+    // 8 × 4,4 m: el borde de piedra (teñible) en cuatro tiras, el vaso de
+    // agua un palmo más bajo y una escalerilla. El borde va como cuatro
+    // cajas y no una con el agua encima: `caja` tapa por arriba, y una tapa
+    // de piedra de 8 × 4 dejaría el agua debajo, sin verse.
+    const b = 0.32;
+    caja(T, -4, 0, -2.2, 4, b, -1.75, BLANCO);
+    caja(T, -4, 0, 1.75, 4, b, 2.2, BLANCO);
+    caja(T, -4, 0, -2.2, -3.55, b, 2.2, BLANCO);
+    caja(T, 3.55, 0, -2.2, 4, b, 2.2, BLANCO);
+    caja(F, -3.55, 0, -1.75, 3.55, 0.24, 1.75, AGUA_PISCINA);
+    prisma(F, 6, 0.04, 0.2, 0.95, METAL, 0.04, 3.3, 0.55);
+    prisma(F, 6, 0.04, 0.2, 0.95, METAL, 0.04, 3.3, -0.55);
+    caja(F, 3.05, 0.9, -0.59, 3.34, 0.96, 0.59, METAL);
   } else if (tipo === 'parterre') {
     caja(F, -2, 0, -2, 2, 0.16, 2, MADERA);
     caja(F, -1.82, 0.1, -1.82, 1.82, 0.22, 1.82, TIERRA);
@@ -2839,9 +2861,10 @@ export default function Mundo() {
       for (let px = Math.max(caja.px0, CAJA_CALLES.px0); px <= Math.min(caja.px1, CAJA_CALLES.px1); px++) {
         for (let py = Math.max(caja.py0, CAJA_CALLES.py0); py <= Math.min(caja.py1, CAJA_CALLES.py1); py++) {
           const pc = parcelas.get(claveParcela(px, py));
-          // el cartel de «solar libre» solo mientras lo sea
-          const libre = !pc?.o && tipoParcela(px, py) === 'residencial';
-          fn(px, py, piezasCalle(px, py, libre));
+          // el cartel de la entrada: «solar libre» mientras lo sea, «en
+          // venta» mientras lo esté
+          const senal = pc?.v ? 'venta' : !pc?.o && esReclamable(tipoParcela(px, py)) ? 'solar' : null;
+          fn(px, py, piezasCalle(px, py, senal));
         }
       }
     }
@@ -3916,7 +3939,9 @@ export default function Mundo() {
         for (let dy = -CARTELES_RADIO; dy <= CARTELES_RADIO; dy++) {
           const clave = claveParcela(p.px + dx, p.py + dy);
           const pc = parcelas.get(clave);
-          if (!pc?.o || pc.o === 'mundo' || !pc.n) continue;
+          // las de la gente llevan su nombre; las del mundo solo si están
+          // en venta, que es lo que hay que leer desde lejos
+          if (!pc?.o || (pc.o === 'mundo' ? !pc.v : !pc.n)) continue;
           quedan.add(clave);
           let el = carteles.get(clave);
           if (!el) {
@@ -3926,22 +3951,28 @@ export default function Mundo() {
             const b = document.createElement('b');
             const g = document.createElement('span');
             g.className = 'gusta';
-            el.append(i, b, g);
+            const v = document.createElement('span');
+            v.className = 'venta';
+            v.textContent = '🏷️ En venta';
+            el.append(i, b, g, v);
             el._i = i;
             el._b = b;
             el._g = g;
+            el._v = v;
             cont.appendChild(el);
             carteles.set(clave, el);
           }
           const mia = pc.o === jugador.id;
           // el punto del color del marco que la parcela lleva en el suelo:
           // el cartel y el suelo dicen lo mismo
-          const col = '#' + (mia ? colorMio : cacheColorDueno.get(pc.o) || colorDueno(pc.o)).getHexString();
+          const delMundo = pc.o === 'mundo';
+          const col = delMundo ? '#a9b0a6' : '#' + (mia ? colorMio : cacheColorDueno.get(pc.o) || colorDueno(pc.o)).getHexString();
           if (el._col !== col) {
             el._i.style.background = col;
             el._col = col;
           }
-          const nombre = callados.has(pc.o) ? 'silenciado' : pc.n;
+          el._v.hidden = !pc.v;
+          const nombre = delMundo ? 'Casa de la urbanización' : callados.has(pc.o) ? 'silenciado' : pc.n;
           if (el._txt !== nombre) {
             el._b.textContent = nombre;
             el._txt = nombre;
@@ -4565,8 +4596,9 @@ export default function Mundo() {
           // el dueño y las piezas son lo que hay que volver a dibujar en 3D;
           // el nombre y los me gusta solo cambian el cartel, que se pinta
           // por su cuenta en cada fotograma
-          if (!prev || prev.o !== it.o || JSON.stringify(prev.d) !== JSON.stringify(it.d)) cambios = true;
-          parcelas.set(it.k, { o: it.o, d: it.d || [], n: it.n || null, g: it.g || 0, mg: !!it.mg });
+          // en venta también se repinta: cambia el cartel de la entrada
+          if (!prev || prev.o !== it.o || prev.v !== !!it.v || JSON.stringify(prev.d) !== JSON.stringify(it.d)) cambios = true;
+          parcelas.set(it.k, { o: it.o, d: it.d || [], n: it.n || null, g: it.g || 0, mg: !!it.mg, v: !!it.v });
         }
         if (j.yo) {
           miParcelaClave = j.yo.p || null;
@@ -4598,7 +4630,8 @@ export default function Mundo() {
         dueno: pc?.o || null,
         nombre: pc?.n || null,
         mia: pc?.o === jugador.id,
-        libre: !pc?.o && tipo === 'residencial',
+        libre: !pc?.o && esReclamable(tipo),
+        venta: !!pc?.v,
         g: pc?.g || 0,
         mg: !!pc?.mg,
         n: pc?.d?.length || 0,
@@ -4955,9 +4988,30 @@ export default function Mundo() {
           });
           const j = await r.json().catch(() => ({}));
           if (!r.ok) return j.error || 'red';
-          parcelas.set(clave, { o: jugador.id, n: perfil().nombre, g: 0, mg: false, d: [] });
+          // una casa en venta se queda con lo que tiene dentro
+          parcelas.set(clave, { o: jugador.id, n: perfil().nombre, g: 0, mg: false, v: false, d: parcelas.get(clave)?.d || [] });
           miParcelaClave = clave;
           setMiParcela(clave);
+          ultimoHasta = null;
+          pintaMundo();
+          actualizaDonde(true);
+          return null;
+        } catch {
+          return 'red';
+        }
+      },
+      // poner (o quitar) la parcela en venta: cualquiera se la queda con todo
+      async vende(clave, v) {
+        try {
+          const r = await fetch('/api/parcela', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ accion: 'venta', parcela: clave, jugador: jugador.id, v: !!v }),
+          });
+          const j = await r.json().catch(() => ({}));
+          if (!r.ok) return j.error || 'red';
+          const pc = parcelas.get(clave);
+          if (pc) parcelas.set(clave, { ...pc, v: !!v });
           ultimoHasta = null;
           pintaMundo();
           actualizaDonde(true);
@@ -5448,12 +5502,23 @@ export default function Mundo() {
   async function onReclamar() {
     const eng = engineRef.current;
     if (!eng || !donde) return;
+    const enVenta = donde.venta;
     const err = await eng.reclama(donde.clave);
-    if (err === 'ocupada') avisa('Alguien se te ha adelantado con esta parcela');
+    if (err === 'ocupada') avisa(enVenta ? 'Ya no está en venta: alguien se la ha quedado antes' : 'Alguien se te ha adelantado con esta parcela');
     else if (err === 'no_residencial') avisa('Aquí no se puede construir: busca un solar en la zona residencial, cerca de la plaza');
     else if (err === 'cupo') avisa('Ya tienes una parcela. Puedes abandonarla desde «Construir»');
     else if (err) avisa('No se pudo reclamar (¿sin conexión?)');
+    else if (enVenta) avisa('¡La casa es tuya, con todo lo que tiene dentro! Pulsa «Construir» para cambiar lo que quieras');
     else avisa('¡Parcela tuya! Pulsa «Construir» y toca el suelo para poner piezas');
+  }
+  async function onVender() {
+    const eng = engineRef.current;
+    if (!eng || !donde?.mia) return;
+    const v = !donde.venta;
+    if (v && !window.confirm('¿Poner tu parcela en venta? Quien la reclame se la queda con todo lo construido, y tú podrás reclamar otra.')) return;
+    const err = await eng.vende(donde.clave, v);
+    if (err) avisa('No se pudo cambiar (¿sin conexión?)');
+    else avisa(v ? '🏷️ En venta: quien la reclame se la queda con todo' : 'Ya no está en venta');
   }
   function onConstruir() {
     const eng = engineRef.current;
@@ -5996,15 +6061,30 @@ export default function Mundo() {
               ❤️ {donde.g}
             </span>
           )}
+          {donde.mia && (
+            <button className={'btn-sec' + (donde.venta ? ' on' : '')} onClick={onVender} aria-pressed={donde.venta} title={donde.venta ? 'En venta: cualquiera puede quedársela con todo. Toca para quitarla de venta' : 'Ponerla en venta: quien la reclame se la queda con todo lo construido'}>
+              🏷️ {donde.venta ? 'En venta' : 'Vender'}
+            </button>
+          )}
           {donde.libre && !miParcela && (
             <button className="btn-principal" onClick={onReclamar}>
               📍 Reclamar esta parcela
             </button>
           )}
           {donde.libre && miParcela && <span className="etiqueta glass">Solar libre</span>}
+          {!donde.libre && !donde.mia && donde.venta && (
+            <>
+              <span className="etiqueta glass">🏷️ {donde.dueno === 'mundo' ? 'Casa de la urbanización, en venta' : 'En venta'}</span>
+              {!miParcela && (
+                <button className="btn-principal" onClick={onReclamar}>
+                  🔑 Quedártela
+                </button>
+              )}
+            </>
+          )}
           {!donde.libre && !donde.mia && donde.dueno && donde.dueno !== 'mundo' && (
             <>
-              <span className="etiqueta glass">Aquí vive {donde.nombre || 'alguien'}</span>
+              {!donde.venta && <span className="etiqueta glass">Aquí vive {donde.nombre || 'alguien'}</span>}
               <button
                 className={'btn-principal gusta' + (donde.mg ? ' on' : '')}
                 onClick={onGusta}
@@ -6015,7 +6095,7 @@ export default function Mundo() {
               </button>
             </>
           )}
-          {!donde.libre && !donde.mia && !(donde.dueno && donde.dueno !== 'mundo') && (
+          {!donde.libre && !donde.mia && !donde.venta && !(donde.dueno && donde.dueno !== 'mundo') && (
             <span className="etiqueta glass">
               {donde.tipo === 'plaza'
                 ? 'Plaza pública'

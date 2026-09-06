@@ -11,8 +11,9 @@
 //     este a oeste al sur (y ≈ -3,5 parcelas), con un puente donde los
 //     cruza el paseo
 //   - tres PARQUES públicos con árboles, rocas y bancos
-//   - la URBANIZACIÓN al sur del paseo del este, entre los dos ríos: calles
-//     por las lindes, cinco casas hechas, una zona común y solares libres
+//   - la URBANIZACIÓN alrededor del paseo del sur y a lo largo del del este,
+//     entre los dos ríos: calles por las lindes, doce casas hechas (en venta),
+//     una zona común y solares libres
 //   - alrededor, hasta 9 parcelas de la plaza, la ZONA RESIDENCIAL, que es la
 //     única donde se puede reclamar; más allá, campo
 import { PARCELA_M as L } from './parcela';
@@ -132,6 +133,11 @@ export function tipoParcela(px, py) {
   return 'campo';
 }
 
+// Dónde se puede reclamar: en un solar de la zona residencial, y en una casa
+// del barrio (que nace en venta, y si su dueño la abandona vuelve a ser solar)
+export function esReclamable(tipo) {
+  return tipo === 'residencial' || tipo === 'barrio';
+}
 export function esPublica(tipo) {
   return tipo === 'plaza' || tipo === 'paseo' || tipo === 'parque' || tipo === 'muestra' || tipo === 'barrio' || tipo === 'comun';
 }
@@ -162,9 +168,11 @@ const CALLE_SEMI = CALLE_ANCHO / 2;
 // a ninguna se le come más que eso. Las baldosas caen en múltiplos de 8, que
 // es lo que hace que un cruce con la linde de al lado case sin cortar nada.
 const CALLES = [
-  { y: -48, x0: -144, x1: 176 }, // la principal: del parque del suroeste al río del este, cruzando el paseo del sur
+  { y: -48, x0: -288, x1: 176 }, // la principal: de la punta oeste al río del este, cruzando el paseo del sur
+  { y: -96, x0: -288, x1: -144 }, // la de abajo, solo en la manzana del oeste: acaba en el parque
+  { x: -192, y0: -144, y1: 96 }, // la del oeste: del parque del noroeste al río del sur, cruzando el paseo
+  { x: -96, y0: -48, y1: 96 }, // la del medio: de la fila norte a la principal (más al sur partiría el parque en dos)
   { x: 96, y0: -96, y1: 0 }, // la del este: del paseo al río del sur
-  { x: -96, y0: -48, y1: 0 }, // la del oeste: del paseo a la principal (más al sur partiría el parque en dos)
 ];
 // Las casas hechas: qué casa, a qué calle mira (`cara`: s/e/n/w) y `u`, dónde
 // está a lo largo de su calle, en el marco canónico de `casaDeSerie` (la
@@ -172,14 +180,27 @@ const CALLES = [
 // entrada de coches caiga en una baldosa. La del -1/-2 va corrida a 32
 // porque su vecina de enfrente, la -1/-1, ya tiene la entrada en la baldosa
 // de en medio y una baldosa no puede tener entrada a los dos lados.
-// `valla` es el tinte de la valla, el buzón y el tendedero (índice de
-// COLORES): el 0 es el naranja del kit, que ya manda bastante en el mundo.
+// `valla` es el tinte de la valla, el buzón, el tendedero y el borde de la
+// piscina (índice de COLORES): el 0 es el naranja del kit, que ya manda
+// bastante en el mundo. `piscina`: lleva piscina en el jardín de atrás.
+// Todas nacen EN VENTA: quien las reclama se las queda con todo lo de dentro.
 const CASAS = {
+  // al norte del paseo del este, mirando a las calles que suben
+  '-5/1': { casa: 'mirador', cara: 'e', u: 24, valla: 7, piscina: true },
+  '-3/1': { casa: 'casa', cara: 'e', u: 24, valla: 2 },
+  // la acera norte de la calle principal
+  '-6/-1': { casa: 'moderna', cara: 's', u: 24, valla: 5, piscina: true },
+  '-4/-1': { casa: 'casa-d', cara: 's', u: 24, valla: 7, piscina: true },
   '-3/-1': { casa: 'casa-c', cara: 's', u: 24, valla: 7 },
   '-1/-1': { casa: 'cochera', cara: 's', u: 24, valla: 5 },
   '1/-1': { casa: 'casa-b', cara: 's', u: 24, valla: 2 },
-  '3/-1': { casa: 'villa', cara: 's', u: 24, valla: 7 }, // la de la orilla
+  '3/-1': { casa: 'villa', cara: 's', u: 24, valla: 7, piscina: true }, // la de la orilla
+  // la acera sur
+  '-5/-2': { casa: 'casa', cara: 'n', u: 24, valla: 4 },
   '-1/-2': { casa: 'bungalo', cara: 'n', u: 32, valla: 4 },
+  // la calle de abajo, en la manzana del oeste
+  '-6/-3': { casa: 'casa-b', cara: 'n', u: 24, valla: 2 },
+  '-4/-3': { casa: 'bungalo', cara: 'n', u: 24, valla: 7, piscina: true },
 };
 // La zona común: fuente, bancos, arenero y merendero, sin valla
 const COMUNES = new Set(['1/-2']);
@@ -265,7 +286,11 @@ function baldosa(X, Y) {
 }
 // Las baldosas que no salen de lo de alrededor: el paso de cebra donde el
 // paseo del sur cruza la calle principal, y la entrada de coches de cada casa
-const ESPECIALES = new Map([['24,-48', { t: 'paso-cebra', r: 0 }]]);
+const ESPECIALES = new Map([
+  ['24,-48', { t: 'paso-cebra', r: 0 }],
+  ['-96,24', { t: 'paso-cebra', r: 1 }],
+  ['-192,24', { t: 'paso-cebra', r: 1 }],
+]);
 const CARA_K = { s: 0, e: 1, n: 2, w: 3 }; // cuartos de vuelta del marco canónico
 for (const [k, def] of Object.entries(CASAS)) {
   const [px, py] = k.split('/').map(Number);
@@ -291,10 +316,12 @@ function pon(out, k, t, u, v, r = 0, c = 0) {
 }
 
 // Lo que el visor pinta de la calle en una parcela, esté guardada o no: las
-// baldosas de calzada que le tocan, las farolas de su acera y, si es un solar
-// libre del barrio, el cartel de la entrada. En metros de la parcela, como
-// las piezas de verdad. NO se guarda: se pinta encima de lo que haya.
-export function piezasCalle(px, py, libre) {
+// baldosas de calzada que le tocan, las farolas de su acera y un cartel a la
+// entrada si es un solar libre del barrio (`senal` = 'solar') o una casa en
+// venta ('venta': en la puerta de las casas de serie, y a pie de calle en las
+// de la gente). En metros de la parcela, como las piezas de verdad. NO se
+// guarda: se pinta encima de lo que haya.
+export function piezasCalle(px, py, senal) {
   const bx = px * L;
   const by = py * L;
   const out = [];
@@ -314,10 +341,15 @@ export function piezasCalle(px, py, libre) {
     if (lados.w && enCalle(bx, by + k, -0.5)) out.push({ t: 'farola', x: 3.2, y: k, r: 0, c: 0 });
     if (lados.e && enCalle(bx + L, by + k, -0.5)) out.push({ t: 'farola', x: L - 3.2, y: k, r: 0, c: 0 });
   }
-  if (libre) {
-    // el cartel de «solar libre», mirando a su calle (a la principal si la tiene)
-    const k = lados.s ? 0 : lados.n ? 2 : lados.e ? 1 : lados.w ? 3 : -1;
-    if (k >= 0) pon(out, k, 'cartel', 24, 5.6);
+  if (senal) {
+    const def = CASAS[px + '/' + py];
+    if (senal === 'venta' && def) pon(out, CARA_K[def.cara], 'cartel', def.u - 3.5, 5.2); // junto a la puerta de la valla
+    else {
+      // mirando a su calle (a la principal si la tiene); sin calle, nada:
+      // el cartel que flota sobre la parcela ya lo dice
+      const k = lados.s ? 0 : lados.n ? 2 : lados.e ? 1 : lados.w ? 3 : -1;
+      if (k >= 0) pon(out, k, 'cartel', 24, 5.6);
+    }
   }
   return out;
 }
@@ -372,7 +404,12 @@ function casaDeSerie(px, py, def) {
   P('silla', uC - 10.5, 37, 1);
   P('silla', uC - 7.5, 37, 3);
   P('barbacoa', uC - 9, 41);
-  P('banco', uC + 9, 36, 0);
+  if (def.piscina) {
+    // la piscina a un lado del jardín, con dos sillas mirándola
+    P('piscina', uC + 8, 37.5, 0, def.valla);
+    P('silla', uC + 6, 34, 2);
+    P('silla', uC + 10, 34, 2);
+  } else P('banco', uC + 9, 36, 0);
   P(rnd() < 0.5 ? 'tendedero' : 'arenero', uC, vF - 3.2, 0, def.valla);
   return out;
 }
