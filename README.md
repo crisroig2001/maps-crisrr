@@ -102,9 +102,13 @@ servidor solo guarda qué hay en cada parcela y quién anda cerca.
   bajan con la corriente) y con la fase y la fuerza desordenadas por ruido,
   que si no tres senos puros vuelven a coincidir cada pocos metros y el río
   sale a escamas; **arena y limo**
-  donde el cauce manda y no por altura absoluta; una **silueta de horizonte**
-  pintada en la cúpula con armónicos enteros sobre el acimut (línea de
-  arbolado, no cordillera); el **velo del sol** calentando la mitad suroeste
+  donde el cauce manda y no por altura absoluta; un **horizonte con relieve de
+  verdad** —una corona de terreno aparte, de 200 a 1.500 m, que sigue al avatar
+  y lleva su propia altura de decenas de metros, con **arboledas de bajo
+  detalle** sembradas por hash encima, y con su propia **perspectiva aérea**,
+  que se acerca al cielo con la distancia sin llegar nunca y se despeja con la
+  ALTURA, porque la calima está tumbada en el suelo (más abajo, en la hoja de
+  ruta, el porqué de cada número)—; el **velo del sol** calentando la mitad suroeste
   del horizonte —un disco no serviría: el sol está a 44° y el borde de arriba
   del encuadre no pasa de 17°—; **monte sembrado** por hash alrededor del
   avatar, que respeta el agua, lo público y la parcela de cualquiera; nubes en
@@ -416,7 +420,15 @@ tiempo, acuérdate de que el banco lo verá.
 
 Hay una vista, `a-escala`, que existe solo para juzgar el **tamaño**: el
 avatar pegado a la casa de muestra y a su jardín, donde se ve enseguida si una
-persona mide lo que mide al lado de una puerta, un banco o una valla.
+persona mide lo que mide al lado de una puerta, un banco o una valla. Y otra,
+`horizonte`, que existe solo para juzgar el **horizonte**: campo abierto, la
+cámara casi horizontal (`pol` 83) y nada delante. Se añadió ANTES de tocar el
+horizonte, que es la regla: si aparece un fallo nuevo, primero la vista que lo
+enseña.
+
+De las nueve vistas, solo tres tienen el horizonte en cuadro (`horizonte`,
+`a-ras-de-suelo` y `a-escala`): hace falta `pol` ≥ 65,4° para que el
+cielo entre siquiera, y en las otras seis el suelo llena el encuadre entero.
 
 Deja `capturas/index.html`: cada vista con su referencia al lado, el
 porcentaje de píxeles que han cambiado y, si han cambiado, una imagen que los
@@ -532,17 +544,11 @@ por orden de lo que daría:
 
 Una segunda pasada por las siete vistas (septiembre de 2026). Lo que salió
 arreglado —las hileras de hierba y las manchas de la losa— está en el commit
-`b405be2`; esto es lo que se miró y NO se ha tocado, por orden de lo que daría.
-Nada de esto está prototipado, así que el coste es estimación, no medida.
+`b405be2`, y **el horizonte vacío**, que era el primer punto y el más caro,
+está hecho (la sección siguiente cuenta cómo). Esto es lo que se miró y NO se
+ha tocado, por orden de lo que daría. Nada de esto está prototipado, así que el
+coste es estimación, no medida.
 
-- **El horizonte está vacío**, y es lo más caro y lo que más daría. El mundo
-  termina en una banda verde plana y recta contra el cielo, sin una silueta que
-  la rompa: por eso se lee como un disco plano y no como un paisaje. Se ve en
-  la vista `a-ras-de-suelo`. Pide relieve lejano o siluetas de bajo detalle más
-  allá de la niebla, y es trabajo de días, no de horas. Ojo: subir la amplitud
-  de `ONDAS` en `alturaEn()` NO vale de atajo —el comentario de ahí explica por
-  qué media parcela de desnivel es el techo para que una casa no flote— así que
-  el relieve lejano tendría que ser otra cosa, no el mismo terreno más ondulado.
 - **El rizado del agua moirea.** Ampliando la orilla lejana en `rio-y-paseo` se
   ve un enrejado regular de rombos, no un rizado. Es el mismo tipo de fallo que
   tenían las hileras de hierba —un patrón que se repite donde debería haber
@@ -570,6 +576,90 @@ Y una hipótesis que se miró y **se descartó**, apuntada para que nadie la
 mira al norte, así que las sombras caen DETRÁS de los árboles y las tapan ellos
 mismos. La caja de sombras son 150 m con 2.048 px (7,3 cm por téxel), de sobra
 para esa vista.
+
+### El horizonte, ya con relieve
+
+El primer punto de esa auditoría —«el horizonte está vacío», el más caro y el
+que más daba— está hecho. Lo que se metió, y por qué así:
+
+- **El diagnóstico no era «falta suelo».** Suelo hay 768 m. Lo que pasa es que
+  con la cámara casi horizontal el mundo entero de 100 a 300 m —justo el trecho
+  en el que la niebla hace su trabajo— cabe en DIECIOCHO píxeles de alto, y de
+  310 m en adelante el suelo ya está clavado en el color exacto de la calima:
+  un píxel de esa banda vale treinta metros de mundo. El degradado de distancia
+  no se puede ver, y lo que queda es el canto de un disco. Lo único que ocupa
+  pantalla a lo lejos es lo que tiene **altura**: una loma de 58 m a 800 m
+  levanta 52 px sobre el horizonte, y una arboleda de 20 m a 500 m, 29.
+- **Una corona de terreno aparte** (las constantes `HOR_*` de `Mundo.js`), de
+  200 a 1.500 m, que sigue al avatar y lleva su propia altura: cinco ondas de
+  220 a 1.500 m de largo y 58 m de amplitud, que valen CERO hasta los 560 m
+  —la esquina del plano de suelo está a 543— y se levantan del todo a los
+  1.000. Así el relieve lejano no es «el mismo terreno más ondulado», que es lo
+  que la auditoría descartaba de entrada (media parcela de desnivel es el techo
+  para que una casa no flote), sino otra cosa que solo existe donde no se anda.
+  Solo levanta lo que pasa de un umbral: sin ese corte el horizonte entero
+  ondula como una sábana tendida y se lee como un patrón, y una loma se cuenta
+  porque a los lados no hay nada.
+- **Arboledas de bajo detalle** sembradas por hash entre 380 y 1.150 m: tres
+  siluetas —fronda, mixta y pinar—, bultos y conos de ciento y pico triángulos,
+  unas setecientas, en tres llamadas de dibujo. Son las que MÁS rompen la raya,
+  porque se apoyan justo en la línea del horizonte. Tres siluetas y no una: con
+  una sola, el giro y la escala por instancia no bastan —la conífera asomaba
+  siempre lo mismo por encima de la masa y el horizonte salía con una
+  empalizada de picas a la misma altura—. Y las coníferas, anchas de base: el
+  primer intento fueron conos de 4 m de radio y 19 de alto, y a 600 m no se
+  leían como árboles sino como ANTENAS.
+- **La calima del horizonte no es la niebla del mundo.** La niebla satura a
+  325 m, así que una loma a 800 m con la niebla de serie sería del color exacto
+  del cielo, o sea invisible. Esta hace dos cosas: se acerca al cielo con la
+  distancia sin llegar nunca (del 62 % al 92 %), que es lo que deja leer tres o
+  cuatro planos cada uno más pálido que el de delante; y se despeja con la
+  ALTURA sobre el llano, porque la calima está tumbada en el suelo, así que el
+  pie de la loma se disuelve y la cresta asoma. Lo segundo es además lo que
+  casa la corona con el borde del plano de suelo **sin dejar una raya**: a ras
+  de llano da calima pura, que es el mismo color al que satura la niebla
+  (`NIEBLA` y `CIELO_CALIMA` son el mismo).
+- **Y se disuelve contra el CIELO, no contra un color fijo.** Con un color
+  fijo, una arboleda de 30 m a 450 m llega a 41 px sobre el horizonte, donde el
+  cielo ya casi no tiene calima y es azul: la silueta salía MÁS CLARA que el
+  fondo y el horizonte se leía como una hilera de agujas de hielo. Ahora lo
+  lejano se funde con el degradado de la cúpula en esa misma dirección.
+- **Fuera las dos crestas pintadas en la cúpula**, que eran el parche de la
+  primera auditoría para ese mismo hueco. Con relieve de verdad detrás, una
+  raya pintada encima sale POR DELANTE de una loma que está a 800 m: un segundo
+  horizonte por detrás del primero. Y de todas formas no llegaban: el armónico
+  3 tarda 1.505 px en dar una ondulación y el encuadre mide 1.000, así que en
+  pantalla era literalmente una recta con ±10 px de deriva.
+- **La cúpula pasa de 1.000 a 2.600 m de radio.** No se ve distinta —su shader
+  va por dirección, no por geometría— pero se pinta la ÚLTIMA de las opacas y
+  con test de profundidad, así que a 1.000 m se comía las lomas de 1.500. Con
+  2.600 sigue holgadamente dentro de `camera.far` (3.000).
+- **El campo sembrado llega a 250 m** en vez de a 190, para que entre lo que se
+  siembra y las arboledas no quede una franja de pradera pelada. De paso, el
+  corte se lleva a donde la niebla ya solo deja el 35 % del color, así que el
+  pop del borde del sembrado —que era un defecto de antes— se nota menos.
+- **Vista nueva del banco, `horizonte`**, añadida ANTES de tocar nada.
+
+Lo que cuesta: unos 37.000 triángulos de corona y unos 90.000 de arboledas, en
+cuatro llamadas de dibujo, sin sombras y sin la niebla del mundo. Medido con
+Chromium por software (SwiftShader, que castiga la geometría mucho más que una
+GPU de verdad, así que esto es un techo y no una medida) el fotograma pasa de
+415 a 492 ms: un 19 %.
+
+Y dos cosas que conviene saber antes de tocarlo:
+
+- **A las lomas no se llega nunca.** La corona sigue al avatar, así que una
+  loma se levanta a los 1.000 m y se va desinflando según se anda hacia ella,
+  hasta valer cero a los 560. El desinflado no se ve —al encogerse, la calima
+  se la come sola, porque la calima va por altura, así que se disuelve en vez
+  de hundirse— pero el paisaje del fondo es un fondo, no un sitio. Con un mundo
+  infinito y llano por diseño no hay otra: el relieve tiene que valer cero
+  donde se construye.
+- **La corona va CONTINUA, no a saltos de parcela como el suelo.** El suelo
+  salta de 48 en 48 m para que la trama de parcelas no resbale; a 800 m, un
+  salto de 48 m mueve una silueta 43 píxeles. Y las arboledas se resiembran
+  cada 12 m andados, no en cada `pintaMundo`, que corre en cada `pointermove`
+  de un arrastre.
 
 ### Si se mete otro kit
 

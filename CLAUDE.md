@@ -14,10 +14,13 @@ En `README.md`, sección **Hoja de ruta**:
 
 - **Lo que dejó apuntado la auditoría visual** — primera auditoría.
 - **Lo que queda de la segunda auditoría visual** — la última (sept. 2026), por
-  orden de impacto: el horizonte vacío (lo más caro y lo que más daría), el
-  rizado del agua que moirea, el naranja del kit, el contraste de las losas del
-  `camino`, y la carga diferida de los modelos. Incluye una hipótesis
-  **descartada** — apuntada para que nadie la "arregle" otra vez.
+  orden de impacto: el rizado del agua que moirea, el naranja del kit, el
+  contraste de las losas del `camino`, y la carga diferida de los modelos.
+  Incluye una hipótesis **descartada** — apuntada para que nadie la "arregle"
+  otra vez.
+- **El horizonte, ya con relieve** — el primer punto de esa auditoría, hecho:
+  qué se metió, por qué cada número, lo que cuesta y las dos cosas que hay que
+  saber antes de tocarlo.
 - **Si se mete otro kit** — lo aprendido metiendo el City Kit Roads.
 - **Cabos sueltos**.
 
@@ -25,7 +28,7 @@ En `README.md`, sección **Hoja de ruta**:
 
 ```bash
 npm run dev          # la app
-npm run vistas       # banco visual: captura las 7 vistas y compara
+npm run vistas       # banco visual: captura las 9 vistas y compara
 npm run medidas      # qué mide cada pieza de verdad (altura vs. avatar 1,8 m)
 npm run miniaturas   # regenera public/miniaturas/*.png con el MOTOR
 npm run prueba       # integración: dos jugadores de verdad en dos pestañas
@@ -51,6 +54,14 @@ npm run prueba       # integración: dos jugadores de verdad en dos pestañas
   valiendo y significa 4.
 - **El reloj del mundo se congela con `?t=12`** para capturar. Si tocas algo que
   dependa del tiempo, el banco lo verá.
+- **Solo tres vistas del banco enseñan el horizonte** (`horizonte`,
+  `a-ras-de-suelo` y `a-escala`): hace falta `pol` ≥ 65,4° para que el cielo
+  entre en cuadro. Si tocas la corona del horizonte y las otras seis se mueven,
+  has tocado otra cosa.
+- **Lo lejano NO lleva la niebla del mundo.** `scene.fog` satura a 325 m, así
+  que cualquier cosa a más de 300 m con la niebla de serie sale del color
+  exacto del cielo. La corona del horizonte y sus arboledas van con `fog:
+  false` y su propia calima (`calimaLejos` en `GLSL_HORIZONTE`).
 
 ## Desplegar
 
