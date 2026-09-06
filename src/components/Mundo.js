@@ -54,7 +54,7 @@ const ANCHO_PASEO = 15; // la losa del paseo es una banda, no la parcela entera
 // era una pradera lisa con casas sueltas. Rejilla fija del mundo, decidida por
 // hash: no ocupa un byte en el servidor y sale igual en todas las pantallas.
 const CELDA_CAMPO = 18;
-const RADIO_CAMPO = 190;
+const RADIO_CAMPO = 250;
 // Lo que crece solo. Nada de casas ni de mobiliario: esto es monte.
 const SIEMBRA = ['arbol', 'arbol', 'roble', 'pino', 'arbusto', 'arbusto', 'roca', 'rocas', 'tronco', 'flores', 'flores-amarillas', 'flores-moradas', 'setas'];
 
@@ -124,6 +124,118 @@ vec2 dAltura(vec2 p) {
   float dz = (altura(p + vec2(0.0, e)) - altura(p - vec2(0.0, e))) / (2.0 * e);
   return vec2(dx, dz);
 }`;
+
+// --- el horizonte: relieve y arboledas lejanos, más allá de la niebla ---
+// El mundo se acababa en una banda verde plana y RECTA contra el cielo. La
+// culpa no es de que falte suelo —hay 768 m— sino de la perspectiva: con la
+// cámara casi horizontal, TODO el suelo de 100 a 300 m (que es donde la
+// niebla hace su trabajo) cabe en dieciocho píxeles de alto, y de 310 m en
+// adelante ya está clavado en el color de la calima. El degradado de
+// distancia no se ve, y lo que queda es el canto de un disco.
+// Lo único que ocupa pantalla a lo lejos es lo que tiene ALTURA: una loma de
+// 58 m a 800 m levanta 52 píxeles sobre el horizonte; una arboleda de 20 m a
+// 500 m, 29. Y no vale subir ONDAS —media parcela de desnivel es el techo
+// para que una casa no flote, y encima la niebla ya se lo habría comido—, así
+// que esto es OTRA cosa: una corona de terreno aparte, que sigue al avatar,
+// con su propia altura (larga y de decenas de metros, no de dos) que vale
+// CERO donde se anda y solo se levanta más allá del plano de suelo, sus
+// arboledas encima, y su propia perspectiva aérea, porque la niebla del mundo
+// lo borraría todo.
+const HOR_R0 = 200; // radio interior de la corona: bien DENTRO del plano de suelo
+const HOR_R1 = 1500; // radio exterior
+// De HOR_SUBE0 a HOR_SUBE1 el relieve se levanta. HOR_SUBE0 cae FUERA del
+// plano de suelo, que es un cuadrado de 768 m con la esquina a 543 m del
+// centro: hasta ahí la corona va calcada al suelo y no hay dos siluetas que
+// casar. Y como la subida es un degradado largo, una loma a la que se anda no
+// se desinfla de golpe: se encoge, y al encogerse la calima se la come sola
+// (la calima va por altura), así que se disuelve en vez de hundirse.
+const HOR_SUBE0 = 560;
+const HOR_SUBE1 = 1000;
+const HOR_ALTO = 58; // seis árboles: una loma, no una sierra
+// Las ondas del relieve lejano: de 220 a 1.500 m de largo, o sea la escala
+// del PAISAJE y no la de una parcela. La más corta es la que importa: para
+// que la silueta ondule cuatro o cinco veces de lado a lado del encuadre
+// hacen falta accidentes cada 8-12°, que a 800 m son 110-170 m de arco.
+const HOR_ONDAS = [
+  [1.0, 0.0041, 0.0026, 0.4],
+  [0.72, 0.0017, -0.0049, 2.2],
+  [0.55, 0.0088, 0.0071, 4.1],
+  [0.36, 0.0163, -0.0134, 1.1],
+  [0.2, 0.0281, 0.0247, 3.3],
+];
+// Solo lo que pasa del umbral levanta. Sin el corte, el horizonte entero
+// ondula como una sábana tendida y se lee como un PATRÓN; con él queda llano
+// entre loma y loma, y una loma se cuenta porque a los lados no hay nada. El
+// suavizado de después le redondea la cima y le ensancha el pie.
+const HOR_UMBRAL = 0.1;
+const HOR_DIV = 2.6;
+const suaveP = (t) => {
+  t = Math.max(0, Math.min(1, t));
+  return t * t * (3 - 2 * t);
+};
+function relieveLejanoEn(x, y) {
+  let s = 0;
+  for (const [a, kx, ky, f] of HOR_ONDAS) s += a * Math.sin(x * kx + y * ky + f);
+  return suaveP((s - HOR_UMBRAL) / HOR_DIV) * HOR_ALTO;
+}
+const subeLejos = (r) => suaveP((r - HOR_SUBE0) / (HOR_SUBE1 - HOR_SUBE0));
+// La misma función en GLSL, para el vertex shader de la corona. Aquí se
+// GENERA de `HOR_ONDAS` en vez de escribirse a mano como `GLSL_ALTURA`: las
+// arboledas se plantan desde JS y tienen que caer exactamente sobre la loma
+// que dibuja el shader, así que las dos no pueden separarse ni un metro.
+const GLSL_HORIZONTE = `
+float relieveLejano(vec2 p) {
+  float y = -p.y;
+  float s = ${HOR_ONDAS.map(([a, kx, ky, f], i) => `${i ? '        + ' : ''}${a.toFixed(2)} * sin(p.x * ${kx.toFixed(4)} + y * ${ky.toFixed(4)} + ${f.toFixed(2)})`).join('\n')};
+  float h = clamp((s - ${HOR_UMBRAL.toFixed(2)}) / ${HOR_DIV.toFixed(2)}, 0.0, 1.0);
+  return h * h * (3.0 - 2.0 * h) * ${HOR_ALTO.toFixed(1)};
+}
+float subeLejos(float r) { return smoothstep(${HOR_SUBE0.toFixed(1)}, ${HOR_SUBE1.toFixed(1)}, r); }
+// La calima del horizonte: ni la niebla del mundo —que satura a 325 m y
+// dejaría una loma de 800 m del color EXACTO del cielo, o sea invisible— ni
+// un valor fijo. Dos cosas a la vez:
+//   · con la DISTANCIA se acerca al cielo sin llegar nunca, y es lo que hace
+//     que se lean tres o cuatro planos, cada uno más pálido que el de delante
+//   · con la ALTURA sobre el llano se despeja, porque la calima está TUMBADA
+//     en el suelo: el pie de la loma se disuelve y la cresta asoma
+// Lo segundo además es lo que casa la corona con el borde del plano de suelo
+// sin dejar una raya: a ras de llano esto vale calima pura, que es el mismo
+// color al que satura la niebla del mundo (NIEBLA y CIELO_CALIMA coinciden).
+float calimaLejos(float d, float sobre) {
+  return mix(1.0, mix(0.62, 0.92, smoothstep(450.0, 1500.0, d)), smoothstep(1.5, 24.0, sobre));
+}
+// Y el color al que se disuelve NO es la calima a secas: es el CIELO que hay
+// justo detrás, con su degradado. Con un color fijo, una arboleda de 30 m a
+// 450 m llega a 41 px sobre el horizonte, donde el cielo ya casi no tiene
+// calima y es azul: la silueta salía MÁS CLARA que el fondo y se leía como
+// una hilera de agujas de hielo. Es el mismo degradado de la cúpula (sin
+// nubes ni velo, que ahí abajo pesan poco), así que lo lejano se funde con lo
+// que tiene detrás en vez de contra un promedio.
+vec3 cieloDetras(vec3 dir, vec3 cCenit, vec3 cHorizonte, vec3 cCalima) {
+  float t = clamp((dir.y + 0.2) / 0.55, 0.0, 1.0);
+  t = t < 0.5 ? 2.0 * t * t : -1.0 + (4.0 - 2.0 * t) * t;
+  return mix(mix(cHorizonte, cCenit, t), cCalima, clamp((dir.y - 0.06) / -0.1, 0.0, 1.0));
+}`;
+// El color de lo lejano SIN calima. Casi nunca se ve puro —la perspectiva
+// aérea se queda con el 62 % en el plano más cercano y con el 92 % en el más
+// lejano—, pero es lo que decide de qué color tira la silueta: un verde
+// apagado, que es lo que hace el aire de por medio.
+const HOR_MONTE = 0x7ba077;
+const HOR_MONTE_SOL = 0x9fbb87;
+// Las arboledas del fondo. Son LO QUE MÁS ROMPE la raya: una masa de 20 m a
+// 500 m mide 29 px de alto, más que la loma que tiene detrás, y además se
+// apoya justo en la línea del horizonte. Sembradas por hash en una rejilla
+// fija del mundo, como el campo, así que no cuestan un byte en el servidor y
+// salen iguales en todas las pantallas.
+const HOR_ARB_R0 = 380;
+const HOR_ARB_R1 = 1150; // más lejos la calima ya no deja nada que ver
+const HOR_ARB_CELDA = 46;
+// El tope tiene que sobrar, no ajustar: la siembra recorre la rejilla de
+// oeste a este, así que un tope que se alcance no reparte menos arboledas
+// —deja SIN ARBOLEDAS todo el lado este del horizonte—. Con la densidad de
+// abajo salen de 620 a 751 según dónde esté uno; 820 deja margen.
+const HOR_ARB_MAX = 820;
+
 const uTiempo = { value: 0 };
 const uNubes = { value: null }; // textura de sombras de nubes (se crea en el efecto)
 const uAvatar = { value: new THREE.Vector3() }; // dónde está el avatar: la hierba se aparta
@@ -1198,23 +1310,16 @@ export default function Mundo() {
           float tC = texture2D(tNubes, vec2(u * 0.45 + 0.37, vC * 0.8 + 0.2)).r;
           float cirro = smoothstep(0.30, 0.75, tC) * smoothstep(0.0, 0.25, vC) * smoothstep(1.0, 0.75, vC) * 0.30;
           color = mix(color, mix(cNubeSombra, cNubes, 0.85), cirro);
-          // La silueta del horizonte. Entre el suelo, que se desvanece en la
-          // niebla, y la banda de cúmulos no había NADA: dos capas de lectura
-          // y un hueco en medio. Esto son dos crestas pintadas en la cúpula
-          // con armónicos ENTEROS sobre el acimut, que es lo que hace que
-          // cierren sin costura en el meridiano.
-          // Es una LÍNEA DE ARBOLADO, no una cordillera: en un mundo llano de
-          // colinas de ±3 m por el que se puede andar, una sierra alpina sería
-          // un telón de fondo ajeno. Muy desaturada, y la calima que viene
-          // justo después le come la base, que es lo que la manda al fondo.
-          float ang = d.y > -0.2 ? atan(d.z, d.x) : 0.0;
-          float g = fwidth(d.y) * 1.4 + 0.0008;
-          // capa lejana: apenas insinuada, más alta
-          float cLejos = 0.045 + 0.014 * sin(ang * 3.0 + 0.7) + 0.007 * sin(ang * 7.0 + 2.1);
-          color = mix(color, vec3(0.72, 0.80, 0.82), smoothstep(cLejos + g, cLejos - g, d.y) * 0.5);
-          // capa cercana: el arbolado, con armónicos altos y poca amplitud
-          float cCerca = 0.025 + 0.008 * sin(ang * 7.0 + 1.3) + 0.005 * sin(ang * 13.0 + 0.4) + 0.003 * sin(ang * 23.0);
-          color = mix(color, vec3(0.66, 0.77, 0.68), smoothstep(cCerca + g, cCerca - g, d.y) * 0.75);
+          // Aquí iban DOS CRESTAS pintadas en la cúpula con armónicos enteros
+          // sobre el acimut, que era lo único que llenaba el hueco entre el
+          // suelo y los cúmulos. Se han quitado: ahora hay relieve y arboledas
+          // de VERDAD ahí (la corona del horizonte), y una raya pintada encima
+          // sale por delante de una loma que está a 800 m, o sea un segundo
+          // horizonte por detrás del primero. Y de todas formas no llegaban:
+          // el armónico 3 tarda 1.505 px en dar una ondulación y el encuadre
+          // mide 1.000, así que en pantalla era literalmente una recta con
+          // ±10 px de deriva. Si un día se quita la corona, están en el
+          // historial.
 
           // El velo del sol. NO un disco: el sol está a 44,1° de altura y el
           // borde de arriba del encuadre no pasa de 17°, así que un disco o
@@ -1235,7 +1340,7 @@ export default function Mundo() {
       depthWrite: false,
       fog: false,
     });
-    const cielo = new THREE.Mesh(new THREE.SphereGeometry(1000, 40, 20), matCielo);
+    const cielo = new THREE.Mesh(new THREE.SphereGeometry(2600, 40, 20), matCielo);
     cielo.frustumCulled = false;
     // Al FINAL de los opacos, no al principio. Con `renderOrder = -1000` la
     // cúpula se pintaba primero y su fragment —un atan2, una textura, media
@@ -1402,6 +1507,197 @@ export default function Mundo() {
     suelo.frustumCulled = false;
     suelo.receiveShadow = true;
     scene.add(suelo);
+
+    // --- el horizonte: la corona de relieve lejano ---
+    // Una corona de anillos, más apretados por dentro (donde una loma ocupa
+    // más pantalla) que por fuera. 384 sectores son 0,94° cada uno: con menos
+    // se le ve el polígono en la cresta, con más son vértices de balde. Todo
+    // en UNA llamada de dibujo, sin sombras y sin niebla del mundo.
+    const geoHorizonte = (() => {
+      const nAng = 384;
+      const nRad = 48;
+      const pos = [];
+      const idx = [];
+      for (let j = 0; j <= nRad; j++) {
+        const r = HOR_R0 + (HOR_R1 - HOR_R0) * Math.pow(j / nRad, 1.5);
+        for (let i = 0; i <= nAng; i++) {
+          const a = (i / nAng) * Math.PI * 2;
+          pos.push(Math.cos(a) * r, 0, Math.sin(a) * r);
+        }
+      }
+      for (let j = 0; j < nRad; j++) {
+        for (let i = 0; i < nAng; i++) {
+          const a = j * (nAng + 1) + i;
+          idx.push(a, a + 1, a + nAng + 1, a + 1, a + nAng + 2, a + nAng + 1);
+        }
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      g.setIndex(idx);
+      return g;
+    })();
+    const matHorizonte = new THREE.ShaderMaterial({
+      uniforms: {
+        cCalima: { value: new THREE.Color(CIELO_CALIMA) },
+        cCenit: { value: new THREE.Color(CIELO_CENIT) },
+        cHorizonte: { value: new THREE.Color(CIELO_HORIZONTE) },
+        cMonte: { value: new THREE.Color(HOR_MONTE) },
+        cMonteSol: { value: new THREE.Color(HOR_MONTE_SOL) },
+        uSol: { value: SOL },
+      },
+      vertexShader:
+        GLSL_ALTURA +
+        GLSL_HORIZONTE +
+        `
+        varying float vRelieve;
+        varying vec3 vNor;
+        varying float vLejos;
+        varying vec3 vDir;
+        void main() {
+          vec4 wpos = modelMatrix * vec4(position, 1.0);
+          float sube = subeLejos(length(position.xz));
+          vRelieve = relieveLejano(wpos.xz) * sube;
+          // La normal por diferencias finitas, con un paso de 60 m: es la
+          // escala de estas lomas. Con un paso corto manda la octava fina y
+          // la luz se vuelve loca de vértice a vértice.
+          float e = 60.0;
+          float dx = (relieveLejano(wpos.xz + vec2(e, 0.0)) - relieveLejano(wpos.xz - vec2(e, 0.0))) * sube / (2.0 * e);
+          float dz = (relieveLejano(wpos.xz + vec2(0.0, e)) - relieveLejano(wpos.xz - vec2(0.0, e))) * sube / (2.0 * e);
+          vNor = normalize(vec3(-dx, 1.0, -dz));
+          // 25 cm por debajo del terreno: la corona y el plano de suelo se
+          // solapan de 200 a 543 m y son EXACTAMENTE la misma altura, así que
+          // sin esto se pelean por el z-buffer en un cuarto de pantalla. Un
+          // escalón de 25 cm a 200 m son 0,07°: ni un píxel, y encima donde
+          // los dos ya son calima pura.
+          vec3 p = vec3(wpos.x, altura(wpos.xz) + vRelieve - 0.25, wpos.z);
+          vLejos = distance(cameraPosition.xz, p.xz);
+          vDir = p - cameraPosition;
+          gl_Position = projectionMatrix * viewMatrix * vec4(p, 1.0);
+        }`,
+      fragmentShader:
+        GLSL_HORIZONTE +
+        `
+        uniform vec3 cCalima;
+        uniform vec3 cCenit;
+        uniform vec3 cHorizonte;
+        uniform vec3 cMonte;
+        uniform vec3 cMonteSol;
+        uniform vec3 uSol;
+        varying float vRelieve;
+        varying vec3 vNor;
+        varying float vLejos;
+        varying vec3 vDir;
+        void main() {
+          // Dos tonos y un corte duro, como la rampa toon del resto del
+          // mundo: la ladera que mira al sol y la que no.
+          vec3 color = mix(cMonte, cMonteSol, step(0.62, dot(normalize(vNor), uSol)));
+          vec3 fondo = cieloDetras(normalize(vDir), cCenit, cHorizonte, cCalima);
+          gl_FragColor = vec4(mix(color, fondo, calimaLejos(vLejos, vRelieve)), 1.0);
+          #include <colorspace_fragment>
+        }`,
+      fog: false,
+    });
+    const horizonte = new THREE.Mesh(geoHorizonte, matHorizonte);
+    horizonte.frustumCulled = false;
+    scene.add(horizonte);
+
+    // --- las arboledas del horizonte ---
+    // Vista a 500 m, una arboleda no es un árbol: es una MASA de 40 m de
+    // ancho y 20 de alto, o sea 57 × 29 px. Por eso no se instancian los
+    // modelos del catálogo —que a esa distancia serían un tronco de mil
+    // triángulos para cuatro píxeles— sino bultos y conos de ciento y pico.
+    // TRES siluetas y no una. Con una sola, el giro y la escala por instancia
+    // no bastan: la conífera asomaba siempre lo mismo por encima de la masa y
+    // el horizonte salía con una empalizada de picas a la misma altura. Son
+    // una masa de fronda sin picos, una con dos coníferas y una de pinar; con
+    // eso ya no se cuenta el sello. Cuestan dos llamadas de dibujo más.
+    // Anchas de base, las coníferas: el primer intento fueron conos de 4 m de
+    // radio y 19 de alto, y a 600 m no se leían como árboles sino como
+    // ANTENAS, agujas clavadas en la arboleda.
+    const geosArboleda = [
+      (() => {
+        const g = nuevaGeo();
+        esfera(g, -9, 6.5, 2, 10.5, VERDE, 0.62, 6);
+        esfera(g, 7.5, 6, -3, 9, VERDE, 0.64, 6);
+        esfera(g, 1, 8.5, 6.5, 7.5, VERDE, 0.72, 6);
+        esfera(g, -3.5, 5.5, -8, 7, VERDE, 0.62, 6);
+        return aGeo(g);
+      })(),
+      (() => {
+        const g = nuevaGeo();
+        esfera(g, -7, 7.5, 2, 9.5, VERDE, 0.7, 6);
+        esfera(g, 6.5, 6.5, -3, 8, VERDE, 0.72, 6);
+        esfera(g, 1, 10, 5.5, 6.5, VERDE, 0.8, 6);
+        prisma(g, 6, 7.5, 0, 17, VERDE, 1.4, 9.5, -5.5);
+        prisma(g, 6, 6, 0, 13, VERDE, 1.2, -9, 7);
+        return aGeo(g);
+      })(),
+      (() => {
+        const g = nuevaGeo();
+        prisma(g, 6, 7.5, 0, 18, VERDE, 1.2, 0, 0);
+        prisma(g, 6, 6.5, 0, 14, VERDE, 1.1, -10, 4);
+        prisma(g, 6, 7, 0, 15.5, VERDE, 1.2, 8, -5);
+        esfera(g, 2, 5, 8, 7, VERDE, 0.65, 6);
+        return aGeo(g);
+      })(),
+    ];
+    const matArboleda = new THREE.ShaderMaterial({
+      uniforms: {
+        cCalima: { value: new THREE.Color(CIELO_CALIMA) },
+        cCenit: { value: new THREE.Color(CIELO_CENIT) },
+        cHorizonte: { value: new THREE.Color(CIELO_HORIZONTE) },
+        cMonte: { value: new THREE.Color(HOR_MONTE) },
+        cMonteSol: { value: new THREE.Color(HOR_MONTE_SOL) },
+        uSol: { value: SOL },
+      },
+      vertexShader:
+        GLSL_HORIZONTE +
+        `
+        varying float vSobre;
+        varying vec3 vNor;
+        varying float vLejos;
+        varying vec3 vDir;
+        void main() {
+          vec4 wpos = modelMatrix * instanceMatrix * vec4(position, 1.0);
+          // La altura sobre SU BASE, que es lo que la calima necesita. Sale
+          // de la escala de la instancia y no de recalcular el terreno: la
+          // arboleda ya se plantó sobre la loma desde JS, y volver a
+          // preguntarle al shader dónde está el suelo la separaría de ella en
+          // cuanto el avatar anda (el ramal de subida va con el avatar).
+          vSobre = position.y * length(instanceMatrix[1].xyz);
+          vNor = normalize(mat3(instanceMatrix) * normal);
+          vLejos = distance(cameraPosition.xz, wpos.xz);
+          vDir = wpos.xyz - cameraPosition;
+          gl_Position = projectionMatrix * viewMatrix * wpos;
+        }`,
+      fragmentShader:
+        GLSL_HORIZONTE +
+        `
+        uniform vec3 cCalima;
+        uniform vec3 cCenit;
+        uniform vec3 cHorizonte;
+        uniform vec3 cMonte;
+        uniform vec3 cMonteSol;
+        uniform vec3 uSol;
+        varying float vSobre;
+        varying vec3 vNor;
+        varying float vLejos;
+        varying vec3 vDir;
+        void main() {
+          vec3 color = mix(cMonte, cMonteSol, step(0.45, dot(normalize(vNor), uSol)));
+          vec3 fondo = cieloDetras(normalize(vDir), cCenit, cHorizonte, cCalima);
+          gl_FragColor = vec4(mix(color, fondo, calimaLejos(vLejos, vSobre)), 1.0);
+          #include <colorspace_fragment>
+        }`,
+      fog: false,
+    });
+    const arboledas = geosArboleda.map((g) => {
+      const m = new THREE.InstancedMesh(g, matArboleda, HOR_ARB_MAX);
+      m.frustumCulled = false;
+      m.count = 0;
+      scene.add(m);
+      return m;
+    });
 
     // --- el agua de los ríos: un plano a NIVEL_AGUA que sigue al avatar ---
     // El terreno se hunde bajo el río (cauce), así que el plano solo se ve
@@ -2166,6 +2462,81 @@ export default function Mundo() {
       }
     }
 
+    // Las arboledas del horizonte, sembradas por hash en una rejilla fija del
+    // mundo igual que el campo, pero mucho más gruesa y mucho más lejos. Va
+    // colgada de `pintaMundo`, con una guardia de distancia.
+    let arboledasEn = null;
+    function siembraHorizonte() {
+      if (MUESTRARIO || MINIATURA) return;
+      // Solo si el avatar se ha movido de verdad. `pintaMundo` corre en CADA
+      // pointermove de un arrastre y esto recorre 2.601 celdas preguntándole
+      // a `tipoParcela` por 700 de ellas: sin la guardia, arrastrar una
+      // pieza pagaría el horizonte entero sesenta veces por segundo. Doce
+      // metros es lo que se puede desfasar el ramal de crecimiento sin que se
+      // note (un 6 % de escala, un píxel a 500 m).
+      if (arboledasEn && Math.hypot(yo.x - arboledasEn.x, yo.y - arboledasEn.y) < 12) return;
+      arboledasEn = { x: yo.x, y: yo.y };
+      const c = HOR_ARB_CELDA;
+      const n = Math.ceil(HOR_ARB_R1 / c);
+      const cx = Math.round(yo.x / c);
+      const cy = Math.round(yo.y / c);
+      const k = [0, 0, 0];
+      let total = 0;
+      for (let i = -n; i <= n && total < HOR_ARB_MAX; i++) {
+        for (let j = -n; j <= n && total < HOR_ARB_MAX; j++) {
+          const gx = cx + i;
+          const gy = cy + j;
+          const wx = (gx + hash2(gx * 5 + 1, gy * 11 + 7) - 0.5) * c;
+          const wy = (gy + hash2(gx * 17 + 3, gy * 23 + 5) - 0.5) * c;
+          const r = Math.hypot(wx - yo.x, wy - yo.y);
+          if (r < HOR_ARB_R0 || r > HOR_ARB_R1) continue;
+          // A bosques y claros, con una onda de kilómetro y medio: sin ella
+          // el horizonte sale orlado de un seto continuo, que es tan falso
+          // como no tener nada.
+          const masa = 0.38 + 0.22 * Math.sin(wx * 0.0043 + 0.7) * Math.sin(wy * 0.0037 - 1.2);
+          if (hash2(gx * 31 + 5, gy * 17 + 11) > masa) continue;
+          if (distRio(wx, wy).d < RIO_ANCHO + 12) continue; // ni en el agua ni en su orilla
+          const p = parcelaDe(wx, wy);
+          const tipo = tipoParcela(p.px, p.py);
+          if (tipo === 'plaza' || tipo === 'paseo') continue; // el paseo se ve venir de lejos
+          // La escala crece con la distancia: una arboleda no aparece de
+          // golpe al entrar en el radio, se encoge hasta desaparecer. Y al
+          // encogerse la calima se la come sola, porque la calima va por
+          // altura: a 380 m mide medio metro y ya es cielo. El campo de
+          // verdad (`siembraCampo`) llega a 250 m, así que entre lo uno y lo
+          // otro solo queda la banda que la niebla borra de todas formas.
+          const crece = suaveP((r - HOR_ARB_R0) / 190);
+          const esc = (0.78 + hash2(gx * 71, gy * 53) * 0.6) * crece;
+          if (esc < 0.06) continue;
+          // Enterradas 2,6 m. La corona dibuja su loma con el radio de AHORA
+          // y la arboleda se plantó con el de la última siembra, así que doce
+          // metros de desfase mueven la loma bajo sus pies hasta 2,4 m: sin
+          // enterrarla, media arboleda quedaría flotando sobre la ladera con
+          // una rendija de cielo debajo. Enterrarla no cuesta nada —el pie de
+          // una arboleda está en calima pura— y flotar se ve.
+          posI.set(wx, alturaEn(wx, wy) + relieveLejanoEn(wx, wy) * subeLejos(r) - 2.6, -wy);
+          rotI.setFromAxisAngle(ejeY, hash2(gx * 13, gy * 41) * Math.PI * 2);
+          // el aplastado por instancia es lo que evita que setecientas copias
+          // de tres bultos se lean como un sello: cambia la SILUETA, no solo
+          // el tamaño
+          escPieza.set(esc, esc * (0.72 + hash2(gx * 97, gy * 37) * 0.62), esc);
+          mtx.compose(posI, rotI, escPieza);
+          // 45 % fronda, 40 % mixta, 15 % pinar: el pinar es el que pone los
+          // picos, y a un 33 % el horizonte volvía a salir de sierra.
+          const hV = hash2(gx * 43 + 7, gy * 89 + 3);
+          const v = hV < 0.45 ? 0 : hV < 0.85 ? 1 : 2;
+          arboledas[v].setMatrixAt(k[v]++, mtx);
+          total++;
+        }
+      }
+      for (let v = 0; v < arboledas.length; v++) {
+        arboledas[v].count = k[v];
+        arboledas[v].instanceMatrix.clearUpdateRanges();
+        arboledas[v].instanceMatrix.addUpdateRange(0, k[v] * 16);
+        arboledas[v].instanceMatrix.needsUpdate = true;
+      }
+    }
+
     // A qué altura se planta una pieza. Muestrear UN punto —el centro— y
     // hundir 12 cm fijos vale para una silla, pero una casa de 10 m en una
     // pendiente apoya el centro y deja la esquina baja flotando: se le ve el
@@ -2325,7 +2696,10 @@ export default function Mundo() {
       // se escriben pero no se dibujan.
       if (MINIATURA) pintaMiniatura(cont);
       else if (MUESTRARIO) pintaMuestrario(cont);
-      else siembraCampo(cont);
+      else {
+        siembraCampo(cont);
+        siembraHorizonte();
+      }
       for (const t in mallas) {
         for (const p of mallas[t].partes) {
           p.mesh.count = cont[t];
@@ -2556,6 +2930,8 @@ export default function Mundo() {
       agua.visible = false;
       hierba.visible = false;
       cielo.visible = false;
+      horizonte.visible = false;
+      for (const a of arboledas) a.visible = false;
       pajaros.visible = false;
       marcos.visible = false;
       plazas.visible = false;
@@ -4462,6 +4838,15 @@ export default function Mundo() {
       suelo.position.z = -Math.round(yo.y / L) * L;
       agua.position.x = suelo.position.x;
       agua.position.z = suelo.position.z;
+      // El horizonte NO va a saltos de parcela como el suelo: va CONTINUO.
+      // El suelo salta 48 m para que la trama de parcelas no resbale, pero a
+      // 800 m un salto de 48 m mueve una silueta 43 píxeles, y lo que aquí
+      // decide la altura de una loma es su distancia al avatar (el ramal
+      // `subeLejos`), así que ese salto se vería como un tirón del paisaje
+      // entero cada vez que se cruza una linde. La corona no lleva textura
+      // repetida, así que no tiene por qué saltar.
+      horizonte.position.x = yo.x;
+      horizonte.position.z = -yo.y;
       plantaHierba();
 
       // nubes: van con el avatar (siempre hay cielo encima) y derivan al este

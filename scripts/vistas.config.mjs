@@ -72,6 +72,15 @@ export const VISTAS = [
     az: 180,
   },
   {
+    id: 'horizonte',
+    desc: 'Campo abierto y la cámara casi horizontal (pol 83), sin nada delante: aquí SOLO se juzga el horizonte. Que el mundo no se acabe en una raya verde recta contra el cielo, que haya relieve y silueta más allá de la niebla, y que se lean varias distancias.',
+    x: -520,
+    y: 120,
+    d: 18,
+    pol: 83,
+    az: 180,
+  },
+  {
     id: 'catalogo',
     desc: 'La hoja de contacto del catálogo: TODAS las piezas a escala real, por categorías, con el avatar al lado. Aquí se ve de un golpe si una pieza está mal escalada o desentona con las demás. El encuadre va con el número de piezas: con la calle son 56 y 8 filas, y con 6 filas se salían por abajo.',
     x: 52,
