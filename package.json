@@ -9,7 +9,10 @@
     "vistas": "node scripts/capturas.mjs",
     "medidas": "node scripts/medidas.mjs",
     "prueba": "node scripts/prueba.mjs",
-    "miniaturas": "node scripts/miniaturas.mjs"
+    "prueba-chat": "node scripts/prueba-chat.mjs",
+    "movil": "node scripts/movil.mjs",
+    "miniaturas": "node scripts/miniaturas.mjs",
+    "atlas": "node scripts/atlas.mjs"
   },
   "dependencies": {
     "next": "14.2.31",

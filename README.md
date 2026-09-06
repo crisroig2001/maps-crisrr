@@ -438,6 +438,18 @@ npm install
 npm run dev
 ```
 
+Y las herramientas, todas con la app servida:
+
+```bash
+npm run vistas        # banco visual: las 10 vistas de escritorio, contra su referencia
+npm run movil         # la misma casa desde un teléfono, de cerca: lo que el banco no ve
+npm run medidas       # lo que mide cada pieza de verdad, en avatares de 1,8 m
+npm run miniaturas    # regenera public/miniaturas/*.png con el motor
+npm run atlas         # le quita el tramado a los atlas de color de Kenney
+npm run prueba        # integración: dos jugadoras en dos pestañas
+npm run prueba-chat   # el chat: texto, fotos y audios, dentro y fuera de un corro
+```
+
 Parámetros de URL para reproducir una vista: `/?x=24&y=12&d=26&pol=58&az=180`
 (posición del avatar en metros, distancia de la cámara, inclinación y rumbo
 en grados). Sin ellos, apareces donde dejaste el avatar o en la plaza.
@@ -748,6 +760,54 @@ en `rio-y-paseo` el tramo lejano ocupa una esquina y un tramado ahí se cuela
 por debajo del umbral. Se añadió DESPUÉS de arreglarlo, no antes: sirve para
 que no vuelva.
 
+### El tramado de las paredes, que era el atlas
+
+Un aviso desde un iPhone: «se ve como un tramado en las paredes de las casas y
+en los árboles». Y era verdad, desde el primer día, solo que hasta que alguien
+no se pone a un palmo de una casa **en un móvil** no se ve.
+
+- **Lo que era.** `public/modelos/Textures/colormap.png`, el atlas del City Kit
+  y el Nature Kit, es un PNG **indexado de 256 colores**, y sus casillas no son
+  colores planos: son degradados verticales. Un degradado no cabe liso en una
+  paleta de 256 entradas, así que quien lo exportó lo guardó **tramado**:
+  píxeles alternos entre dos tonos vecinos, con el patrón desplazado fila a
+  fila, que es lo que dibuja la diagonal. 75 de sus 256 franjas están así; las
+  otras 181 son planas y nunca dieron problema.
+- **Por qué solo de cerca y solo en el móvil.** De lejos los mipmaps promedian
+  el tramado y sale exactamente el color liso que se pretendía —por eso el
+  banco visual no lo veía, y sigue sin verlo: las diez vistas se mueven un
+  0,00 % con el arreglo puesto—. De cerca y a densidad 3, un téxel llega a
+  medir un píxel de pantalla y el tramado se ve tal cual.
+- **Lo que NO era**, que costó descartarlo y por eso queda escrito: no son las
+  sombras (apagadas sigue igual), no es el filtrado del atlas (con
+  `NearestFilter` y sin mipmaps sale idéntico: el tramado está en los téxeles,
+  no en cómo se interpolan), no es la rampa toon ni la luz (sin iluminación
+  ninguna sigue) y no es la compresión de la captura del móvil (la hierba, que
+  es shader puro y no pasa por el atlas, sale perfectamente lisa en esa misma
+  imagen). Con un color plano en vez del atlas, desaparece del todo: estaba en
+  la textura.
+- **El arreglo, `npm run atlas`.** El atlas son **16 franjas verticales de 32
+  px** —medido, no supuesto: el guion detecta los bordes y se planta si un
+  atlas nuevo no tiene esa forma—, cada una un degradado vertical. Dentro de
+  una franja, una fila debería ser de un color; lo que varía es el tramado. Así
+  que cada fila de cada franja se sustituye por su media: el degradado queda
+  igual, el tramado desaparece y **nunca se promedia cruzando un borde**, que
+  es lo que habría teñido una casilla con la de al lado. Solo se toca la fila
+  si su variación es pequeña (12/255): en las 4 filas del atlas que llevan
+  dibujo de verdad no se entra. El cambio máximo sobre el original es de 8/255
+  y el medio, 0,24. Es idempotente, y el atlas de las calles —que es RGBA y no
+  está tramado— se queda como está.
+- **Cómo se juzga, porque el banco no puede.** Las diez vistas son de
+  escritorio a densidad 1: ahí este defecto no existe. Para eso está
+  **`npm run movil`**, que captura la casa de muestra desde el suelo con el
+  encuadre y la densidad de un teléfono y mide lo fino que queda la pared (cada
+  píxel contra la media móvil de nueve de su fila, que quita el degradado
+  legítimo de la niebla y deja solo lo que no debería estar). Con el atlas
+  tramado da **0,18**; con el atlas limpio, **0,0013**, y avisa por encima de
+  0,05. Se comprobó que salta: con el atlas viejo puesto, salta.
+- Y las **miniaturas** lo llevaban también (el tejado del bungaló pasa de 1,06
+  a 0,53 con la misma medida), así que se regeneraron las 56.
+
 ### Si se mete otro kit
 
 Lo aprendido metiendo el City Kit Roads, que es lo que va a doler la próxima vez:
@@ -757,6 +817,11 @@ Lo aprendido metiendo el City Kit Roads, que es lo que va a doler la próxima ve
   distintas, y `cargaModelo` comparte material por la RUTA de la imagen justo
   por eso. Con el nombre a secas, el segundo kit se pinta con el atlas del
   primero.
+- **Y `npm run atlas` nada más meterlo**, antes de mirar nada: si su
+  `colormap.png` es indexado, viene tramado y eso solo se ve de cerca en un
+  móvil (la sección de arriba cuenta la historia entera). El guion lo dice y lo
+  arregla, o avisa si el atlas no va a franjas de 32 y entonces hay que
+  mirarlo a mano.
 - **La escala del City Kit es ~7,7 m por unidad**, que es a lo que están sus
   casas. Una baldosa de 1×1 unidad son 7,7 m de calzada; se redondeó a 8 porque
   divide la parcela justo (48 / 8 = 6).

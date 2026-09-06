@@ -29,9 +29,12 @@ En `README.md`, sección **Hoja de ruta**:
 ```bash
 npm run dev          # la app
 npm run vistas       # banco visual: captura las 10 vistas y compara
+npm run movil        # la casa de muestra desde un teléfono, de cerca: lo que el banco NO ve
 npm run medidas      # qué mide cada pieza de verdad (altura vs. avatar 1,8 m)
 npm run miniaturas   # regenera public/miniaturas/*.png con el MOTOR
+npm run atlas        # quita el tramado a los atlas de color de Kenney
 npm run prueba       # integración: dos jugadores de verdad en dos pestañas
+npm run prueba-chat  # el chat: texto, fotos y audios, dentro y fuera de un corro
 ```
 
 ## Reglas que cuestan tiempo si no se saben
@@ -48,7 +51,15 @@ npm run prueba       # integración: dos jugadores de verdad en dos pestañas
   rebote), luego `npm run miniaturas` y **commitea el PNG**.
 - **Cada kit con atlas va en su propia carpeta** bajo `public/modelos/`. Todos
   los kits de Kenney llaman a su atlas `Textures/colormap.png` aunque sean
-  imágenes distintas, y `cargaModelo` comparte material por la RUTA.
+  imágenes distintas, y `cargaModelo` comparte material por la RUTA. Y al
+  meterlo, **`npm run atlas`**: si el `colormap.png` es indexado viene TRAMADO,
+  y eso no se ve en el banco —solo de cerca y en un móvil—. El README lo cuenta
+  entero en «El tramado de las paredes, que era el atlas».
+- **El banco visual no lo ve todo.** Sus diez vistas son de escritorio a
+  densidad 1. Un defecto que necesite que un téxel mida un píxel (el tramado
+  del atlas era uno: 0,00 % en el banco y a simple vista en un iPhone) solo
+  sale con **`npm run movil`**, que mide lo fino que queda la pared de la casa
+  de muestra desde el suelo y a densidad 3.
 - **`rejilla` en `src/lib/piezas.js` es el paso EN METROS**, no una bandera: 4
   los caminos y vallas, 8 la calle. Úsalo por `pasoRejilla(t)`. `true` sigue
   valiendo y significa 4.
@@ -134,5 +145,6 @@ dónde se lee lo hablado y la burbuja es quién lo dijo y desde dónde. Va
 anclado a un lado, nunca en el centro —tapaba al avatar y a quien se le
 habla— y esconde el joystick mientras está abierto. Fuera de un corro lo
 hablado vive en el navegador (`charlaCerca`); dentro, el hilo es el del corro
-y lo guarda el servidor mientras dure. Se prueba con `capturas/chat/` si sigue
-ahí, o con `npm run prueba`, que ya toca la caja de escribir.
+y lo guarda el servidor mientras dure. Se prueba con `npm run prueba-chat`
+(texto, fotos y audios de ida y vuelta, y que un adjunto de corro no se sirva
+fuera); `npm run prueba` ya toca además la caja de escribir.
