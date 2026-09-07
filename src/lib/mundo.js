@@ -213,9 +213,13 @@ export function setPiezas(clave, jugador, lista) {
   const d = validaPiezas(lista, PARCELA_M);
   if (!d) return 'bad_piezas';
   // la calle del barrio pasa por la linde de algunos solares: esos 4 m son
-  // calzada y no se construye encima (el visor lo avisa antes de llegar aquí)
+  // calzada y no se construye encima (el visor lo avisa antes de llegar aquí).
+  // Solo lo NUEVO: lo que ya estaba guardado ahí antes de que existiera la
+  // calle (hay parcelas de antes del barrio) sigue valiendo, que si no su
+  // dueño no podría volver a guardar nada
   const [px, py] = clave.split('/').map(Number);
-  if (d.some((z) => enCalle(px * PARCELA_M + z.x, py * PARCELA_M + z.y))) return 'en_calle';
+  const antes = new Set((e.d || []).map((z) => z.t + '@' + z.x + ',' + z.y));
+  if (d.some((z) => !antes.has(z.t + '@' + z.x + ',' + z.y) && enCalle(px * PARCELA_M + z.x, py * PARCELA_M + z.y))) return 'en_calle';
   e.d = d;
   e.t = Date.now(); // el delta por `desde` tiene que traer este cambio
   save();
