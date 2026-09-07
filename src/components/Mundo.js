@@ -2196,7 +2196,17 @@ export default function Mundo() {
         if (!matAtlas) {
           tex.colorSpace = THREE.SRGBColorSpace;
           tex.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
-          matAtlas = conNiebla(new THREE.MeshToonMaterial({ map: tex, gradientMap: rampa }));
+          // Las baldosas de la calle se CIÑEN al terreno en el vertex shader,
+          // como la losa de la plaza y el marco de parcela: cada vértice sube
+          // a la altura del suelo bajo su posición de mundo, así que dos
+          // baldosas vecinas comparten la altura en la linde y la calle sigue
+          // la colina sin escalones. Apoyadas rígidas en el punto alto de su
+          // huella (`asiento`), cada una quedaba a su altura y el canto de
+          // cada tramo asomaba como un peldaño, a ras de calle se veía la
+          // calzada «levantada a trozos». Sin sombras de nube: las miniaturas
+          // se pintan en el 0/0 y salían más oscuras que las demás.
+          const mat = new THREE.MeshToonMaterial({ map: tex, gradientMap: rampa });
+          matAtlas = carpeta === 'calles/' ? conAltura(mat) : conNiebla(mat);
           // Al mapa de sombras solo van las caras que MIRAN AL SOL. Por
           // defecto three hace lo contrario —le da la vuelta al `side`, así
           // que de un material `FrontSide` dibuja las traseras— y eso mete en
@@ -2554,7 +2564,11 @@ export default function Mundo() {
     function pintaMiniatura(cont) {
       const par = mallas[MINIATURA];
       if (!par) return;
-      posI.set(0, 0, 0);
+      // la calle va ceñida al terreno por el shader (sube cada vértice a la
+      // altura del suelo): aquí no hay suelo, así que se compensa, o la
+      // baldosa sale un metro por encima del encuadre
+      const def = PIEZAS[MINIATURA];
+      posI.set(0, def.cat === 'calle' && def.suelo ? -alturaEn(0, 0) : 0, 0);
       rotI.setFromAxisAngle(ejeY, 0);
       escPieza.set(1, 1, 1);
       mtx.compose(posI, rotI, escPieza);
@@ -2774,6 +2788,7 @@ export default function Mundo() {
     }
 
     const ASIENTO_MIN = 1.5;
+    const CALLE_ALZA = 0.08;
     function asiento(def, wx, wy, escala) {
       const r = (def.solido || 0) * escala;
       // Una losa de SUELO grande —una calzada, un patio— tiene la cara que se
@@ -2790,6 +2805,12 @@ export default function Mundo() {
       // losas SUELTAS de 4 m y que el terreno les entre por una esquina es
       // justo lo que hace que se lean como puestas EN la hierba en vez de
       // encima. Apoyarlas en su punto alto les sacaba el canto.
+      // La calle va ceñida al terreno por el shader (ver `cargaModelo`), así
+      // que aquí solo se le da un dedo de alza: entre dos vértices la baldosa
+      // es plana y el terreno es curvo, y sin él la hierba asomaba por el
+      // medio del asfalto. 8 cm es más que el mayor pandeo de la colina en
+      // 8 m (unos 6).
+      if (def.cat === 'calle' && def.suelo) return CALLE_ALZA;
       if (def.suelo && (def.ancho || 4) >= 8) {
         const m = ((def.ancho || 4) * escala) / 2;
         // Nueve puntos, no cuatro: en una loma el punto más alto de la huella
