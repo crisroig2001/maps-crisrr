@@ -386,8 +386,10 @@ await cid.mouse.up();
 const p1 = await cid.evaluate(() => window.__mundo.pos());
 console.log('joystick móvil: y', p0.y.toFixed(1), '→', p1.y.toFixed(1), p1.y > p0.y + 1 ? 'anda' : 'NO ANDA');
 await cid.screenshot({ path: path.join(OUT, 'm6-movil-joystick.png') });
-// y en obras: la hoja de piezas plegada, y abierta
-await cid.evaluate(() => window.__mundo.mueve(-5 * 48 + 24, -2 * 48 + 12));
+// y en obras: la hoja de piezas plegada, y abierta. El solar es el -5/2: el
+// -5/-2 de antes es ahora una casa de la urbanización (en venta, con
+// «Quedártela» en vez de «Reclamar»)
+await cid.evaluate(() => window.__mundo.mueve(-5 * 48 + 24, 2 * 48 + 12));
 await pulsa(cid, '.acciones .btn-principal:has-text("Reclamar")');
 await pulsa(cid, '.acciones .btn-principal:has-text("Construir")');
 await cid.waitForSelector('.panel.plegado', { state: 'attached', timeout: 15000 });

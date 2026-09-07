@@ -3,7 +3,7 @@
 // rename), sin dependencias nativas. Solo servidor.
 //
 //   parcelas: { "px/py": { o: dueño, t: último cambio, d: [piezas],
-//                          g: [ids a quien les gusta] } }
+//                          g: [ids a quien les gusta], v: 1 si está en venta } }
 //   jugadores: { id: { n: nombre, c: color, p: "px/py" o null, x, y, t } }
 //
 // La presencia (quién está dónde AHORA) va aparte y en memoria: cambia cada
@@ -12,7 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { PARCELA_M, claveParcela } from './parcela';
 import { validaPiezas, limpiaNombre, limpiaMensaje, COLORES, PELOS, PIELES, MAX_NOMBRE, EMOTES, MENSAJE_MS, EMOTE_MS, RE_JUGADOR } from './piezas';
-import { tipoParcela, esPublica, piezasPublicas, RADIO_RESIDENCIAL } from './paisaje';
+import { tipoParcela, esPublica, esReclamable, piezasPublicas, enCalle, RADIO_RESIDENCIAL } from './paisaje';
 import { CORRO_MAX, CORRO_CERCA_M, CORRO_RADIO_M, INVITACION_MS, ACCIONES_CORRO, RE_CORRO, CORRO_LINEAS } from './corro';
 import { limpiaAdjunto, fichaAdjunto, etiquetaAdjunto, ADJUNTO_MS, ADJUNTOS_MAX_BYTES, ADJUNTO_CADA_MS, RE_ADJUNTO_ID } from './adjuntos';
 
@@ -50,7 +50,7 @@ let cache = null;
 // Versión de la semilla. Al cambiar el número, las parcelas del «mundo» (la
 // plaza y la casa de muestra) se reescriben en el arranque: la semilla solo
 // se creaba la primera vez y producción se quedaba con la muestra vieja.
-const SEMILLA = 4;
+const SEMILLA = 6; // 5: la urbanización; 6: más grande, con piscinas y en venta
 
 // Lo público de serie: la plaza, los paseos, los parques y la casa de
 // muestra, con dueño «mundo» (nadie las reclama ni las cambia). Sale del
@@ -63,7 +63,9 @@ function seed() {
     for (let py = -RADIO_RESIDENCIAL; py <= RADIO_RESIDENCIAL; py++) {
       const tipo = tipoParcela(px, py);
       if (!esPublica(tipo)) continue;
-      parcelas[claveParcela(px, py)] = { o: 'mundo', t, d: piezasPublicas(px, py) };
+      const e = { o: 'mundo', t, d: piezasPublicas(px, py) };
+      if (tipo === 'barrio') e.v = 1; // las casas hechas nacen en venta
+      parcelas[claveParcela(px, py)] = e;
     }
   }
   return { semilla: SEMILLA, parcelas, jugadores: {} };
@@ -128,6 +130,7 @@ export function getParcelas(caja, desde, jugador) {
       if (px < caja.px0 || px > caja.px1 || py < caja.py0 || py > caja.py1) continue;
     }
     const p = { k, o: e.o, t: e.t, d: e.d || [] };
+    if (e.v) p.v = 1;
     if (e.o && e.o !== 'mundo') {
       p.n = m.jugadores[e.o]?.n || 'Alguien';
       if (e.g?.length) p.g = e.g.length;
@@ -149,15 +152,19 @@ export function totalParcelas() {
   return Object.keys(load().parcelas).length;
 }
 
-// Reclama una parcela libre. Reglas: no puede ser de nadie, y el jugador no
-// puede tener ya su cupo. Devuelve null si va bien o el motivo.
+// Reclama una parcela: un solar libre, o una casa EN VENTA, que se queda con
+// todo lo construido (las del barrio nacen así; la de cualquiera, si su dueño
+// la pone en venta). Reglas: no puede ser de nadie, salvo en venta, y el
+// jugador no puede tener ya su cupo. Devuelve null si va bien o el motivo.
 export function reclama(clave, jugador, nombre) {
   if (BLOQUEADOS.has(jugador)) return 'bloqueado';
   const m = load();
   const [px, py] = clave.split('/').map(Number);
   // solo en la zona residencial: ni en el paseo, ni en el río, ni en el campo
-  if (tipoParcela(px, py) !== 'residencial') return 'no_residencial';
-  if (m.parcelas[clave]) return 'ocupada';
+  if (!esReclamable(tipoParcela(px, py))) return 'no_residencial';
+  const antes = m.parcelas[clave];
+  if (antes?.o && !antes.v) return 'ocupada';
+  if (antes?.o === jugador) return 'propia';
   const j = m.jugadores[jugador] || (m.jugadores[jugador] = { t: Date.now() });
   // el nombre viene con la petición: la presencia lo persiste cada 20 s, y
   // hasta entonces el cartel de una casa recién reclamada diría «Alguien»
@@ -165,9 +172,33 @@ export function reclama(clave, jugador, nombre) {
   if (n) j.n = n.slice(0, MAX_NOMBRE);
   const suyas = Object.keys(m.parcelas).filter((k) => m.parcelas[k].o === jugador).length;
   if (suyas >= MAX_PARCELAS_POR_JUGADOR) return 'cupo';
-  m.parcelas[clave] = { o: jugador, t: Date.now(), d: [] };
+  if (antes?.o) {
+    // una casa en venta cambia de manos con lo que tiene dentro; el que la
+    // vendía se queda sin parcela (y puede reclamar otra) y los me gusta
+    // eran de la casa de otro, así que empiezan de cero
+    const vendedor = m.jugadores[antes.o];
+    if (vendedor && vendedor.p === clave) vendedor.p = null;
+    m.parcelas[clave] = { o: jugador, t: Date.now(), d: antes.d || [] };
+  } else m.parcelas[clave] = { o: jugador, t: Date.now(), d: [] };
   j.p = clave;
   j.t = Date.now();
+  save();
+  return null;
+}
+
+// Pone (o quita) la parcela en venta. Solo el dueño, y nunca las del mundo:
+// las casas del barrio ya nacen en venta. En venta, cualquiera se la queda
+// con todo lo construido; hasta entonces sigue siendo suya y puede seguir
+// construyendo. No hay dinero por medio: es «que se la quede quien quiera».
+export function vende(clave, jugador, v) {
+  if (BLOQUEADOS.has(jugador)) return 'bloqueado';
+  const m = load();
+  const e = m.parcelas[clave];
+  if (!e || !e.o) return 'sin_reclamar';
+  if (e.o !== jugador) return 'ajena';
+  if (v) e.v = 1;
+  else delete e.v;
+  e.t = Date.now();
   save();
   return null;
 }
@@ -181,6 +212,14 @@ export function setPiezas(clave, jugador, lista) {
   if (e.o !== jugador) return 'ajena';
   const d = validaPiezas(lista, PARCELA_M);
   if (!d) return 'bad_piezas';
+  // la calle del barrio pasa por la linde de algunos solares: esos 4 m son
+  // calzada y no se construye encima (el visor lo avisa antes de llegar aquí).
+  // Solo lo NUEVO: lo que ya estaba guardado ahí antes de que existiera la
+  // calle (hay parcelas de antes del barrio) sigue valiendo, que si no su
+  // dueño no podría volver a guardar nada
+  const [px, py] = clave.split('/').map(Number);
+  const antes = new Set((e.d || []).map((z) => z.t + '@' + z.x + ',' + z.y));
+  if (d.some((z) => !antes.has(z.t + '@' + z.x + ',' + z.y) && enCalle(px * PARCELA_M + z.x, py * PARCELA_M + z.y))) return 'en_calle';
   e.d = d;
   e.t = Date.now(); // el delta por `desde` tiene que traer este cambio
   save();

@@ -25,6 +25,11 @@ En `README.md`, sección **Hoja de ruta**:
   paredes NO se arregla con más resolución (con más sale peor) y qué se probó
   antes de dar con la línea que lo cierra.
 - **Si se mete otro kit** — lo aprendido metiendo el City Kit Roads.
+- **La urbanización de serie** — hecha: un barrio con calles por las LINDES
+  de las parcelas, doce casas hechas EN VENTA (se reclaman con todo dentro),
+  piscinas, zona común y solares libres. Las calles no se guardan: salen del
+  plano y el visor las pinta encima de lo que haya. Y cualquier dueño puede
+  poner su parcela en venta (`v: 1`, `accion: 'venta'`).
 - **Cabos sueltos**.
 
 ## Comandos
@@ -96,6 +101,14 @@ npm run prueba-chat  # el chat: texto, fotos y audios, dentro y fuera de un corr
   metros es donde se cierran las fugas de luz: más resolución sale PEOR. Y al
   mapa de sombras van solo las caras que miran al sol (`shadowSide`), que es
   lo que quita el rayado de las paredes en sombra: pide piezas cerradas.
+- **Las calles del barrio no están en ninguna parcela.** Salen de
+  `piezasCalle` en `src/lib/paisaje.js` y el visor las pinta recorriendo
+  `CAJA_CALLES`, no el mapa de parcelas (un solar vacío no está en el mapa
+  y la calle pasa igual). Los 4 m de calzada que caen en un solar no se
+  construyen (`enCalle`, en el visor y en el servidor). Qué baldosa va en
+  cada sitio lo decide lo que tiene alrededor, y los giros salieron de la
+  GEOMETRÍA de los modelos, no de capturas: la recta va de este a oeste con
+  r = 0, y un cuarto de vuelta es antihorario desde arriba.
 - **Lo lejano NO lleva la niebla del mundo.** `scene.fog` satura a 325 m, así
   que cualquier cosa a más de 300 m con la niebla de serie sale del color
   exacto del cielo. La corona del horizonte y sus arboledas van con `fog:
@@ -143,7 +156,7 @@ después de conmutar el tráfico. Manda lo que sirve la web.
 
 ## Estado
 
-56 piezas en 5 pestañas (casas, naturaleza, jardín, suelo, calle). 42 modelos
+57 piezas en 5 pestañas (casas, naturaleza, jardín, suelo, calle). 42 modelos
 glTF de Kenney (CC0), 1,3 MB, **todos cargados al arrancar** — cuando el
 catálogo crezca otra vez, toca cargar por pestaña.
 
