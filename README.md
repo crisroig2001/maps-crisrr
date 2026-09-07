@@ -1107,6 +1107,63 @@ calle; las calles no llegan a la plaza —la principal cruza el paseo, que es de
 losas, con un paso de cebra, y eso es a propósito: la plaza y los paseos son
 peatonales—; y vender no cobra nada, porque no hay nada con que pagar.
 
+### Los dos lados, y la puerta que se toca
+
+Dos avisos seguidos: «el chat de encima los usuarios salen todos seguidos, que
+salgas tú siempre a un lado» y «cuando alguien quiere entrar, que toque el
+chat o el círculo o alguna de las personas, y que le dé entrada el que lo ha
+iniciado». Los dos eran de lo mismo: el corro se leía y se abría PEOR de lo
+que se veía.
+
+- **El carrete, en dos lados** (`meteLinea` en `Mundo.js`). Cada línea lleva
+  ahora `.mia` si es tuya, y la CSS la manda a la derecha con el mismo azul y
+  la misma esquina que `.msg.mio` en el chat de abajo: es la misma
+  conversación en dos sitios y tiene que decir lo mismo. Lo de los demás se
+  queda a la izquierda, en gris, y el nombre sigue saliendo solo cuando cambia
+  quien habla; **en lo tuyo ya no sale nunca**, que el lado lo dice y ahí el
+  sitio es oro. El texto NO se alinea a la derecha —el panel tampoco—: el lado
+  dice de quién es, no cómo se lee.
+- **Y la cuenta cae en su lado.** La frase sigue volando de la cabeza al
+  carrete, pero el destino se corre media anchura menos 26 px hacia el lado en
+  el que va a salir su burbuja. Si cayera siempre en el centro, el vuelo y la
+  burbuja contarían cosas distintas.
+- **Ancho mínimo de 168 px en el carrete**, que antes no hacía falta: con dos
+  lados, un «vale» a la derecha y un «ok» a la izquierda en un globo de 60 px
+  no se distinguen de una columna.
+- **La puerta se toca, y son tres.** Un corro se ve desde fuera por el círculo
+  del suelo, el globo de puntos y la gente de dentro; ahora se llama tocando
+  cualquiera de las tres y de las tres sale la misma ficha (`fichaDeCorro`),
+  con «✋ Llamar a la puerta» o «👋 Unirte» si está abierto. Antes solo valía
+  acertarle a una persona, que a 30 m ocupa cuatro píxeles.
+  - El **globo mudo** lleva su `click`, y `pointer-events` solo cuando está
+    hablando (`.hablando`): mientras no se ve, no puede haber ahí un botón
+    invisible.
+  - El **círculo** se prueba en `corroBajo`, con doce puntos del aro medidos
+    en PANTALLA: proyectado es una elipse, y un dedo mide bastante más que la
+    raya. Solo la raya —a 30 px— llama a la puerta; **lo de dentro sigue
+    siendo suelo**, que si no, cruzar por delante de un corro sería imposible.
+    Y se prueba DESPUÉS de la gente: a quien tocas es a quien querías tocar.
+- **Quien abre se entera mejor.** La tarjeta del anfitrión (`.aviso.llama-puerta`)
+  late y la mano toca; y **tocando a quien llama** también se le deja entrar,
+  sin buscar la tarjeta de arriba (`ficha.llama`, que solo se sabe en la
+  pantalla del anfitrión: el servidor manda `llaman` solo a él).
+- **Y quien llama, también.** Llamar era mandar algo al vacío: el aviso pasaba
+  y no quedaba nada en pantalla. Ahora queda una tira (`.aviso.esperando`) que
+  se cae sola a los `INVITACION_MS` —lo que la llamada dura en el servidor— y
+  se va en cuanto entras o el corro se deshace. La constante se importa en el
+  cliente para que las dos caducidades sean la misma.
+- **El carrete se cuelga por debajo de las tarjetas.** El tope de arriba era
+  124 px a ojo —la barra del corro sola—, y con la tarjeta de la puerta la
+  zona crece y el carrete se metía debajo. Ahora se mide la zona de verdad
+  (`zonaRef`), que es lo que hay encima.
+- **Nada de esto toca el servidor**: `llama` y `admite` ya estaban en
+  `accionCorro`. Lo que faltaba era por dónde se tocan.
+- **La prueba** (`npm run prueba`) lo hace como un dedo: `window.__mundo.aroCorro(k)`
+  devuelve un punto de la raya en pantalla —el que queda más lejos de
+  cualquier cabeza, que a la gente se la toca antes—, y desde ahí se hace
+  clic de verdad, sale la ficha, se llama, le sale la tarjeta al anfitrión y
+  se comprueba que el carrete pone lo suyo a la derecha.
+
 ### Cabos sueltos
 
 - **El coste del horizonte no está medido en hardware real.** Lo único medido

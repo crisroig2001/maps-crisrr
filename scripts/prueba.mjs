@@ -2,7 +2,8 @@
 // servida en npm run dev): presentación, andar, ver al
 // otro, hablar y que el otro lo lea, hacer CORRO (tocar a alguien, pedirle
 // hablar, que acepte, que lo que se digan no lo lea quien pase y que un
-// tercero tenga que llamar a la puerta), silenciar y reportar, reclamar una
+// tercero tenga que llamar a la puerta TOCANDO EL CÍRCULO, y que el carrete
+// ponga lo tuyo a la derecha), silenciar y reportar, reclamar una
 // parcela, construir, que el otro lo vea, y que pueda saber de quién es y
 // darle a me gusta.
 import { chromium } from 'playwright';
@@ -40,6 +41,14 @@ async function abre(nombre, color, q = '') {
 const pulsa = async (pg, sel) => {
   await pg.waitForSelector(sel, { state: 'attached', timeout: 20000 });
   await pg.$eval(sel, (b) => b.click());
+};
+// El botón que ponga tal cosa, buscándolo por DOM. `:has-text()` de Playwright
+// se apoya en su motor de texto, que mira estilos nodo a nodo, y con tres
+// avatares, el corro y el chat abierto en render por software se queda sin
+// hueco: esto es un `textContent`.
+const pulsaTexto = async (pg, sel, txt) => {
+  await pg.waitForFunction(([s, t]) => [...document.querySelectorAll(s)].some((b) => b.textContent.includes(t)), [sel, txt], { timeout: 20000, polling: 300 });
+  await pg.$$eval(sel, (bs, t) => bs.find((b) => b.textContent.includes(t))?.click(), txt);
 };
 
 const ana = await abre('Ana', 1);
@@ -220,10 +229,68 @@ const leeFuera = await bea.$$eval('#rotulos .carrete .linea, #rotulos .rotulo .d
 console.log('Bea, fuera del corro: globo mudo', globo ? 'SÍ lo ve (bien)' : 'NO LO VE', '| texto que lee:', leeFuera.length ? leeFuera : 'ninguno (bien)');
 await bea.screenshot({ path: path.join(OUT, 'm3g-desde-fuera.png') });
 
+// LA PUERTA SE TOCA. Bea, que está fuera, toca el CÍRCULO del corro de Ana:
+// le sale la ficha del corro con el botón de llamar, llama, y a Ana —que fue
+// quien lo empezó— le sale la tarjeta para dejarla entrar. Antes había que
+// acertarle a una persona; ahora vale el círculo, el globo o cualquiera de
+// los de dentro, que son las tres cosas que se ven de un corro desde fuera.
+const kAna = (await ana.evaluate(() => window.__mundo.corro()))?.k;
+// el globo de puntos, primero: es la puerta que se ve desde más lejos
+await bea.$eval('#rotulos .globo-mudo.hablando', (g) => g.click()).catch(() => {});
+await bea.waitForSelector('.ficha .ficha-cab b', { state: 'attached', timeout: 8000 }).catch(() => {});
+console.log('tocando el globo del grupo sale:', (await bea.textContent('.ficha .ficha-cab b').catch(() => null)) || 'NADA');
+await pulsa(bea, '.ficha .ficha-cab .cerrar');
+const punto = await bea.evaluate((k) => window.__mundo.aroCorro(k), kAna);
+console.log('el aro del corro, en la pantalla de Bea:', punto ? punto.sx + ',' + punto.sy : 'FUERA DE CUADRO');
+if (punto) {
+  const bajo = await bea.evaluate(([x, y]) => window.__mundo.puertaBajo(x, y), [punto.sx, punto.sy]);
+  console.log('tocando ahí se llama:', bajo === kAna ? 'al corro de Ana (bien)' : 'a NINGUNO');
+  await bea.mouse.click(punto.sx, punto.sy);
+  await bea.waitForSelector('.ficha .ficha-cab b', { state: 'attached', timeout: 10000 }).catch(() => {});
+  console.log('a Bea le sale la ficha:', (await bea.textContent('.ficha .ficha-cab b').catch(() => null)) || 'NINGUNA');
+  await pulsa(bea, '.ficha .btn-principal.ancho');
+  await bea.evaluate(() => window.__mundo.sondea());
+  await bea.waitForSelector('.corro-zona .aviso.esperando', { state: 'attached', timeout: 12000 }).catch(() => {});
+  console.log('mientras espera, Bea lee:', (await bea.textContent('.corro-zona .aviso.esperando').catch(() => null))?.trim() || 'NADA');
+  await ana.evaluate(() => window.__mundo.sondea());
+  await ana.waitForSelector('.corro-zona .aviso.llama-puerta', { state: 'attached', timeout: 12000 }).catch(() => {});
+  console.log('a Ana (anfitriona) le sale:', (await ana.textContent('.corro-zona .aviso.llama-puerta').catch(() => null))?.trim() || 'NADA');
+  await ana.screenshot({ path: path.join(OUT, 'm3h-llaman-a-la-puerta.png') });
+  await pulsa(ana, '.corro-zona .aviso.llama-puerta .btn-principal');
+  await bea.waitForTimeout(1200);
+  await bea.evaluate(() => window.__mundo.sondea());
+  await bea.waitForTimeout(600);
+  const beaDentro = await bea.evaluate(() => window.__mundo.corro());
+  console.log('tras dejarla entrar, Bea:', beaDentro ? 'dentro con ' + beaDentro.m.join(', ') + ' (bien)' : 'SIGUE FUERA');
+  // y los dos lados del carrete: lo suyo a la derecha, lo de los demás a la
+  // izquierda, que es lo que dice quién habla sin tener que leer
+  await bea.$eval('.chat .decir input[type=text]', (i) => (i.value = 'ya estoy dentro otra vez'));
+  await pulsa(bea, '.chat .decir button[type=submit]');
+  await bea.evaluate(() => window.__mundo.sondea());
+  await bea.waitForTimeout(900);
+  await bea.evaluate(() => window.__mundo.sondea());
+  const lados = await bea.$$eval('#rotulos .carrete .linea', (els) => els.map((e) => (e.classList.contains('mia') ? 'derecha' : 'izquierda') + ': ' + e.textContent));
+  console.log('el carrete de Bea, por lados:', lados.length ? lados : 'VACÍO');
+  await bea.screenshot({ path: path.join(OUT, 'm3i-carrete-dos-lados.png') });
+  // y se vuelve a salir, para dejar el corro como estaba (Ana y Cid). La
+  // barra puede tardar en volver: la captura de arriba se lleva sus segundos
+  // y en ese rato Bea no sondea.
+  await bea.evaluate(() => window.__mundo.sondea());
+  const hayBarra = await bea.waitForSelector('.corro-cab', { state: 'attached', timeout: 15000 }).then(() => true).catch(() => false);
+  console.log('Bea, antes de salir:', (await bea.evaluate(() => window.__mundo.corro())) ? 'en el corro' : 'YA FUERA', '| barra:', hayBarra ? 'sí' : 'NO');
+  await pulsaTexto(bea, '.corro-cab .btn-sec', 'Salir');
+  await bea.waitForTimeout(1500);
+}
+
 // y se deshace: el tercero se va lejos (si se queda al lado, es él quien sale
-// en la hoja de vecinos del paso siguiente) y Ana sale del suyo
+// en la hoja de vecinos del paso siguiente) y Ana sale del suyo. Al irse Cid,
+// Ana se queda sola y el corro SE DESHACE SOLO —un corro de uno no es un
+// corro—, así que puede que ya no quede barra que pulsar: se mira antes, que
+// si no esto es una carrera con el sondeo de Ana.
 await sondeaCid({ corro: { a: 'sale' } }, [900000, 900000]);
-await pulsa(ana, '.corro-cab .btn-sec:has-text("Salir")');
+await ana.evaluate(() => window.__mundo.sondea());
+await ana.waitForTimeout(600);
+if (await ana.evaluate(() => !!window.__mundo.corro())) await pulsaTexto(ana, '.corro-cab .btn-sec', 'Salir');
 await ana.waitForTimeout(2500);
 await bea.evaluate(() => window.__mundo.sondea());
 await bea.waitForTimeout(1500);
