@@ -166,21 +166,26 @@ servidor solo guarda qué hay en cada parcela y quién anda cerca.
   y el de dos se le apaga. Con **ratón**, arrastrar gira y cambia el ángulo y
   la rueda acerca. El mapa nunca se aleja más de 120 m del avatar y vuelve a
   centrarlo en cuanto se anda: se puede mirar alrededor sin perderse.
-- **Hablar**: con el botón 💬 se abre el **chat**, un panel como el de
-  cualquier mensajería: la conversación en burbujas —lo de los demás a la
-  izquierda con su nombre y su color, lo tuyo a la derecha—, la hora de cada
-  mensaje, y abajo la caja de escribir con los **gestos** (👋 😄 ❤️ 🎉 🙏 😮),
-  una **foto** 📷 y un **audio** 🎤 que se graba manteniendo pulsado. Lo que
-  dices sale ADEMÁS en una **burbuja sobre tu cabeza** y lo lee quien esté
-  cerca: el chat es dónde se lee lo hablado, la burbuja es quién lo ha dicho y
-  desde dónde, y las dos cosas hacen falta —un chat sin burbujas es una sala
-  de chat con un mundo de fondo, y una burbuja sin chat se lleva lo dicho a
-  los nueve segundos—. El panel va **anclado a un lado** (a la izquierda en
-  escritorio, a lo ancho en el móvil) y no en el centro: abierto es grande, y
-  en medio tapaba justo lo que se está mirando, que es el avatar y la persona
-  a la que se le habla. Con el chat abierto se esconde el joystick: se está
-  escribiendo, no andando. Un gesto no es solo un emoji que sube: **mueve el
-  cuerpo**, que es lo que hace que dos personas en el mismo sitio se noten.
+- **Hablar**: la conversación **vive en el mundo, sobre las cabezas**. Cada
+  persona lleva encima sus **tres últimas líneas** —la nueva abajo, nítida y
+  con el pico; las de antes suben y se apagan— y duran **un minuto**: se lee
+  lo hablado mirando a la gente, lo tuyo en azul. Mientras alguien teclea, le
+  salen **tres puntos** sobre la cabeza, y los ven todos. Y cuando dos o más
+  se hablan (algo dicho en el último minuto, a menos de diez metros), un
+  **aro punteado en el suelo** los une y encima pone «💬 N hablando», que se
+  lee desde lejos y sigue un minuto después de la última frase: dos que se
+  hablan ya no se confunden con dos que se han cruzado. Con el botón 💬 se
+  abre la **tira de escribir**: la caja, los **gestos** (👋 😄 ❤️ 🎉 🙏 😮),
+  una **foto** 📷 y un **audio** 🎤 que se graba manteniendo pulsado; y un
+  🗨️ con el número de líneas que abre el **historial** de lo hablado desde
+  que entraste, en una hoja que no tapa más de un tercio de la pantalla
+  (fotos grandes, la hora, lo de hace un rato). Antes el chat era un panel de
+  mensajería que en el móvil tapaba dos tercios de la pantalla —a la persona
+  con la que hablabas, la primera— y la burbuja duraba nueve segundos: había
+  que elegir entre ver el mundo y leer la conversación. Con la tira abierta se
+  esconde el joystick: se está escribiendo, no andando. Un gesto no es solo un
+  emoji que sube: **mueve el cuerpo**, que es lo que hace que dos personas en
+  el mismo sitio se noten.
   Saludar levanta un brazo y lo agita, la risa y la fiesta levantan los dos y
   dan un brinco, y el resto lleva los brazos al frente; qué hace cada uno lo
   dice el propio catálogo (`cuerpo` en `EMOTES`). Viaja
@@ -575,9 +580,10 @@ se baje otro.
    **corro**: tocar a alguien para hablar solo con él, un círculo en el suelo
    que enseña quién habla con quién, una puerta que abre quien lo empezó, y el
    hilo con lo hablado volando hasta un carrete sobre el grupo
-3. ✅ El **chat**: un panel de mensajería de verdad (burbujas a un lado y a
-   otro, la hora, y fotos y audios) sobre lo que ya había, sin ruta ni almacén
-   nuevos y sin que nada se guarde
+3. ✅ El **chat**: fotos y audios sobre lo que ya había, sin ruta ni almacén
+   nuevos y sin que nada se guarde; y la conversación **sobre las cabezas**,
+   en el mundo, con el panel reducido a una tira de escribir y un historial
+   que se abre a mano (más abajo, «El chat, sobre las cabezas»)
 4. **Cuentas de usuario** ← lo siguiente. Hoy el id es del dispositivo y se
    puede falsificar, y de ahí cuelga todo lo demás: la propiedad de una parcela
    es «quien tenga ese localStorage», bloquear a alguien cuesta lo que vaciarlo
@@ -917,6 +923,56 @@ CC0 y CC-BY: hay que mirar modelo a modelo y atribuir los CC-BY).
 MegaKit, Modular Streets— pero **ya no es CC0**: su licencia no permite
 redistribuir los assets como assets, y este repo es público y sirve los `.glb`
 sueltos, así que es zona gris.
+
+### El chat, sobre las cabezas
+
+Un aviso desde el móvil, con captura: «lo del chat que aparece como WhatsApp
+tiene que salir en 3D, encima de las personas; si no quita la visibilidad, y
+los demás que no están no saben si estamos hablando». Las dos cosas eran
+verdad: el panel tapaba dos tercios de la pantalla del móvil —a la persona con
+la que hablabas, la primera— y a los nueve segundos de la última frase dos
+personas juntas no se distinguían de dos que se habían cruzado.
+
+- **El hilo sobre la cabeza** (`pintaNombres` en `Mundo.js`): cada rótulo
+  lleva un `.hilo` con hasta tres `.dice`, las últimas líneas de esa
+  persona en `charlaCerca` con menos de `HILO_MS` (un minuto). No viaja nada
+  nuevo: `charlaCerca` ya era lo hablado que este cliente puede leer. Se saca
+  UNA vez por fotograma de las 80 líneas y no por avatar, y el DOM solo se toca
+  cuando cambia la firma de lo que se enseña. Lo mío, en azul; dentro de un
+  corro, nada sobre la cabeza —lo mío vuela al carrete y lo de los demás
+  también—, y de un corro ajeno tampoco: eso lo dice el globo mudo del grupo.
+- **Que no se salga de la pantalla.** El nombre se queda en la cabeza y el
+  hilo se corre lo justo hacia dentro (`translateX` sobre `.hilo`); el ancho
+  se mide solo cuando cambia el contenido, que `offsetWidth` fuerza un
+  reflujo. `sitúa` guarda la x de pantalla en el nodo para eso. Vacío, el
+  hilo va `hidden`: si no, el hueco del `gap` subía el nombre cinco píxeles
+  y movía el banco.
+- **«Está escribiendo»**: el cliente manda `w: 1` en el sondeo mientras se
+  teclea (`escribe()` desde el `onChange` de la caja, que adelanta el sondeo
+  la primera vez), el servidor lo mantiene `ESCRIBE_MS` (4,5 s) y a los demás
+  les llega `w` fuera de un corro. Sobre la cabeza salen tres puntos con el
+  pico, como los del globo mudo, y la última línea pierde el suyo.
+- **Las charlas** (`colocaCharlas`): quienes han dicho algo en el último
+  minuto (`ultimoDicho`, que apunta `apuntaCerca`) y están a menos de
+  `CHARLA_M` (10 m) unos de otros, a grupos por unión de a dos, y para cada
+  grupo de dos o más un aro PUNTEADO en el suelo (`aroPunteado`: el del corro
+  es continuo, y aquí no hay puerta ni nada cerrado) y un `.charla-globo`
+  encima con «💬 N hablando», colocado con `sitúa` a 120 m. Quien está en un
+  corro o silenciado no cuenta. Sale de lo hablado cerca, así que se ve un
+  minuto después de la última frase, y no viaja nada.
+- **El panel pasa a ser una tira.** `chatOpen` abre solo la cabecera, los
+  gestos y la caja; el `.chat-hilo` de antes va detrás de `historial`, una
+  hoja de como mucho `--chat-alto` (un tercio) que abre el 🗨️ con el número
+  de líneas y se queda como la dejó cada uno. El carrete del corro se esconde
+  solo con el historial abierto, no con la tira. En el móvil el aviso sube 150
+  px, lo que mide la tira.
+- **`MENSAJE_MS` pasa de 9 s a 60**: es lo que la última frase de alguien
+  sigue disponible para quien sondee después, así que quien llega a media
+  conversación lee al menos la última línea de cada uno. La burbuja ya no
+  cuelga de ese número en el visor.
+- **Las pruebas** (`npm run prueba` y `npm run prueba-chat`) abren el
+  historial a mano donde antes bastaba con abrir el chat, y la del corro lo
+  abre solo si Bea no lo tenía ya abierto.
 
 ### La urbanización de serie
 

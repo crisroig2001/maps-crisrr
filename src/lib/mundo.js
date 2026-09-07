@@ -11,7 +11,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { PARCELA_M, claveParcela } from './parcela';
-import { validaPiezas, limpiaNombre, limpiaMensaje, COLORES, PELOS, PIELES, MAX_NOMBRE, EMOTES, MENSAJE_MS, EMOTE_MS, RE_JUGADOR } from './piezas';
+import { validaPiezas, limpiaNombre, limpiaMensaje, COLORES, PELOS, PIELES, MAX_NOMBRE, EMOTES, MENSAJE_MS, EMOTE_MS, ESCRIBE_MS, RE_JUGADOR } from './piezas';
 import { tipoParcela, esPublica, esReclamable, piezasPublicas, enCalle, RADIO_RESIDENCIAL } from './paisaje';
 import { CORRO_MAX, CORRO_CERCA_M, CORRO_RADIO_M, INVITACION_MS, ACCIONES_CORRO, RE_CORRO, CORRO_LINEAS } from './corro';
 import { limpiaAdjunto, fichaAdjunto, etiquetaAdjunto, ADJUNTO_MS, ADJUNTOS_MAX_BYTES, ADJUNTO_CADA_MS, RE_ADJUNTO_ID } from './adjuntos';
@@ -638,6 +638,11 @@ export function presencia(id, datos) {
     mio.mt = antes.mt;
     if (antes.ma) mio.ma = antes.ma;
   }
+  // «está escribiendo»: el cliente lo manda en cada sondeo mientras teclea;
+  // si un sondeo no lo trae, lo de antes sigue valiendo un poco (ESCRIBE_MS),
+  // que el sondeo va cada segundo y medio y los puntos no tienen que parpadear
+  if (datos.w) mio.w = now;
+  else if (antes?.w && now - antes.w < ESCRIBE_MS) mio.w = antes.w;
   if (gesto) {
     mio.e = gesto;
     mio.et = now;
@@ -710,6 +715,9 @@ export function presencia(id, datos) {
       d.e = v.e;
       d.et = v.et;
     }
+    // escribiendo, solo fuera de un corro: dentro, lo que se escribe va al
+    // carrete y a los de fuera no les toca saberlo
+    if (!suK && v.w && now - v.w < ESCRIBE_MS) d.w = 1;
     cerca.push(d);
   }
 

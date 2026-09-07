@@ -195,7 +195,11 @@ export const MAX_NOMBRE = 18;
 // nota. NO se guarda en disco: vive en la memoria del servidor los segundos
 // que dura la burbuja y desaparece.
 export const MAX_MENSAJE = 80;
-export const MENSAJE_MS = 9000; // lo que dura una burbuja
+// Lo que la última frase de alguien sigue disponible para quien sondee
+// después: un minuto, que es lo que dura el hilo sobre la cabeza. Quien llega
+// a media conversación lee al menos la última línea de cada uno.
+export const MENSAJE_MS = 60_000;
+export const ESCRIBE_MS = 4500; // lo que «está escribiendo» sigue valiendo sin otro sondeo que lo renueve
 export const EMOTE_MS = 3000; // lo que un gesto sigue disponible para quien sondee después
 
 // Los gestos son una lista cerrada: el cliente manda la CLAVE, no el emoji,

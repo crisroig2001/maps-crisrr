@@ -16,7 +16,7 @@ import { MapControls } from 'three/examples/jsm/controls/MapControls.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { PARCELA_M, parcelaDe, claveParcela, parseParcela, centroParcela } from '../lib/parcela';
-import { PIEZAS, CATEGORIAS, COLORES, PELOS, PIELES, MAX_PIEZAS, MAX_NOMBRE, MAX_MENSAJE, MENSAJE_MS, EMOTES, limpiaMensaje, pasoRejilla } from '../lib/piezas';
+import { PIEZAS, CATEGORIAS, COLORES, PELOS, PIELES, MAX_PIEZAS, MAX_NOMBRE, MAX_MENSAJE, EMOTES, limpiaMensaje, pasoRejilla } from '../lib/piezas';
 import { ADJUNTO_MAX, AUDIO_MAX_S, FOTO_LADO, etiquetaAdjunto, duracion } from '../lib/adjuntos';
 import { perfil, guardaPerfil, gustaVisto, guardaGustaVisto, silenciados, silencia, quitaSilencio } from '../lib/jugador';
 import { CORRO_MAX, CORRO_CERCA_M, CORRO_AVISO_M, CORRO_LINEAS_VISTA } from '../lib/corro';
@@ -1125,6 +1125,10 @@ export default function Mundo() {
   const [sinGL, setSinGL] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
+  // Lo hablado ya se lee en el mundo, sobre las cabezas: el chat abierto es
+  // solo la TIRA de escribir (gestos, foto, audio). El historial de antes es
+  // una hoja aparte, que se abre a mano y no tapa más de un tercio.
+  const [historial, setHistorial] = useState(false);
   // --- el chat ---
   // Lo que se ha dicho CERCA desde que entraste: lo que dice quien pasa y lo
   // que dices tú, apuntado en este navegador y nada más (el servidor no lo
@@ -1177,11 +1181,11 @@ export default function Mundo() {
     return () => clearInterval(t);
   }, [panelVecinos]);
 
-  // El chat abierto se lo dice al motor: mientras se lee aquí, el carrete
-  // sobre el corro se esconde, que serían las mismas líneas dos veces.
+  // El historial abierto se lo dice al motor: mientras se lee aquí, el
+  // carrete sobre el corro se esconde, que serían las mismas líneas dos veces.
   useEffect(() => {
-    engineRef.current?.chatAbierto(chatOpen);
-  }, [chatOpen]);
+    engineRef.current?.chatAbierto(chatOpen && historial);
+  }, [chatOpen, historial]);
 
   // el contador de la grabación, mientras dura
   useEffect(() => {
@@ -3791,6 +3795,111 @@ export default function Mundo() {
       }
     }
 
+    // --- las charlas: quién habla con quién, a la vista de todos ---
+    // Fuera de un corro, dos que se hablaban no se distinguían de dos que se
+    // han cruzado en cuanto se apagaba la burbuja. Ahora, quienes han dicho
+    // algo en el último minuto y están a menos de CHARLA_M unos de otros
+    // llevan un aro PUNTEADO en el suelo (el del corro es continuo: aquí no
+    // hay puerta ni nada cerrado, solo gente hablando) y un «N hablando»
+    // encima, que se lee desde lejos. Es solo del visor: sale de lo hablado
+    // cerca, que ya llega a todos los que lo pueden leer, así que no viaja
+    // nada nuevo, y sigue un minuto después de la última frase.
+    const CHARLA_M = 10;
+    function aroPunteado(r0, r1, n) {
+      const pos = [];
+      const paso = (Math.PI * 2) / n;
+      for (let i = 0; i < n; i++) {
+        const a0 = i * paso;
+        const a1 = a0 + paso * 0.55;
+        const k = 3;
+        for (let j = 0; j < k; j++) {
+          const b0 = a0 + ((a1 - a0) * j) / k;
+          const b1 = a0 + ((a1 - a0) * (j + 1)) / k;
+          const p = (r, t) => [Math.cos(t) * r, Math.sin(t) * r, 0];
+          pos.push(...p(r0, b0), ...p(r1, b0), ...p(r1, b1), ...p(r0, b0), ...p(r1, b1), ...p(r0, b1));
+        }
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      g.computeVertexNormals();
+      g.rotateX(-Math.PI / 2);
+      return g;
+    }
+    const geoAroCharla = aroPunteado(0.9, 1, 28);
+    const matAroCharla = matCorro(0x2f6fed, 0.55);
+    const charlasVista = new Map(); // firma (ids) → {aro, globo, n}
+    function colocaCharlas() {
+      const desde = Date.now() - HILO_MS;
+      const gente = [];
+      if (!corroMio && (ultimoDicho.get(jugador.id) || 0) >= desde) gente.push({ id: jugador.id, x: yo.x, y: yo.y });
+      for (const [id, o] of otros) {
+        if (o.corro || callados.has(id) || (ultimoDicho.get(id) || 0) < desde) continue;
+        gente.push({ id, x: o.o.x, y: o.o.y });
+      }
+      // a grupos por cercanía, de dos en dos: son cuatro personas, no mil
+      const padre = gente.map((_, i) => i);
+      const raiz = (i) => (padre[i] === i ? i : (padre[i] = raiz(padre[i])));
+      for (let i = 0; i < gente.length; i++) {
+        for (let j = i + 1; j < gente.length; j++) {
+          if (Math.hypot(gente[i].x - gente[j].x, gente[i].y - gente[j].y) <= CHARLA_M) padre[raiz(i)] = raiz(j);
+        }
+      }
+      const grupos = new Map();
+      for (let i = 0; i < gente.length; i++) {
+        const r = raiz(i);
+        (grupos.get(r) || grupos.set(r, []).get(r)).push(gente[i]);
+      }
+      const quedan = new Set();
+      for (const g of grupos.values()) {
+        if (g.length < 2) continue;
+        const firma = g.map((p) => p.id).sort().join(',');
+        quedan.add(firma);
+        let v = charlasVista.get(firma);
+        if (!v) {
+          const aro = new THREE.Mesh(geoAroCharla, matAroCharla);
+          aro.position.y = 0.1;
+          aro.renderOrder = 2;
+          scene.add(aro);
+          const globo = document.createElement('div');
+          globo.className = 'charla-globo';
+          rotulosRef.current?.appendChild(globo);
+          v = { aro, globo, n: 0 };
+          charlasVista.set(firma, v);
+        }
+        let cx = 0;
+        let cy = 0;
+        for (const p of g) {
+          cx += p.x;
+          cy += p.y;
+        }
+        cx /= g.length;
+        cy /= g.length;
+        let r = 2.2;
+        for (const p of g) r = Math.max(r, Math.hypot(p.x - cx, p.y - cy) + 1.5);
+        v.aro.position.x = cx;
+        v.aro.position.z = -cy;
+        v.aro.scale.set(r, 1, r);
+        if (v.n !== g.length) {
+          v.globo.textContent = '💬 ' + g.length + ' hablando';
+          v.n = g.length;
+        }
+        // en el borde del aro que mira a la cámara y a ras de suelo: en el
+        // centro y en alto se pisaba con las burbujas de los que hablan
+        const dx = camera.position.x - cx;
+        const dy = -camera.position.z - cy;
+        const L = Math.hypot(dx, dy) || 1;
+        const gx = cx + (dx / L) * r;
+        const gy = cy + (dy / L) * r;
+        sitúa(v.globo, gx, gy, alturaEn(gx, gy), 0.3, 120);
+      }
+      for (const [firma, v] of charlasVista) {
+        if (quedan.has(firma)) continue;
+        scene.remove(v.aro);
+        v.globo.remove();
+        charlasVista.delete(firma);
+      }
+    }
+
     // Lo que llega del sondeo sobre el corro. El servidor manda el ESTADO
     // (quién está dentro, quién espera en la puerta), no los sucesos: los
     // avisos salen de compararlo con lo que había, que es lo que aguanta un
@@ -3913,8 +4022,11 @@ export default function Mundo() {
         return null;
       }
       el.style.display = '';
-      el.style.transform =
-        'translate3d(' + Math.round((pv.x * 0.5 + 0.5) * vpW) + 'px,' + Math.round((-pv.y * 0.5 + 0.5) * vpH) + 'px,0) translate(-50%,-100%)';
+      const sx = Math.round((pv.x * 0.5 + 0.5) * vpW);
+      const sy = Math.round((-pv.y * 0.5 + 0.5) * vpH);
+      el._sx = sx; // el hilo sobre la cabeza los necesita para no salirse ni pisarse
+      el._sy = sy;
+      el.style.transform = 'translate3d(' + sx + 'px,' + sy + 'px,0) translate(-50%,-100%)';
       return dist;
     }
     // Un gesto: el emoji sube y se desvanece (eso lo hace el CSS) mientras el
@@ -4013,76 +4125,169 @@ export default function Mundo() {
       }
     }
 
+    // El HILO sobre la cabeza: las últimas HILO_LINEAS líneas de cada uno de
+    // lo hablado cerca, mientras tengan menos de HILO_MS. Antes era UNA
+    // burbuja de nueve segundos y, para leer la conversación, un panel que en
+    // el móvil tapaba dos tercios de la pantalla —a la persona con la que
+    // hablabas, la primera—. Ahora la conversación se lee mirando a la gente:
+    // lo nuevo abajo y nítido, lo de antes subiendo y apagándose. Sale de
+    // `charlaCerca`, que ya es lo hablado que este cliente puede leer, así
+    // que no viaja nada nuevo. Se saca UNA vez por fotograma (80 líneas como
+    // mucho), no por avatar.
+    const HILO_LINEAS = 3;
+    const HILO_MS = 60_000;
+    function hilosDeAhora() {
+      const m = new Map();
+      const desde = Date.now() - HILO_MS;
+      for (let i = charlaCerca.length - 1; i >= 0; i--) {
+        const l = charlaCerca[i];
+        if (l.ts < desde) continue;
+        const h = m.get(l.q) || m.set(l.q, []).get(l.q);
+        if (h.length < HILO_LINEAS) h.unshift(l);
+      }
+      return m;
+    }
+
     function pintaNombres() {
       const cont = rotulosRef.current;
       if (!cont) return;
-      const pinta = (id, nombre, dice, x, y, h, propio, foto) => {
+      // lineas: de más vieja a más nueva; escribe: los tres puntos de «está
+      // escribiendo», que van al final del hilo con el pico
+      const pinta = (id, nombre, lineas, x, y, h, propio, escribe) => {
         let el = nodos.get(id);
         if (!el) {
           el = document.createElement('div');
           el.className = 'rotulo' + (propio ? ' yo' : '');
           const b = document.createElement('b');
-          const sp = document.createElement('span');
-          sp.className = 'dice';
-          el.append(sp, b);
-          // los dos hijos quedan a mano: esto se pinta en CADA fotograma y no
-          // hay que rebuscarlos en el DOM
+          const hilo = document.createElement('span');
+          hilo.className = 'hilo';
+          const dices = [];
+          for (let i = 0; i < HILO_LINEAS; i++) {
+            const sp = document.createElement('span');
+            sp.className = 'dice';
+            sp.hidden = true;
+            hilo.appendChild(sp);
+            dices.push(sp);
+          }
+          const puntos = document.createElement('span');
+          puntos.className = 'puntos';
+          puntos.hidden = true;
+          for (let i = 0; i < 3; i++) puntos.appendChild(document.createElement('i'));
+          hilo.appendChild(puntos);
+          el.append(hilo, b);
+          // todo queda a mano: esto se pinta en CADA fotograma y no hay que
+          // rebuscar en el DOM
           el._b = b;
-          el._sp = sp;
+          el._hilo = hilo;
+          el._dices = dices;
+          el._puntos = puntos;
           cont.appendChild(el);
           nodos.set(id, el);
         }
-        const b = el._b;
-        const sp = el._sp;
-        if (b.textContent !== nombre) b.textContent = nombre;
-        // textContent, nunca innerHTML: lo que escribe otra persona entra
-        // como TEXTO y no como marcado
-        if (sp._txt !== dice || sp._foto !== foto) {
-          sp.textContent = dice || '';
-          sp.hidden = !dice;
-          sp._txt = dice;
-          sp._foto = foto;
-          // una foto se enseña en la burbuja, en pequeño: en el mundo se ve
-          // QUÉ ha enseñado, y en el chat se abre a pantalla
-          if (foto) {
-            if (dice === '📷 Foto') sp.textContent = '';
-            const img = document.createElement('img');
-            img.alt = 'Foto';
-            img.draggable = false;
-            img.src = foto;
-            sp.appendChild(img);
+        if (el._b.textContent !== nombre) el._b.textContent = nombre;
+        // una firma de lo que se enseña: el DOM solo se toca cuando cambia
+        const n = lineas ? lineas.length : 0;
+        let firma = escribe ? 'w' : '';
+        for (let i = 0; i < n; i++) {
+          const l = lineas[i];
+          firma += l.ts + (l.a ? (adjuntosTengo.has(l.a.id) ? 'F' : 'f') : '') + '|';
+        }
+        if (el._firma !== firma) {
+          el._firma = firma;
+          for (let j = 0; j < HILO_LINEAS; j++) {
+            const sp = el._dices[j];
+            const k = j - (HILO_LINEAS - n); // las líneas van pegadas abajo
+            const l = k >= 0 ? lineas[k] : null;
+            sp.hidden = !l;
+            if (!l) continue;
+            // textContent, nunca innerHTML: lo que escribe otra persona entra
+            // como TEXTO y no como marcado
+            const foto = l.a?.k === 'foto' ? adjuntosTengo.get(l.a.id) || null : null;
+            sp.textContent = foto && l.t === '📷 Foto' ? '' : l.t;
+            // una foto se enseña en la burbuja, en pequeño: en el mundo se ve
+            // QUÉ ha enseñado, y en el chat se abre a pantalla
+            if (foto) {
+              const img = document.createElement('img');
+              img.alt = 'Foto';
+              img.draggable = false;
+              img.src = foto;
+              sp.appendChild(img);
+            }
+            // la última, nítida; las de antes suben y se apagan
+            sp.className = 'dice' + (k === n - 1 ? ' ult' : k === n - 2 ? ' v1' : ' v2');
           }
+          el._puntos.hidden = !escribe;
+          el._hilo.classList.toggle('escribe', !!escribe);
+          // vacío, fuera del flujo: si no, el hueco entre hilo y nombre
+          // subía el nombre cinco píxeles
+          el._hilo.hidden = !(n || escribe);
+          el._hw = 0; // el ancho se vuelve a medir
         }
         const dist = sitúa(el, x, y, h, ALTO_AVATAR + 0.3);
         if (dist === null) return;
         el.style.opacity = dist > 110 ? ((160 - dist) / 50).toFixed(2) : '1';
+        // Que el hilo no se salga por un lado: el nombre se queda en la
+        // cabeza y las burbujas se corren lo justo hacia dentro. El ancho se
+        // mide solo cuando cambia lo que hay, que `offsetWidth` fuerza un
+        // reflujo.
+        el._con = !!(n || escribe);
+        if (el._con && !el._hw) el._hw = el._hilo.offsetWidth;
       };
+      // Dónde acaba cada hilo: dentro de la pantalla y, si dos personas están
+      // juntas (a 30 m dos avatares a tres metros caben en 40 px), uno a cada
+      // lado, que si no las burbujas se pisan y no se lee ninguna.
+      const separaHilos = () => {
+        const con = [];
+        for (const el of nodos.values()) {
+          if (el.style.display === 'none' || !el._con) continue;
+          el._corre = 0;
+          con.push(el);
+        }
+        con.sort((p, q) => p._sx - q._sx);
+        for (let i = 1; i < con.length; i++) {
+          const p = con[i - 1];
+          const q = con[i];
+          if (Math.abs(p._sy - q._sy) > 90) continue;
+          const solape = (p._hw + q._hw) / 2 + 8 - (q._sx + q._corre - (p._sx + p._corre));
+          if (solape > 0) {
+            p._corre -= solape / 2;
+            q._corre += solape / 2;
+          }
+        }
+        for (const el of con) {
+          const w = el._hw;
+          const x = el._sx + el._corre;
+          const corre = Math.min(Math.max(x, w / 2 + 6), vpW - w / 2 - 6) - el._sx;
+          const t = corre ? 'translateX(' + Math.round(corre) + 'px)' : '';
+          if (el._hilo._t !== t) {
+            el._hilo.style.transform = t;
+            el._hilo._t = t;
+          }
+        }
+      };
+      const hilos = hilosDeAhora();
       const yoP = perfil();
-      if (yoP.nombre) {
-        const digo = !corroMio && miDice && Date.now() - miDice.t < MENSAJE_MS;
-        pinta('yo', yoP.nombre, digo ? miDice.txt : null, yo.x, yo.y, yo.h, true, digo && miDice.a?.k === 'foto' ? miDice.a.d : null);
-      }
+      // dentro de un corro lo mío vuela al carrete: sobre la cabeza, nada
+      if (yoP.nombre) pinta('yo', yoP.nombre, corroMio ? null : hilos.get(jugador.id) || null, yo.x, yo.y, yo.h, true, false);
       for (const [id, o] of otros) {
         const callado = callados.has(id);
-        // Tres burbujas distintas: lo que dice (si lo oyes), el «…» de quien
-        // habla en un corro que no es el tuyo —se ve que habla, no lo que
-        // dice, como al pasar al lado de dos que charlan— y el «✋» de quien
-        // llama a la puerta del tuyo, que solo le sale al anfitrión.
+        // Sobre la cabeza va el hilo de lo que dice (si lo oyes) o el «✋» de
+        // quien llama a la puerta de tu corro, que solo le sale al anfitrión.
+        // Dentro de TU corro no hay nada sobre la cabeza: lo que dice vuela
+        // hasta el carrete y se lee allí, con su nombre. De un corro ajeno,
+        // tampoco: eso lo dice el globo mudo del grupo, que es de quien es la
+        // conversación.
         const llama = llamando.has(id);
-        // Dentro de TU corro no hay burbuja sobre la cabeza: lo que dice vuela
-        // hasta el carrete y se lee allí, con su nombre. Fuera del corro, lo
-        // de siempre; y de un corro ajeno, ni el «…» —eso lo dice ahora el
-        // globo mudo del grupo, que es de quien es la conversación.
         const conmigo = !!(corroMio && o.corro === corroMio.k);
-        const dice = callado || conmigo ? null : llama ? '✋ quiere entrar' : o.corro ? null : o.dice;
-        const foto = dice && dice === o.dice && o.diceA?.k === 'foto' ? adjuntosTengo.get(o.diceA.id) || null : null;
-        pinta(id, callado ? 'silenciado' : o.nombre, dice, o.o.x, o.o.y, o.o.h, false, foto);
+        const oigo = !callado && !conmigo && !o.corro;
+        const lineas = llama ? [{ t: '✋ quiere entrar', ts: 1 }] : oigo ? hilos.get(id) || null : null;
+        pinta(id, callado ? 'silenciado' : o.nombre, lineas, o.o.x, o.o.y, o.o.h, false, oigo && !llama && !!o.escribe);
         const el = nodos.get(id);
         if (!el) continue;
         el.classList.toggle('callado', callado);
-        el.classList.toggle('aparte', false);
-        el.classList.toggle('llama', llama && !!dice);
+        el.classList.toggle('llama', llama);
       }
+      separaHilos();
       for (const g of gestos) {
         const o = g.id === 'yo' ? yo : otros.get(g.id)?.o;
         if (!o) {
@@ -4679,6 +4884,11 @@ export default function Mundo() {
     // siguiente ciclo.
     let porDecir = null;
     let porGesticular = null;
+    // «está escribiendo»: mientras se teclea se manda w: 1 en el sondeo y a
+    // los demás les salen tres puntos sobre tu cabeza. Lo ven todos los que
+    // te leerían, que es lo que hace que una conversación se note antes de
+    // que salga la primera frase.
+    let escribiendoDesde = 0;
     // lo del corro (invitar, aceptar, salir…) viaja igual que lo que se dice:
     // montado en el sondeo, que se adelanta, y sin ruta propia. La presencia
     // vive en memoria y en Next cada ruta puede acabar con SU copia del
@@ -4693,7 +4903,9 @@ export default function Mundo() {
     // y la burbuja sobre la cabeza sigue siendo la de siempre.
     const charlaCerca = [];
     const CHARLA_MAX = 80;
+    const ultimoDicho = new Map(); // id → cuándo dijo lo último (para las charlas)
     function apuntaCerca(l) {
+      ultimoDicho.set(l.q, l.ts);
       charlaCerca.push(l);
       if (charlaCerca.length > CHARLA_MAX) charlaCerca.splice(0, charlaCerca.length - CHARLA_MAX);
       setCharla(charlaCerca.slice());
@@ -4742,6 +4954,7 @@ export default function Mundo() {
             y: Math.round(yo.y * 10) / 10,
             r: Math.round(yo.rumbo * 100) / 100,
             m: dicho || undefined,
+            w: escribiendoDesde && Date.now() - escribiendoDesde < 3000 ? 1 : undefined,
             e: gesto || undefined,
             a: adjunto || undefined,
             trae,
@@ -4791,6 +5004,7 @@ export default function Mundo() {
           const callado = callados.has(d.id);
           o.corro = d.k || null;
           o.aparte = !!d.h && !callado; // habla en su corro: se ve que habla, no lo que dice
+          o.escribe = !!d.w;
           // el instante es lo que distingue «lo ha dicho ahora» de «lo mismo
           // por tercer sondeo»: sin él, un gesto se repetiría tres veces
           if ((d.mt || 0) !== o.diceT) {
@@ -4914,6 +5128,7 @@ export default function Mundo() {
         if (o) o.dice = null; // lo que estuviera diciendo se va de la pantalla
         // y lo que dijo ANTES se va del chat: silenciar es dejar de verle, no
         // dejar de verle a partir de ahora
+        ultimoDicho.delete(id);
         const quedan = charlaCerca.filter((l) => l.q !== id);
         if (quedan.length !== charlaCerca.length) {
           charlaCerca.length = 0;
@@ -5139,6 +5354,14 @@ export default function Mundo() {
       chatAbierto(v) {
         chatAbierto = !!v;
       },
+      // se está tecleando: se apunta, y si es el principio se adelanta el
+      // sondeo para que los puntos salgan sobre la cabeza sin esperar
+      escribe() {
+        const ahora = Date.now();
+        const empieza = ahora - escribiendoDesde > 3000;
+        escribiendoDesde = ahora;
+        if (empieza) sacaLoDicho();
+      },
       gesto(clave) {
         if (!EMOTES[clave]) return;
         porGesticular = clave;
@@ -5298,6 +5521,7 @@ export default function Mundo() {
       // se calcula de dónde está cada uno ahora, así que se abre y se cierra
       // solo según se junta o se separa la gente
       colocaCorros(t);
+      colocaCharlas();
       // y se avisa antes de que el servidor te saque: un corro que se rompe
       // sin decir nada parece un fallo, no una consecuencia de haberte ido
       if (corroMio && lejosDelCorro > CORRO_AVISO_M) {
@@ -5445,6 +5669,12 @@ export default function Mundo() {
         }
       }
       geoAro.dispose();
+      geoAroCharla.dispose();
+      matAroCharla.dispose();
+      for (const v of charlasVista.values()) {
+        scene.remove(v.aro);
+        v.globo.remove();
+      }
       geoLuz.dispose();
       geoPie.dispose();
       for (const m of [...Object.values(matAro), ...Object.values(matLuz)]) m.dispose();
@@ -5775,7 +6005,7 @@ export default function Mundo() {
     const el = hiloRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }
-  useEffect(bajaHilo, [chatOpen, lineas.length, adjuntos]);
+  useEffect(bajaHilo, [chatOpen, historial, lineas.length, adjuntos]);
 
   if (sinGL) {
     return (
@@ -6226,7 +6456,7 @@ export default function Mundo() {
       )}
 
       {presentado && !obra && (
-        <div className={'ui chat' + (chatOpen ? ' abierto glass' : '') + (tactil ? ' contactil' : '')}>
+        <div className={'ui chat' + (chatOpen ? ' abierto glass' : '') + (chatOpen && historial ? ' con-historial' : '') + (tactil ? ' contactil' : '')}>
           {chatOpen ? (
             <>
               {/* La cabecera dice con QUIÉN se habla: con quien pase, o con el
@@ -6249,6 +6479,7 @@ export default function Mundo() {
               </div>
               {/* sin aria-live: lo que llega ya lo canta el párrafo de
                   #dichos, y con los dos se leería cada mensaje dos veces */}
+              {historial && (
               <div className="chat-hilo" ref={hiloRef} aria-label={corro ? 'El chat del corro' : 'El chat de cerca'}>
                 {lineas.length === 0 ? (
                   <p className="vacio">
@@ -6282,6 +6513,7 @@ export default function Mundo() {
                   })
                 )}
               </div>
+              )}
               <div className="emotes" role="group" aria-label="Gestos">
                 {Object.entries(EMOTES).map(([k, e]) => (
                   <button key={k} type="button" className="emote" onClick={() => engineRef.current?.gesto(k)} title={e.nombre} aria-label={e.nombre}>
@@ -6294,6 +6526,18 @@ export default function Mundo() {
               </div>
               <form className="decir" onSubmit={onDecir}>
                 <input ref={fotoRef} type="file" accept="image/*" hidden onChange={onFoto} tabIndex={-1} aria-hidden="true" />
+                {/* lo hablado de antes: una hoja que se abre a mano, con
+                    cuántas líneas hay */}
+                <button
+                  type="button"
+                  className={'btn-adj historial' + (historial ? ' on' : '')}
+                  onClick={() => setHistorial((h) => !h)}
+                  aria-pressed={historial}
+                  aria-label={historial ? 'Esconder lo hablado' : 'Ver lo hablado'}
+                  title={historial ? 'Esconder lo hablado' : 'Lo hablado desde que entraste'}
+                >
+                  🗨️{lineas.length > 0 && <span className="n">{Math.min(99, lineas.length)}</span>}
+                </button>
                 {grabando ? (
                   <>
                     <span className="grabando" role="status">
@@ -6316,6 +6560,7 @@ export default function Mundo() {
                       placeholder={corro ? 'Escribe al corro…' : 'Escribe…'}
                       autoComplete="off"
                       aria-label={corro ? 'Lo que dices al corro' : 'Lo que dices'}
+                      onChange={() => engineRef.current?.escribe()}
                       onKeyDown={(e) => {
                         if (e.key === 'Escape') {
                           e.currentTarget.blur();
