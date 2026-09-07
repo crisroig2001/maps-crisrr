@@ -972,6 +972,19 @@ qué así:
   recta que tenga delante (y por eso la casa del −1/−2 va corrida: su vecina
   de enfrente ya tenía la entrada en la baldosa de en medio, y una baldosa no
   tiene entrada a los dos lados).
+- **La calzada se ciñe al terreno en el vertex shader**, como la losa de la
+  plaza y el marco de parcela (`conAltura` sobre el material del atlas de
+  `calles/`, con las sombras de nube), y las baldosas van con 8 cm de alza
+  en vez de asentarse por su huella. Asentadas rígidas en el punto alto de
+  su huella —que es lo que hace toda pieza de suelo de 8 m o más— cada
+  baldosa quedaba a SU altura, dos vecinas no coincidían en la linde y el
+  canto de cada tramo asomaba como un peldaño: a ras de calle la calzada se
+  veía «levantada a trozos». Ceñida, cada vértice sube a la altura del suelo
+  bajo su posición de mundo, así que dos baldosas comparten la altura donde
+  se tocan y la calle sigue la colina de un tirón. Los 8 cm de alza son para
+  el pandeo: entre dos vértices la baldosa es plana y el terreno es curvo, y
+  sin ellos la hierba asomaba por el medio del asfalto (el mayor pandeo de la
+  colina en 8 m son unos 6 cm).
 - **La losa del paseo se recorta media calzada** por el extremo que toca la
   calle. Si no, la piedra —que va 4 cm sobre el terreno— tapaba el asfalto y
   el paso de cebra y solo asomaban los dos bordillos. Y las losas de camino
