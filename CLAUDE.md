@@ -28,6 +28,11 @@ En `README.md`, sección **Hoja de ruta**:
 - **El chat, sobre las cabezas** — hecho: el hilo de tres líneas sobre cada
   persona (un minuto), los puntos de «está escribiendo», el aro punteado con
   «N hablando» y el panel reducido a una tira con el historial aparte.
+- **Los dos lados, y la puerta que se toca** — hecho: en el carrete lo tuyo
+  va a la derecha (como en el chat de abajo) y la cuenta que vuela cae en ese
+  lado; y para entrar en un corro se toca el CÍRCULO, el globo o a cualquiera
+  de dentro, con la misma ficha en los tres casos. Lo de dentro del círculo
+  sigue siendo suelo: solo la raya llama.
 - **La urbanización de serie** — hecha: un barrio con calles por las LINDES
   de las parcelas, doce casas hechas EN VENTA (se reclaman con todo dentro),
   piscinas, zona común y solares libres. Las calles no se guardan: salen del
@@ -165,7 +170,10 @@ catálogo crezca otra vez, toca cargar por pestaña.
 
 El **chat** se lee en el mundo: cada persona lleva sobre la cabeza sus tres
 últimas líneas de `charlaCerca` (un minuto), tres puntos mientras teclea, y
-un grupo que se habla lleva un aro punteado en el suelo con «N hablando». El
+un grupo que se habla lleva un aro punteado en el suelo con «N hablando». En
+el carrete del corro **lo tuyo va a la derecha** y lo de los demás a la
+izquierda, con el azul del chat de abajo. Y a la puerta de un corro se llama
+tocando el círculo, el globo o a cualquiera de dentro; abre quien lo empezó. El
 botón 💬 abre solo la TIRA de escribir (gestos, foto, audio); el historial
 es una hoja aparte (🗨️) de como mucho un tercio de pantalla, y es lo único
 que esconde el carrete del corro. Fuera de un corro lo hablado vive en el

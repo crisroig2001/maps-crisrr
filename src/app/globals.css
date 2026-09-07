@@ -199,6 +199,10 @@ body {
      cuatro seguidas se comían el mundo. Ancho a lo que pida el texto hasta
      el tope, y alto a cuatro líneas; lo que sobra se lee en «Todo». */
   width: max-content;
+  /* MÍNIMO, que antes no hacía falta: con dos lados, «vale» a la derecha y
+     «ok» a la izquierda en un globo de 60 px no se distinguen de una
+     columna. 168 px es lo que hace falta para que los lados se lean. */
+  min-width: 168px;
   max-width: min(300px, 62vw);
   padding: 7px 9px 8px;
   border-radius: 14px;
@@ -240,16 +244,33 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.carrete .lineas { display: grid; gap: 4px; }
+/* DOS LADOS, como en cualquier mensajería: lo tuyo a la derecha y en azul,
+   lo de los demás a la izquierda y en gris. Antes iba todo en una columna
+   seguida y, con el nombre solo cuando cambiaba quien hablaba, había que
+   LEER para saber quién decía qué; el lado se ve sin leer. */
+.carrete .lineas { display: grid; gap: 3px; justify-items: start; }
 .carrete .linea {
+  max-width: 88%;
+  padding: 4px 8px 5px;
+  border-radius: 12px 12px 12px 4px;
+  background: #eef1f6;
   font-size: 12px;
   font-weight: 600;
   line-height: 1.32;
   color: var(--ink);
   overflow-wrap: anywhere;
 }
+/* el mismo azul y la misma esquina que lo tuyo en el chat de abajo: es la
+   misma conversación en dos sitios. El texto NO se alinea a la derecha —el
+   panel tampoco—: lo que dice el lado es de quién es, no cómo se lee. */
+.carrete .linea.mia {
+  justify-self: end;
+  border-radius: 12px 12px 4px 12px;
+  background: #dfe9ff;
+}
 /* el nombre solo cuando cambia quien habla: repetirlo en cada frase de la
-   misma persona es ruido, y aquí el sitio es oro */
+   misma persona es ruido, y aquí el sitio es oro. En lo tuyo no sale nunca:
+   el lado ya dice que es tuyo */
 .carrete .linea b {
   display: block;
   font-size: 10.5px;
@@ -257,10 +278,20 @@ body {
   line-height: 1.2;
   margin-bottom: 1px;
 }
-.carrete .linea.sigue { padding-left: 1px; }
-.carrete .linea.entra { animation: cae-linea 0.32s cubic-bezier(0.2, 0.9, 0.3, 1) both; }
+/* la que va pegada a la anterior pierde el pico: lo lleva la primera de cada
+   quien, que es donde empieza a hablar. Igual que `.msg.sigue` del chat. */
+.carrete .linea.sigue, .carrete .linea.mia.sigue { border-radius: 12px; }
+/* entra por SU lado: lo tuyo desde la derecha, lo de los demás desde la
+   izquierda. Es la misma frase que acaba de llegar volando desde una cabeza:
+   la cuenta cae en el lado que le toca y la burbuja sale de ahí. */
+.carrete .linea.entra { animation: cae-linea 0.34s cubic-bezier(0.2, 0.9, 0.3, 1) both; }
+.carrete .linea.mia.entra { animation-name: cae-linea-mia; }
 @keyframes cae-linea {
-  from { opacity: 0; transform: translateY(7px) scale(0.96); }
+  from { opacity: 0; transform: translate(-12px, 6px) scale(0.94); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes cae-linea-mia {
+  from { opacity: 0; transform: translate(12px, 6px) scale(0.94); }
   to { opacity: 1; transform: none; }
 }
 
@@ -302,8 +333,15 @@ body {
   transform-origin: 50% 100%;
   transition: opacity 0.35s ease;
   will-change: transform;
+  pointer-events: none;
+  cursor: pointer;
 }
-.globo-mudo.hablando { opacity: 1; }
+/* El globo es la PUERTA del corro: tocarlo abre su ficha, con el botón de
+   llamar. Pero mientras nadie habla no se ve, y lo que no se ve no se toca:
+   sin apagarle el puntero quedaría ahí un botón invisible. El círculo del
+   suelo, ese sí llama siempre. */
+.globo-mudo.hablando { opacity: 1; pointer-events: auto; }
+.globo-mudo.hablando:hover { box-shadow: 0 5px 16px rgba(43, 52, 64, 0.3); }
 .globo-mudo::after {
   content: '';
   position: absolute;
@@ -330,7 +368,9 @@ body {
 }
 @media (prefers-reduced-motion: reduce) {
   .globo-mudo i { animation: none; opacity: 0.75; }
-  .carrete .linea.entra { animation: none; }
+  .carrete .linea.entra, .carrete .linea.mia.entra { animation: none; }
+  .aviso .mano, .aviso.llama-puerta { animation: none; }
+  .aviso.llama-puerta { box-shadow: 0 0 0 2px rgba(245, 144, 39, 0.55), 0 6px 20px rgba(43, 52, 64, 0.18); }
 }
 
 /* cartel de parcela: de quién es esa casa y a cuánta gente le gusta, flotando
@@ -675,6 +715,24 @@ body {
 .aviso > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .aviso .btn-principal { padding: 8px 13px; font-size: 12.5px; flex: none; }
 .aviso .btn-sec { padding: 8px 11px; font-size: 12px; flex: none; }
+/* LA PUERTA. La tarjeta de quien llama solo le sale a quien empezó el corro,
+   y es lo único que hay entre alguien y entrar en la conversación: late, y
+   la mano toca. La de quien espera al otro lado lleva la misma mano, sin
+   latido: esperar no es urgente para quien espera. */
+.aviso .mano { flex: none; font-size: 15px; line-height: 1; animation: mano-toca 1.9s ease-in-out infinite; }
+.aviso.llama-puerta { animation: puerta-late 1.9s ease-in-out infinite; }
+.aviso.esperando { color: var(--ink-2); }
+.aviso.esperando .mano { opacity: 0.75; }
+@keyframes puerta-late {
+  0%, 100% { box-shadow: 0 0 0 2px rgba(245, 144, 39, 0.55), 0 6px 20px rgba(43, 52, 64, 0.18); }
+  55% { box-shadow: 0 0 0 7px rgba(245, 144, 39, 0), 0 6px 20px rgba(43, 52, 64, 0.18); }
+}
+@keyframes mano-toca {
+  0%, 62%, 100% { transform: rotate(0); }
+  16% { transform: rotate(-17deg); }
+  32% { transform: rotate(13deg); }
+  48% { transform: rotate(-7deg); }
+}
 
 /* la ficha de alguien a quien has tocado en el mundo: quién es, a cuánto
    está y qué puedes hacer con él. Va donde la hoja de «cómo funciona», que
@@ -695,6 +753,10 @@ body {
 }
 .ficha-cab .cerrar:focus-visible { outline: 2px solid var(--accent); }
 .ficha .nota { margin: 8px 0 0; font-size: 12px; line-height: 1.5; color: var(--ink-2); font-weight: 600; }
+/* el punto de la ficha de un corro es su CÍRCULO: el mismo ámbar que lleva
+   en el suelo, para que la ficha y el mundo digan lo mismo */
+.ficha-cab i.aro-corro { border: 2.5px solid #f59027; background: rgba(245, 144, 39, 0.18); }
+.ficha .nota.espera { color: #8a5a12; font-weight: 800; }
 .ficha .btn-principal.ancho, .ficha .btn-sec.ancho { width: 100%; margin-top: 10px; }
 .ficha .btn-principal:disabled { opacity: 0.45; box-shadow: none; cursor: default; }
 .ficha .fila-botones { margin-top: 8px; }
