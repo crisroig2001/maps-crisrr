@@ -109,13 +109,17 @@ const bea = await abre('Bea', 4);
 await bea.waitForTimeout(3500); // dos sondeos: que se vean
 
 // 1. escribir
+// el chat abierto es la tira de escribir; lo hablado se lee sobre las cabezas
+// y, si se quiere de antes, en el historial, que se abre a mano
 await pulsa(ana, '.chat .btn-cuad');
 await ana.waitForSelector('.chat.abierto', { state: 'attached' });
+await pulsa(ana, '.chat .historial');
 await ana.$eval('.chat .decir input[type=text]', (i) => (i.value = 'Hola desde el chat'));
 await pulsa(ana, '.chat .decir button[type=submit]');
 await ana.waitForTimeout(800);
 await sondea(bea);
 await pulsa(bea, '.chat .btn-cuad');
+await pulsa(bea, '.chat .historial');
 await bea.waitForFunction(() => document.querySelectorAll('.chat-hilo .msg').length >= 1, null, { timeout: 15000 });
 const lee = (pg) => pg.$$eval('.chat-hilo .msg', (els) => els.map((e) => (e.classList.contains('mio') ? 'derecha: ' : 'izquierda: ') + e.textContent));
 console.log('Bea lee en su chat:', await lee(bea));
@@ -181,15 +185,18 @@ console.log('cabecera del chat de Ana en el corro:', (await ana.textContent('.ch
 await ana.setInputFiles('.chat input[type=file]', FOTO);
 await ana.waitForTimeout(900);
 await sondeaDos(bea);
+await bea.waitForSelector('.chat.abierto', { state: 'attached', timeout: 10000 });
+// el historial se queda como lo dejó cada uno: si Bea lo tenía abierto, ya está
+if (!(await bea.$('.chat-hilo'))) await pulsa(bea, '.chat .historial');
 await bea.waitForFunction(() => [...document.querySelectorAll('.chat-hilo .msg')].some((m) => !m.classList.contains('mio') && m.querySelector('.foto img')), null, { timeout: 15000 });
 console.log('Bea ve la foto en el hilo del corro: sí');
 await bea.screenshot({ path: path.join(OUT, 'chat-3-corro-bea.png') });
-// el globo del mundo se esconde con el chat abierto y vuelve al cerrarlo
+// el globo del mundo se esconde con el historial abierto y vuelve al cerrarlo
 const globoConChat = await bea.$eval('#rotulos .carrete', (c) => c.style.display !== 'none').catch(() => null);
 await pulsa(bea, '.chat-cab .cerrar');
 await bea.waitForTimeout(1500);
 const globo = await bea.$eval('#rotulos .carrete', (c) => ({ visible: c.style.display !== 'none', fotos: c.querySelectorAll('img').length })).catch(() => null);
-console.log('el globo del corro: con el chat abierto', globoConChat ? 'SE VE (mal)' : 'escondido (bien)', '| al cerrarlo:', JSON.stringify(globo));
+console.log('el globo del corro: con el historial abierto', globoConChat ? 'SE VE (mal)' : 'escondido (bien)', '| al cerrarlo:', JSON.stringify(globo));
 await bea.screenshot({ path: path.join(OUT, 'chat-4-globo-bea.png') });
 if (globo?.visible) {
   await bea.$eval('#rotulos .carrete', (c) => c.click());
