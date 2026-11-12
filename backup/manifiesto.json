@@ -1,0 +1,37 @@
+{
+  "proyecto": "maps-crisrr",
+  "fecha": "2026-11-12T15:04:51.439Z",
+  "commit": "5f302182c060b6aa1bdf7efa2726ca1d024f2a6d",
+  "coolify_version": "4.7.5",
+  "apps": [
+    {
+      "nombre": "maps",
+      "uuid": "pldgqjztsx5bfm2rbjnipmgh",
+      "repo": "crisroig2001/maps-crisrr",
+      "rama": "main",
+      "build_pack": "dockerfile",
+      "dominios": "https://maps.crisrr.com",
+      "puertos": "3000",
+      "base_directory": "/",
+      "dockerfile": null,
+      "publish_directory": null,
+      "variables": [],
+      "volumenes": [
+        "pldgqjztsx5bfm2rbjnipmgh-maps-data → /data"
+      ]
+    }
+  ],
+  "servicios": [],
+  "supabase": {},
+  "storage": {},
+  "infra": null,
+  "no_incluido": [
+    "el volumen maps-data (/data: mundo.json con las parcelas y reportes.json): la API de Coolify no deja leer ficheros de un volumen; ver backup/LEEME.md"
+  ],
+  "cifrado": {
+    "archivo": "backup/copia.tar.gz.gpg",
+    "bytes": 7898,
+    "sha256": "5508067d5786f1015f5ead4b0de64962b78425b279e275f521f6bb166c23055a",
+    "como": "gpg AES256 simétrico con la frase BACKUP_VPS_PASSPHRASE"
+  }
+}
